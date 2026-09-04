@@ -1,0 +1,30 @@
+import Link from "next/link";
+import { CalendarBlank, MapPin } from "@phosphor-icons/react/dist/ssr";
+import type { GameListItem } from "@/types/api";
+import { GAME_TYPE_LABELS } from "@/types/api";
+import { ResultBadge, Badge } from "@/components/ui/badge";
+import { formatDate } from "@/lib/format";
+
+export function GameCard({ game }: { game: GameListItem }) {
+  return (
+    <Link
+      href={`/mafia/games/${game.id}`}
+      className="flex flex-col gap-3 rounded-card border border-ink-800 bg-ink-900 p-5 transition-colors hover:border-brand-600/60 sm:flex-row sm:items-center sm:justify-between"
+    >
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
+        <span className="inline-flex items-center gap-1.5 text-sm text-ink-200">
+          <CalendarBlank size={16} className="text-ink-400" />
+          {formatDate(game.starts_at)}
+        </span>
+        {game.location && (
+          <span className="inline-flex items-center gap-1.5 text-sm text-ink-400">
+            <MapPin size={16} />
+            {game.location}
+          </span>
+        )}
+        <Badge tone="outline">{GAME_TYPE_LABELS[game.game_type]}</Badge>
+      </div>
+      <ResultBadge result={game.result} />
+    </Link>
+  );
+}

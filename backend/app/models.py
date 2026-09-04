@@ -1,0 +1,301 @@
+from __future__ import annotations
+
+import enum
+from datetime import datetime
+
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    SmallInteger,
+    String,
+    Text,
+    UniqueConstraint,
+    func,
+    text,
+)
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.database import Base
+
+
+class GameStatus(str, enum.Enum):
+    scheduled = "scheduled"
+    registration_closed = "registration_closed"
+    played = "played"
+    rated = "rated"
+
+
+class GameResult(str, enum.Enum):
+    city_win = "city_win"
+    mafia_win = "mafia_win"
+    draw = "draw"
+
+
+class RegistrationRole(str, enum.Enum):
+    host = "host"
+    judge = "judge"
+    player = "player"
+
+
+class InGameRole(str, enum.Enum):
+    mafia = "mafia"
+    don = "don"
+    sheriff = "sheriff"
+    citizen = "citizen"
+
+
+class ParticipantInfo(str, enum.Enum):
+    first_killed = "first_killed"
+    killed = "killed"
+    voted_out = "voted_out"
+
+
+class GameType(str, enum.Enum):
+    tournament = "tournament"
+    funky = "funky"
+    training = "training"
+
+
+class Player(Base):
+    __tablename__ = "players"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+
+    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    nickname: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    full_name: Mapped[str | None] = mapped_column(String(150))
+    age: Mapped[int | None] = mapped_column(SmallInteger)
+    favorite_role: Mapped[str | None] = mapped_column(String(10))
+    experience: Mapped[str | None] = mapped_column(Text)
+    bio: Mapped[str | None] = mapped_column(Text)
+    photo_url: Mapped[str | None] = mapped_column(Text)
+
+    telegram_id: Mapped[int | None] = mapped_column(BigInteger, unique=True)
+    telegram_username: Mapped[str | None] = mapped_column(String(100))
+    phone: Mapped[str | None] = mapped_column(String(20), unique=True)
+    salutation: Mapped[str | None] = mapped_column(String(20))
+    affiliation: Mapped[str | None] = mapped_column(String(20))
+    can_play: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    can_staff: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    site_username: Mapped[str | None] = mapped_column(String(50), unique=True)
+    site_password_hash: Mapped[str | None] = mapped_column(Text)
+    is_site_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    failed_login_attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    is_bot_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    rating: Mapped[PlayerRating | None] = relationship(back_populates="player", uselist=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "site_username IS NULL OR site_password_hash IS NOT NULL",
+            name="ck_players_site_creds",
+        ),
+        CheckConstraint(
+            r"slug ~ '^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$'",
+            name="ck_players_slug_format",
+        ),
+        Index("idx_players_active", "is_active"),
+        Index("idx_players_is_bot_admin", "is_bot_admin", postgresql_where=text("is_bot_admin")),
+    )
+
+
+class PendingBotAdmin(Base):
+    __tablename__ = "pending_bot_admins"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Game(Base):
+    __tablename__ = "games"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    location: Mapped[str | None] = mapped_column(String(200))
+    game_type: Mapped[str] = mapped_column(String(20), nullable=False, default=GameType.tournament.value)
+    registration_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    max_players: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=10)
+
+    status: Mapped[str] = mapped_column(String(30), nullable=False, default=GameStatus.scheduled.value)
+    result: Mapped[str | None] = mapped_column(String(10))
+    results_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    participants: Mapped[list[GameParticipant]] = relationship(
+        back_populates="game", cascade="all, delete-orphan"
+    )
+    registrations: Mapped[list[Registration]] = relationship(
+        back_populates="game", cascade="all, delete-orphan"
+    )
+    reserves: Mapped[list[Reserve]] = relationship(back_populates="game", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint(
+            "status <> 'rated' OR result IS NOT NULL",
+            name="ck_games_rated_has_result",
+        ),
+        CheckConstraint(
+            "result IS NULL OR result IN ('city_win','mafia_win','draw')",
+            name="ck_games_result_enum",
+        ),
+        CheckConstraint(
+            "status IN ('scheduled','registration_closed','played','rated')",
+            name="ck_games_status_enum",
+        ),
+        CheckConstraint(
+            "game_type IN ('tournament','funky','training')",
+            name="ck_games_type_enum",
+        ),
+        Index("idx_games_starts_at", "starts_at", "id"),
+        Index("idx_games_status", "status"),
+    )
+
+
+class Registration(Base):
+    __tablename__ = "registrations"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    role: Mapped[str] = mapped_column(String(10), nullable=False)
+    available_from: Mapped[str | None] = mapped_column(Text)
+    available_until: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    game: Mapped[Game] = relationship(back_populates="registrations")
+    player: Mapped[Player] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "player_id", name="uq_registrations_game_player"),
+        CheckConstraint("role IN ('host','judge','player')", name="ck_registrations_role_enum"),
+        Index("idx_registrations_player", "player_id"),
+        Index("idx_registrations_game", "game_id"),
+    )
+
+
+class Reserve(Base):
+    __tablename__ = "reserves"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    game: Mapped[Game] = relationship(back_populates="reserves")
+    player: Mapped[Player] = relationship()
+
+    __table_args__ = (UniqueConstraint("game_id", "player_id", name="uq_reserves_game_player"),)
+
+
+class GameParticipant(Base):
+    __tablename__ = "game_participants"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
+    seat_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    role: Mapped[str] = mapped_column(String(10), nullable=False)
+
+    points_win: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False, default=0)
+    points_judge: Mapped[float] = mapped_column(Numeric(4, 2), nullable=False, default=0)
+    lh: Mapped[float | None] = mapped_column(Numeric(3, 2))
+    ci: Mapped[float | None] = mapped_column(Numeric(5, 2))
+    info: Mapped[str | None] = mapped_column(String(20))
+    removals: Mapped[int | None] = mapped_column(SmallInteger)
+    ppk: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    zk: Mapped[float | None] = mapped_column(Numeric(3, 1))
+    sk: Mapped[float | None] = mapped_column(Numeric(3, 1))
+
+    game: Mapped[Game] = relationship(back_populates="participants")
+    player: Mapped[Player] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "seat_number", name="uq_participants_game_seat"),
+        UniqueConstraint("game_id", "player_id", name="uq_participants_game_player"),
+        CheckConstraint("seat_number BETWEEN 1 AND 10", name="ck_participants_seat_range"),
+        CheckConstraint("role IN ('mafia','don','sheriff','citizen')", name="ck_participants_role_enum"),
+        CheckConstraint(
+            "info IS NULL OR info IN ('first_killed','killed','voted_out')",
+            name="ck_participants_info_enum",
+        ),
+        CheckConstraint("lh IS NULL OR (lh >= 0 AND lh <= 1.5)", name="ck_participants_lh_range"),
+        CheckConstraint("removals IS NULL OR removals >= 0", name="ck_participants_removals_nonneg"),
+        CheckConstraint("zk IS NULL OR zk >= 0", name="ck_participants_zk_nonneg"),
+        CheckConstraint("sk IS NULL OR sk >= 0", name="ck_participants_sk_nonneg"),
+        Index("idx_participants_player", "player_id"),
+        Index("idx_participants_game", "game_id"),
+    )
+
+
+class PlayerRating(Base):
+    __tablename__ = "player_rating"
+
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), primary_key=True)
+    rating: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False, default=1000)
+    games_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    wins: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    losses: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    draws: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    player: Mapped[Player] = relationship(back_populates="rating")
+
+    __table_args__ = (Index("idx_rating_current", "rating"),)
+
+
+class PlayerRatingHistory(Base):
+    __tablename__ = "player_rating_history"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    rating_before: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False)
+    rating_after: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False)
+    delta: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False)
+    k_coefficient: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    expected_score: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
+    sa: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False)
+    penalty: Mapped[float] = mapped_column(Numeric(5, 2), nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("player_id", "game_id", name="uq_rating_history_player_game"),)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
+    actor_kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    action: Mapped[str] = mapped_column(String(20), nullable=False)
+    entity: Mapped[str] = mapped_column(String(30), nullable=False)
+    entity_id: Mapped[int | None] = mapped_column(Integer)
+    diff: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (CheckConstraint("actor_kind IN ('site','bot')", name="ck_audit_actor_kind_enum"),)

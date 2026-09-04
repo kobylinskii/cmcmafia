@@ -1,0 +1,199 @@
+import type { Metadata } from "next";
+import Image from "next/image";
+import Link from "next/link";
+import { notFound } from "next/navigation";
+import { Trophy, Cake, IdentificationCard, Skull } from "@phosphor-icons/react/dist/ssr";
+import { serverGet, ApiError, mediaUrl } from "@/lib/api";
+import type { GameListOut, PlayerDetailOut } from "@/types/api";
+import { ROLE_LABELS } from "@/types/api";
+import { Container } from "@/components/ui/container";
+import { Badge } from "@/components/ui/badge";
+import { StatTile } from "@/components/player/stat-tile";
+import { RoleCard } from "@/components/player/role-card";
+import { LhDistribution } from "@/components/player/lh-distribution";
+import { PlayerGamesFilterBar } from "@/components/player/player-games-filter-bar";
+import { GameCard } from "@/components/games/game-card";
+import { formatPercent, formatDash } from "@/lib/format";
+import { firstParam } from "@/lib/search-params";
+
+export const dynamic = "force-dynamic";
+
+async function getPlayer(slug: string): Promise<PlayerDetailOut | null> {
+  try {
+    return await serverGet<PlayerDetailOut>(`/api/players/${slug}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
+}
+
+export async function generateMetadata({ params }: PageProps<"/mafia/[slug]">): Promise<Metadata> {
+  const { slug } = await params;
+  const data = await getPlayer(slug);
+  return { title: data ? data.player.nickname : "Игрок не найден" };
+}
+
+export default async function PlayerPage({ params, searchParams }: PageProps<"/mafia/[slug]">) {
+  const { slug } = await params;
+  const data = await getPlayer(slug);
+  if (!data) notFound();
+
+  const { player, stats } = data;
+  const photo = mediaUrl(player.photo_url);
+  const hasFirstKills = stats.first_kill_count > 0;
+
+  const sp = await searchParams;
+  const glimit = firstParam(sp, "glimit") ?? "10";
+  const goffset = Number(firstParam(sp, "goffset") ?? 0);
+  const isAll = glimit === "all";
+  const gamesLimit = isAll ? 500 : Number(glimit);
+  const gamesOffset = isAll ? 0 : goffset;
+
+  const games = await serverGet<GameListOut>("/api/games", {
+    player_slug: slug,
+    limit: gamesLimit,
+    offset: gamesOffset,
+  });
+
+  const buildGamesUrl = (nextOffset: number) => {
+    const p = new URLSearchParams();
+    p.set("glimit", glimit);
+    p.set("goffset", String(nextOffset));
+    return `/mafia/${slug}?${p.toString()}#games`;
+  };
+
+  return (
+    <Container className="py-14">
+      <div className="flex flex-col gap-8 sm:flex-row sm:items-start">
+        <div className="relative h-32 w-32 shrink-0 overflow-hidden rounded-card border border-ink-800 bg-ink-900 sm:h-40 sm:w-40">
+          {photo ? (
+            <Image src={photo} alt={player.nickname} fill className="object-cover" />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center font-display text-4xl text-ink-600">
+              {player.nickname.slice(0, 1).toUpperCase()}
+            </div>
+          )}
+        </div>
+
+        <div className="flex-1">
+          <h1 className="font-display text-3xl font-medium text-ink-50 md:text-4xl">{player.nickname}</h1>
+          {player.full_name && <p className="mt-1 text-ink-400">{player.full_name}</p>}
+
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            {player.favorite_role && (
+              <Badge tone="brand">
+                <Trophy size={13} className="mr-1.5" />
+                Любимая роль: {ROLE_LABELS[player.favorite_role]}
+              </Badge>
+            )}
+            {player.age && (
+              <Badge tone="outline">
+                <Cake size={13} className="mr-1.5" />
+                {player.age} лет
+              </Badge>
+            )}
+            {player.experience && (
+              <Badge tone="outline">
+                <IdentificationCard size={13} className="mr-1.5" />
+                {player.experience}
+              </Badge>
+            )}
+          </div>
+
+          {player.bio && <p className="mt-5 max-w-2xl text-sm leading-relaxed text-ink-300">{player.bio}</p>}
+        </div>
+      </div>
+
+      <section className="mt-12">
+        <h2 className="font-display text-xl text-ink-50">Общая статистика</h2>
+        <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-7">
+          <StatTile label="Игр" value={stats.total_games} />
+          <StatTile label="Побед" value={stats.wins} />
+          <StatTile label="Поражений" value={stats.losses} />
+          <StatTile label="Ничьих" value={stats.draws} />
+          <StatTile label="% побед" value={formatPercent(stats.win_rate)} />
+          <StatTile label="Средний балл" value={formatDash(stats.avg_score)} />
+          <StatTile label="Средний доп. балл" value={formatDash(stats.avg_bonus)} />
+        </div>
+        {stats.rating !== null && (
+          <div className="mt-4 grid grid-cols-2 gap-4 sm:max-w-lg">
+            <StatTile
+              label="Текущий рейтинг"
+              value={Math.round(stats.rating)}
+              sub={`по ${stats.rating_games_count} рейтинговым играм`}
+            />
+            {stats.rank !== null && <StatTile label="Место в рейтинге" value={`#${stats.rank}`} />}
+          </div>
+        )}
+      </section>
+
+      <section className="mt-10">
+        <h2 className="font-display text-xl text-ink-50">По картам и ролям</h2>
+        <div className="mt-4 grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <RoleCard label="Чёрная карта" games={stats.black_card_games} winRate={stats.black_card_win_rate} tone="black" />
+          <RoleCard label="Красная карта" games={stats.red_card_games} winRate={stats.red_card_win_rate} tone="red" />
+          <RoleCard label="Дон" games={stats.don_games} winRate={stats.don_win_rate} tone="black" />
+          <RoleCard label="Шериф" games={stats.sheriff_games} winRate={stats.sheriff_win_rate} tone="red" />
+        </div>
+      </section>
+
+      <section className="mt-10">
+        <h2 className="flex items-center gap-2 font-display text-xl text-ink-50">
+          <Skull size={20} className="text-brand-400" />
+          Первоубиенный
+        </h2>
+        <p className="mt-3 text-sm text-ink-300">
+          Убит первым: <span className="font-mono text-ink-50">{stats.first_kill_count}</span> раз
+          {stats.total_games > 0 && ` из ${stats.total_games}`}.
+        </p>
+        {hasFirstKills && (
+          <div className="mt-5 max-w-xl">
+            <p className="mb-3 text-xs text-ink-500">Распределение баллов ЛХ в этих играх</p>
+            <LhDistribution distribution={stats.lh_distribution} />
+          </div>
+        )}
+      </section>
+
+      <section id="games" className="mt-10 scroll-mt-20">
+        <h2 className="font-display text-xl text-ink-50">Мои игры</h2>
+
+        <div className="mt-4">
+          <PlayerGamesFilterBar />
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3">
+          {games.items.length === 0 && (
+            <p className="rounded-card border border-ink-800 bg-ink-900 p-8 text-center text-ink-400">
+              Этот игрок ещё не сыграл ни одной оценённой игры.
+            </p>
+          )}
+          {games.items.map((game) => (
+            <GameCard key={game.id} game={game} />
+          ))}
+        </div>
+
+        {!isAll && games.total > gamesLimit && (
+          <div className="mt-8 flex items-center justify-between text-sm text-ink-300">
+            <Link
+              href={buildGamesUrl(Math.max(0, gamesOffset - gamesLimit))}
+              aria-disabled={gamesOffset === 0}
+              className={gamesOffset === 0 ? "pointer-events-none opacity-30" : "hover:text-ink-50"}
+            >
+              ← Новее
+            </Link>
+            <span className="text-ink-500">
+              {gamesOffset + 1}-{Math.min(gamesOffset + gamesLimit, games.total)} из {games.total}
+            </span>
+            <Link
+              href={buildGamesUrl(gamesOffset + gamesLimit)}
+              aria-disabled={gamesOffset + gamesLimit >= games.total}
+              className={gamesOffset + gamesLimit >= games.total ? "pointer-events-none opacity-30" : "hover:text-ink-50"}
+            >
+              Старее →
+            </Link>
+          </div>
+        )}
+      </section>
+    </Container>
+  );
+}

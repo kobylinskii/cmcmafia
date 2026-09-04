@@ -1,0 +1,28 @@
+# Claude Code / agent tooling (not project source)
+.claude/
+.agents/
+skills-lock.json
+
+# Python
+__pycache__/
+.pycache/
+*.pyc
+*.db
+.venv/
+*.egg-info/
+
+# Env files (per-service, never commit secrets)
+.env
+.env.local
+
+# Backend
+backend/media/
+
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.node/
+
+# OS
+.DS_Store

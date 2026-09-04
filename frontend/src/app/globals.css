@@ -1,0 +1,91 @@
+@import "tailwindcss";
+
+/*
+  Design read: a dark, high-contrast club/community site (marketing home +
+  stats archive + personal profiles + admin) for university students, noir
+  motorsport vibe, red-on-near-black, locked to a single dark theme (the
+  brand identity itself is black/red/white, see /public/logo).
+
+  Dials: VARIANCE 7 / MOTION 5 / DENSITY 4 on the marketing surfaces
+  (home, player profile hero). Games/rating/admin intentionally run denser
+  and calmer, per design-taste-frontend skill section 13 (data tables and
+  admin panels are out of that skill's scope) - functional first there,
+  styled in the same token system.
+*/
+
+@theme {
+  /* Brand red -- #B52923 (sampled from the club logo) is kept as brand-600;
+     500 and below are brighter/more saturated for badges, active states and
+     other small high-emphasis accents, per direct feedback that the original
+     scale read too muted/dark on profile badges. */
+  --color-brand-50: #fdecea;
+  --color-brand-100: #f9d1cc;
+  --color-brand-200: #f2a49b;
+  --color-brand-300: #ea776a;
+  --color-brand-400: #dd5040;
+  --color-brand-500: #c9342a;
+  --color-brand-600: #b52923;
+  --color-brand-700: #8f221d;
+  --color-brand-800: #6b1917;
+  --color-brand-900: #481110;
+
+  /* Warm near-black surfaces (never flat #000, see brand base vs panels).
+     Lightened a step from the original pass -- still dark/noir, less muddy. */
+  --color-ink-950: #0d0c0b;
+  --color-ink-900: #161514;
+  --color-ink-850: #1c1a19;
+  --color-ink-800: #252321;
+  --color-ink-700: #332f2d;
+  --color-ink-600: #443f3c;
+  --color-ink-500: #5c5652;
+  --color-ink-400: #7d766f;
+  --color-ink-300: #a49c93;
+  --color-ink-200: #c9c1b8;
+  --color-ink-100: #ebe6df;
+  --color-ink-50: #f8f6f3;
+
+  --font-display: var(--font-unbounded);
+  --font-sans: var(--font-golos);
+  --font-mono: var(--font-jetbrains);
+
+  --radius-card: 1rem;
+  --radius-pill: 999px;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ink-950);
+  color: var(--color-ink-100);
+  font-family: var(--font-sans);
+}
+
+::selection {
+  background: var(--color-brand-600);
+  color: var(--color-ink-50);
+}
+
+/* Fixed, non-scrolling grain layer per skill 6.E: pointer-events-none, never
+   applied to scrolling containers so it can't tank mobile scroll FPS. */
+.grain-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

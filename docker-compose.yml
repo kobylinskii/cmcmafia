@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: mafia
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d mafia"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+
+  api:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    env_file:
+      - ./backend/.env
+    volumes:
+      - media_players:/app/media/players
+    ports:
+      - "8000:8000"  # временно наружу для разработки; в проде — только через nginx
+
+  bot:
+    build: ./bot/mafia-tg-bot
+    restart: unless-stopped
+    depends_on:
+      - api
+    env_file:
+      - ./bot/mafia-tg-bot/.env
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Пусто -> клиент ходит на /api того же домена, nginx проксирует на api.
+        # См. frontend/.env.example про разницу между этой переменной и
+        # API_INTERNAL_URL ниже (эта вшивается в бандл на этапе сборки).
+        NEXT_PUBLIC_API_URL: ""
+        NEXT_PUBLIC_BOT_USERNAME: ""
+        NEXT_PUBLIC_SITE_URL: ""
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # Сервер Next.js (не браузер) ходит к бэкенду напрямую по имени сервиса.
+      API_INTERNAL_URL: http://api:8000
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - api
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - media_players:/media/players:ro
+
+volumes:
+  postgres_data:
+  media_players:
