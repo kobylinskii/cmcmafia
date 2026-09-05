@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CalendarBlank, MapPin } from "@phosphor-icons/react/dist/ssr";
-import { serverGet, ApiError } from "@/lib/api";
+import { ArrowLeft, CalendarBlank, MapPin, Trophy } from "@phosphor-icons/react/dist/ssr";
+import { ApiError } from "@/lib/api";
+import { serverGet } from "@/lib/api-server";
 import type { GameOut } from "@/types/api";
 import { GAME_TYPE_LABELS } from "@/types/api";
 import { Container } from "@/components/ui/container";
@@ -10,7 +11,7 @@ import { ResultBadge, Badge } from "@/components/ui/badge";
 import { ParticipantsTable } from "@/components/games/participants-table";
 import { formatDateLong } from "@/lib/format";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 async function getGame(gameId: string): Promise<GameOut | null> {
   try {
@@ -54,6 +55,15 @@ export default async function GameDetailPage({ params }: PageProps<"/mafia/games
                 <MapPin size={16} className="text-ink-400" />
                 {game.location}
               </span>
+            )}
+            {game.tournament && (
+              <Link
+                href={`/mafia/tournaments/${game.tournament.slug}`}
+                className="inline-flex items-center gap-1.5 text-ink-200 hover:text-brand-300"
+              >
+                <Trophy size={16} className="text-ink-400" />
+                {game.tournament.name}
+              </Link>
             )}
             <Badge tone="outline">{GAME_TYPE_LABELS[game.game_type]}</Badge>
           </div>

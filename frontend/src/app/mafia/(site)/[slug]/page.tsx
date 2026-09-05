@@ -3,7 +3,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { Trophy, Cake, IdentificationCard, Skull } from "@phosphor-icons/react/dist/ssr";
-import { serverGet, ApiError, mediaUrl } from "@/lib/api";
+import { ApiError, mediaUrl } from "@/lib/api";
+import { serverGet } from "@/lib/api-server";
 import type { GameListOut, PlayerDetailOut } from "@/types/api";
 import { ROLE_LABELS } from "@/types/api";
 import { Container } from "@/components/ui/container";
@@ -13,10 +14,10 @@ import { RoleCard } from "@/components/player/role-card";
 import { LhDistribution } from "@/components/player/lh-distribution";
 import { PlayerGamesFilterBar } from "@/components/player/player-games-filter-bar";
 import { GameCard } from "@/components/games/game-card";
-import { formatPercent, formatDash } from "@/lib/format";
-import { firstParam } from "@/lib/search-params";
+import { formatPercent, formatDash, formatNumber, plural, withCount } from "@/lib/format";
+import { firstParam, intParam } from "@/lib/search-params";
 
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 async function getPlayer(slug: string): Promise<PlayerDetailOut | null> {
   try {
@@ -43,11 +44,13 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
   const hasFirstKills = stats.first_kill_count > 0;
 
   const sp = await searchParams;
-  const glimit = firstParam(sp, "glimit") ?? "10";
-  const goffset = Number(firstParam(sp, "goffset") ?? 0);
-  const isAll = glimit === "all";
+  // "all" -- отдельный режим фильтра «показать все»; всё остальное приводится
+  // к допустимому диапазону, иначе мусор в URL ронял страницу в 500.
+  const rawLimit = firstParam(sp, "glimit") ?? "10";
+  const isAll = rawLimit === "all";
+  const glimit = isAll ? "all" : String(intParam(sp, "glimit", { def: 10, min: 1, max: 100 }));
   const gamesLimit = isAll ? 500 : Number(glimit);
-  const gamesOffset = isAll ? 0 : goffset;
+  const gamesOffset = isAll ? 0 : intParam(sp, "goffset", { def: 0, min: 0, max: 100_000 });
 
   const games = await serverGet<GameListOut>("/api/games", {
     player_slug: slug,
@@ -67,7 +70,13 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
       <div className="flex flex-col gap-8 sm:flex-row sm:items-start">
         <div className="relative h-32 w-32 shrink-0 overflow-hidden rounded-card border border-ink-800 bg-ink-900 sm:h-40 sm:w-40">
           {photo ? (
-            <Image src={photo} alt={player.nickname} fill className="object-cover" />
+            <Image
+              src={photo}
+              alt={player.nickname}
+              fill
+              sizes="(min-width: 640px) 160px, 128px"
+              className="object-cover"
+            />
           ) : (
             <div className="flex h-full w-full items-center justify-center font-display text-4xl text-ink-600">
               {player.nickname.slice(0, 1).toUpperCase()}
@@ -89,7 +98,7 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
             {player.age && (
               <Badge tone="outline">
                 <Cake size={13} className="mr-1.5" />
-                {player.age} лет
+                {withCount(player.age, ["год", "года", "лет"])}
               </Badge>
             )}
             {player.experience && (
@@ -100,7 +109,7 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
             )}
           </div>
 
-          {player.bio && <p className="mt-5 max-w-2xl text-sm leading-relaxed text-ink-300">{player.bio}</p>}
+          {player.bio && <p className="prose-measure mt-5 text-base leading-relaxed text-ink-300">{player.bio}</p>}
         </div>
       </div>
 
@@ -120,7 +129,11 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
             <StatTile
               label="Текущий рейтинг"
               value={Math.round(stats.rating)}
-              sub={`по ${stats.rating_games_count} рейтинговым играм`}
+              // Дательный падеж: «по 1 рейтинговой игре», «по 2 рейтинговым играм».
+              sub={`по ${formatNumber(stats.rating_games_count)} ${plural(
+                stats.rating_games_count,
+                ["рейтинговой игре", "рейтинговым играм", "рейтинговым играм"]
+              )}`}
             />
             {stats.rank !== null && <StatTile label="Место в рейтинге" value={`#${stats.rank}`} />}
           </div>
@@ -142,20 +155,21 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
           <Skull size={20} className="text-brand-400" />
           Первоубиенный
         </h2>
-        <p className="mt-3 text-sm text-ink-300">
-          Убит первым: <span className="font-mono text-ink-50">{stats.first_kill_count}</span> раз
+        <p className="mt-3 text-base text-ink-300">
+          Убит первым: <span className="font-mono text-ink-50">{stats.first_kill_count}</span>{" "}
+          {plural(stats.first_kill_count, ["раз", "раза", "раз"])}
           {stats.total_games > 0 && ` из ${stats.total_games}`}.
         </p>
         {hasFirstKills && (
           <div className="mt-5 max-w-xl">
-            <p className="mb-3 text-xs text-ink-500">Распределение баллов ЛХ в этих играх</p>
+            <p className="mb-3 text-xs text-ink-500">Лучший ход: сколько чёрных названо из трёх</p>
             <LhDistribution distribution={stats.lh_distribution} />
           </div>
         )}
       </section>
 
       <section id="games" className="mt-10 scroll-mt-20">
-        <h2 className="font-display text-xl text-ink-50">Мои игры</h2>
+        <h2 className="font-display text-xl text-ink-50">Игры игрока</h2>
 
         <div className="mt-4">
           <PlayerGamesFilterBar />

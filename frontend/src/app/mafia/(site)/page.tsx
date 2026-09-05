@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 // Always fresh: stats (games/players count) change whenever an admin adds a
 // game. Explicit rather than relying on the no-store fetch alone -- see
 // lib/api.ts for why a build-time prerender attempt would otherwise crash.
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default function HomePage() {
   return (

@@ -1,4 +1,6 @@
-// Two different base URLs on purpose:
+// Two different base URLs on purpose (server-side reads live in
+// api-server.ts -- they need next/headers, which must never reach the
+// client bundle):
 //
 // - PUBLIC_API_URL (NEXT_PUBLIC_*, inlined into the client bundle at build
 //   time) is whatever the *browser* can reach: the public site origin behind
@@ -24,7 +26,7 @@ const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000
 // page-data-collection pass, before API_INTERNAL_URL is set as a real env var
 // at container run time. Every page that calls serverGet is `force-dynamic`
 // (see each page.tsx), so this fallback is never hit for a real request.
-const INTERNAL_API_URL = process.env.API_INTERNAL_URL || PUBLIC_API_URL || "http://localhost:8000";
+export const INTERNAL_API_URL = process.env.API_INTERNAL_URL || PUBLIC_API_URL || "http://localhost:8000";
 
 export class ApiError extends Error {
   status: number;
@@ -51,26 +53,13 @@ function extractMessage(body: unknown): string {
   return "Что-то пошло не так";
 }
 
-async function parseResponse<T>(res: Response): Promise<T> {
+export async function parseResponse<T>(res: Response): Promise<T> {
   const isJson = res.headers.get("content-type")?.includes("application/json");
   const body = isJson ? await res.json().catch(() => null) : null;
   if (!res.ok) {
     throw new ApiError(res.status, extractMessage(body));
   }
   return body as T;
-}
-
-/** Server Components: public, unauthenticated reads. Always no-store since
- * results/rating can change any time an admin edits a game. */
-export async function serverGet<T>(path: string, searchParams?: Record<string, string | number | undefined>): Promise<T> {
-  const url = new URL(path, INTERNAL_API_URL);
-  if (searchParams) {
-    for (const [key, value] of Object.entries(searchParams)) {
-      if (value !== undefined && value !== "") url.searchParams.set(key, String(value));
-    }
-  }
-  const res = await fetch(url, { cache: "no-store" });
-  return parseResponse<T>(res);
 }
 
 function readCookie(name: string): string | null {
@@ -84,11 +73,7 @@ function resolvePublicUrl(path: string): string {
   return new URL(path, PUBLIC_API_URL).toString();
 }
 
-/** Client Components: admin session lives in httpOnly cookies, sent
- * automatically via credentials:"include"; mutating requests also carry the
- * CSRF double-submit header the backend's require_site_admin dependency
- * checks (see backend/app/deps.py). */
-export async function clientFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+function sendRequest(path: string, init: RequestInit): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   const isFormData = init.body instanceof FormData;
@@ -96,15 +81,49 @@ export async function clientFetch<T>(path: string, init: RequestInit = {}): Prom
     headers.set("Content-Type", "application/json");
   }
   if (method !== "GET" && method !== "HEAD") {
+    // Read at send time, not once per session: a refresh rotates the CSRF
+    // cookie, and the retry below has to pick up the new value.
     const csrf = readCookie("csrf_token");
     if (csrf) headers.set("X-CSRF-Token", csrf);
   }
-  const res = await fetch(resolvePublicUrl(path), {
-    ...init,
-    method,
-    headers,
-    credentials: "include",
-  });
+  return fetch(resolvePublicUrl(path), { ...init, method, headers, credentials: "include" });
+}
+
+// Endpoints that must never trigger the refresh-and-retry dance: /refresh
+// itself would recurse, and a 401 from /login or /logout is the real answer,
+// not an expired session.
+const NO_SESSION_RETRY = ["/api/auth/login", "/api/auth/refresh", "/api/auth/logout"];
+
+let refreshInFlight: Promise<boolean> | null = null;
+
+/** The access cookie lives 15 minutes, the refresh cookie a week. Without
+ * spending the refresh token the admin panel would hard-log-out mid-session --
+ * e.g. halfway through filling in a ten-player game form. Concurrent 401s
+ * share one refresh so a page with several parallel requests doesn't fire N
+ * of them. */
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = sendRequest("/api/auth/refresh", { method: "POST" })
+      .then((res) => res.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+/** Client Components: admin session lives in httpOnly cookies, sent
+ * automatically via credentials:"include"; mutating requests also carry the
+ * CSRF double-submit header the backend's require_site_admin dependency
+ * checks (see backend/app/deps.py). */
+export async function clientFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const res = await sendRequest(path, init);
+  if (res.status === 401 && !NO_SESSION_RETRY.some((p) => path.startsWith(p))) {
+    if (await refreshSession()) {
+      return parseResponse<T>(await sendRequest(path, init));
+    }
+  }
   return parseResponse<T>(res);
 }
 

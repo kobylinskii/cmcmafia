@@ -128,6 +128,12 @@ class ApiClient:
         resp = await self._request(
             "POST",
             "/api/bot/players/register",
+            # telegram_id дублируется в query специально: сервер читает
+            # действующего пользователя из тела, но rate limit считается по
+            # query-параметру (тело в key-функции недоступно). Без дубля весь
+            # трафик бота лимитировался бы по одному IP на всех сразу --
+            # см. backend/app/rate_limit.py.
+            params={"telegram_id": telegram_id},
             json={
                 "telegram_id": telegram_id,
                 "telegram_username": telegram_username,
@@ -176,6 +182,7 @@ class ApiClient:
         resp = await self._request(
             "POST",
             f"/api/bot/sessions/{session_id}/register",
+            params={"telegram_id": tg_id},  # для rate limit, см. register_player
             json={
                 "telegram_id": tg_id,
                 "role_kind": role_kind,
@@ -187,7 +194,10 @@ class ApiClient:
 
     async def reserve_for_session(self, tg_id: int, session_id: int) -> dict:
         resp = await self._request(
-            "POST", f"/api/bot/sessions/{session_id}/reserve", json={"telegram_id": tg_id}
+            "POST",
+            f"/api/bot/sessions/{session_id}/reserve",
+            params={"telegram_id": tg_id},  # для rate limit, см. register_player
+            json={"telegram_id": tg_id},
         )
         return resp.json()
 

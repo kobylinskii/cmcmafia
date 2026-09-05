@@ -15,3 +15,10 @@ export function adminLogout() {
 export function adminMe() {
   return clientFetch<LoginOut>("/api/auth/me");
 }
+
+export function adminChangePassword(currentPassword: string, newPassword: string) {
+  return clientFetch<{ ok: boolean }>("/api/auth/password", {
+    method: "POST",
+    body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+  });
+}

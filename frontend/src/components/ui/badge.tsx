@@ -20,7 +20,11 @@ export function Badge({
   return (
     <span
       className={clsx(
-        "inline-flex items-center rounded-pill px-3 py-1 text-xs font-medium tracking-wide",
+        // px-3 py-1 text-xs при базовом кегле 17px давало 12.75px --
+        // плашка читалась как служебная метка, хотя формат игры и её исход
+        // это главные данные строки. Поднято на шаг, до одного уровня с
+        // сопровождающим текстом.
+        "inline-flex items-center rounded-pill px-3.5 py-1.5 text-sm font-medium tracking-wide",
         tones[tone],
         className
       )}

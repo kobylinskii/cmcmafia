@@ -35,7 +35,7 @@ function LoginForm() {
     <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center gap-3 text-center">
-          <LogoMark size={56} />
+          <LogoMark size={80} priority />
           <h1 className="font-display text-xl text-ink-50">Админка клуба</h1>
         </div>
 

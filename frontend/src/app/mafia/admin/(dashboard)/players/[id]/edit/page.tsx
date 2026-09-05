@@ -67,7 +67,13 @@ function PhotoUploader({ player, onUpdated }: { player: PlayerAdminOut; onUpdate
     <div className="shrink-0">
       <div className="relative h-40 w-40 overflow-hidden rounded-card border border-ink-800 bg-ink-900">
         {photo ? (
-          <Image src={photo} alt={player.nickname} fill className="object-cover" />
+          <Image
+            src={photo}
+            alt={player.nickname}
+            fill
+            sizes="128px"
+            className="object-cover"
+          />
         ) : (
           <div className="flex h-full w-full items-center justify-center text-4xl text-ink-700">
             {player.nickname.slice(0, 1).toUpperCase()}
@@ -81,6 +87,13 @@ function PhotoUploader({ player, onUpdated }: { player: PlayerAdminOut; onUpdate
         className="hidden"
         onChange={(e) => {
           const file = e.target.files?.[0];
+          // Сбрасываем value сразу после чтения, а не полагаемся на то, что
+          // React сделает это сам: браузер не генерирует change повторно,
+          // если выбрать тот же файл ещё раз (путь в файловой системе не
+          // изменился). Без сброса повторная загрузка того же снимка -- в том
+          // числе сразу после ошибки, когда админ просто нажимает ту же
+          // кнопку с тем же файлом -- визуально не делает вообще ничего.
+          e.target.value = "";
           if (file) handleFile(file);
         }}
       />

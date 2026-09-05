@@ -7,11 +7,15 @@ import { clientFetch, ApiError } from "@/lib/api";
 import type { PlayerAdminOut } from "@/types/api";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AdminPlayersPage() {
   const [players, setPlayers] = useState<PlayerAdminOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [grantFor, setGrantFor] = useState<PlayerAdminOut | null>(null);
+  const [toDelete, setToDelete] = useState<PlayerAdminOut | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   function load() {
     clientFetch<PlayerAdminOut[]>("/api/admin/players")
@@ -21,13 +25,18 @@ export default function AdminPlayersPage() {
 
   useEffect(load, []);
 
-  async function handleDelete(player: PlayerAdminOut) {
-    if (!confirm(`Удалить игрока «${player.nickname}»?`)) return;
+  async function confirmDelete() {
+    if (!toDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await clientFetch(`/api/admin/players/${player.id}`, { method: "DELETE" });
+      await clientFetch(`/api/admin/players/${toDelete.id}`, { method: "DELETE" });
+      setToDelete(null);
       load();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+      setDeleteError(err instanceof ApiError ? err.message : "Не удалось удалить");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -85,7 +94,7 @@ export default function AdminPlayersPage() {
                       <PencilSimple size={16} />
                     </Link>
                     <button
-                      onClick={() => handleDelete(p)}
+                      onClick={() => setToDelete(p)}
                       className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
                     >
                       <Trash size={16} />
@@ -100,6 +109,25 @@ export default function AdminPlayersPage() {
       </div>
 
       {grantFor && <GrantAccessModal player={grantFor} onClose={() => setGrantFor(null)} />}
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        title={`Удалить игрока «${toDelete?.nickname}»?`}
+        description={
+          <>
+            Если за игроком числятся сыгранные партии, он будет скрыт с сайта, но останется
+            в составах и в истории рейтинга. Если игр нет — запись удалится полностью.
+          </>
+        }
+        confirmLabel="Удалить игрока"
+        busy={deleting}
+        error={deleteError}
+        onConfirm={confirmDelete}
+        onCancel={() => {
+          setToDelete(null);
+          setDeleteError(null);
+        }}
+      />
     </div>
   );
 }

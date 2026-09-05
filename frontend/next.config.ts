@@ -1,10 +1,20 @@
 import type { NextConfig } from "next";
 
-// Empty NEXT_PUBLIC_API_URL means same-origin (photos served via nginx at
-// /media on the site's own domain) -- next/image needs no remotePattern for
-// that. Only register one when photos come from a different origin (local
-// dev without nginx, or a separate media host).
-const publicApiUrl = process.env.NEXT_PUBLIC_API_URL;
+// Explicitly EMPTY NEXT_PUBLIC_API_URL means same-origin (photos served via
+// nginx at /media on the site's own domain, see docker-compose.yml) --
+// next/image needs no remotePattern for that.
+//
+// Genuinely UNSET (as when running `next build`/`next start` locally without
+// any env file, e.g. for a quick manual check) falls back to
+// "http://localhost:8000" -- the SAME fallback lib/api.ts's PUBLIC_API_URL
+// uses (`?? "http://localhost:8000"`, which only fires on undefined, not on
+// an explicit ""). Before this matched the client's fallback, that mismatch
+// meant: the browser dutifully requested player photos from
+// http://localhost:8000/media/..., but this config saw an falsy/undefined
+// publicApiUrl and registered ZERO remote patterns -- so next/image's
+// optimizer rejected every single one of those requests with "url parameter
+// is not allowed", and every uploaded avatar rendered as a broken image.
+const publicApiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const publicApiHostname = publicApiUrl ? new URL(publicApiUrl).hostname : "";
 const isLocalApiHost = publicApiHostname === "localhost" || publicApiHostname === "127.0.0.1";
 

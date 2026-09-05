@@ -116,9 +116,9 @@ def _parse_time(raw: str) -> str | None:
 
 
 def _parse_game_type_text(raw: str, allow_all: bool = False) -> str | None:
+    # Турнир сюда больше не мапится: турнирные игры создаются и оцениваются
+    # только на сайте (вкладка «Турниры» в админке), бот их не заводит.
     mapping = {
-        "🏆 Турнир": "tournament",
-        "Турнир": "tournament",
         "🎉 Фанки": "funky",
         "Фанки": "funky",
         "📚 Обучающие": "training",
@@ -343,7 +343,7 @@ async def create_game_type(message: Message, state: FSMContext, api: ApiClient) 
 
     game_type = _parse_game_type_text(message.text or "", allow_all=False)
     if not game_type:
-        await message.answer("Выберите формат кнопкой: Турнир, Фанки или Обучающие.")
+        await message.answer("Выберите формат кнопкой: Фанки или Обучающие.")
         return
 
     await state.update_data(game_type=game_type)
@@ -447,7 +447,7 @@ async def edit_game_pick_type(message: Message, state: FSMContext, api: ApiClien
         return
     game_type = _parse_game_type_text(message.text or "", allow_all=True)
     if not game_type:
-        await message.answer("Выберите формат кнопкой: Турнир, Фанки, Обучающие или Все игры.")
+        await message.answer("Выберите формат кнопкой: Фанки, Обучающие или Все игры.")
         return
     day_cards = await api.admin_day_cards(message.from_user.id, game_type=None if game_type == "all" else game_type)
     if not day_cards:
@@ -756,7 +756,7 @@ async def edit_game_apply(message: Message, state: FSMContext, api: ApiClient, b
     if action == "game_type":
         new_type = _parse_game_type_text(value_raw, allow_all=False)
         if not new_type:
-            await message.answer("Выберите формат кнопкой: Турнир, Фанки или Обучающие.")
+            await message.answer("Выберите формат кнопкой: Фанки или Обучающие.")
             return
         for game in selected_games:
             await api.admin_update_session(tg_id, int(game["id"]), game_type=new_type)

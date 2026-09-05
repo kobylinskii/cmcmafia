@@ -9,31 +9,37 @@ import { GAME_TYPE_LABELS } from "@/types/api";
 import { LinkButton } from "@/components/ui/button";
 import { ResultBadge } from "@/components/ui/badge";
 import { formatDateTime } from "@/lib/format";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AdminGamesPage() {
   const [pending, setPending] = useState<GameListItem[]>([]);
   const [rated, setRated] = useState<GameListOut | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [toDelete, setToDelete] = useState<{ game: GameListItem; pending: boolean } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   function load() {
     clientFetch<GameListItem[]>("/api/admin/games/pending-review").then(setPending).catch(() => setPending([]));
-    clientFetch<GameListOut>("/api/games?limit=50")
+    clientFetch<GameListOut>("/api/admin/games?limit=50")
       .then(setRated)
       .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить"));
   }
 
   useEffect(load, []);
 
-  async function handleDelete(id: number, isPending: boolean) {
-    const question = isPending
-      ? `Оставить игру №${id} без оценки? Запись из бота будет удалена из списка ожидания.`
-      : `Удалить игру №${id}? Рейтинг будет пересчитан.`;
-    if (!confirm(question)) return;
+  async function confirmDelete() {
+    if (!toDelete) return;
+    setDeleting(true);
+    setDeleteError(null);
     try {
-      await clientFetch(`/api/admin/games/${id}`, { method: "DELETE" });
+      await clientFetch(`/api/admin/games/${toDelete.game.id}`, { method: "DELETE" });
+      setToDelete(null);
       load();
     } catch (err) {
-      alert(err instanceof ApiError ? err.message : "Не удалось удалить");
+      setDeleteError(err instanceof ApiError ? err.message : "Не удалось удалить");
+    } finally {
+      setDeleting(false);
     }
   }
 
@@ -56,7 +62,7 @@ export default function AdminGamesPage() {
           </p>
           <div className="mt-2 flex flex-col gap-2">
             {pending.map((g) => (
-              <GameRow key={g.id} game={g} onDelete={handleDelete} pending />
+              <GameRow key={g.id} game={g} onDelete={(game) => setToDelete({ game, pending: true })} pending />
             ))}
           </div>
         </div>
@@ -68,7 +74,7 @@ export default function AdminGamesPage() {
         <h2 className="text-sm font-medium text-ink-300">Оценённые игры</h2>
         <div className="mt-2 flex flex-col gap-2">
           {rated?.items.map((g) => (
-            <GameRow key={g.id} game={g} onDelete={handleDelete} />
+            <GameRow key={g.id} game={g} onDelete={(game) => setToDelete({ game, pending: false })} />
           ))}
           {rated?.items.length === 0 && (
             <p className="rounded-card border border-ink-800 bg-ink-900 p-6 text-center text-sm text-ink-500">
@@ -77,6 +83,28 @@ export default function AdminGamesPage() {
           )}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={toDelete !== null}
+        title={
+          toDelete?.pending
+            ? `Оставить игру №${toDelete.game.id} без оценки?`
+            : `Удалить игру №${toDelete?.game.id}?`
+        }
+        description={
+          toDelete?.pending
+            ? "Запись из бота исчезнет из списка ожидания вместе с составом, который в ней записан. Восстановить её можно будет только вручную."
+            : "Игра и её результат удалятся безвозвратно, рейтинг всех участников будет пересчитан заново."
+        }
+        confirmLabel={toDelete?.pending ? "Оставить без оценки" : "Удалить игру"}
+        busy={deleting}
+        error={deleteError}
+        onConfirm={confirmDelete}
+        onCancel={() => {
+          setToDelete(null);
+          setDeleteError(null);
+        }}
+      />
     </div>
   );
 }
@@ -87,7 +115,7 @@ function GameRow({
   pending = false,
 }: {
   game: GameListItem;
-  onDelete: (id: number, pending: boolean) => void;
+  onDelete: (game: GameListItem) => void;
   pending?: boolean;
 }) {
   return (
@@ -107,7 +135,7 @@ function GameRow({
           <PencilSimple size={16} />
         </Link>
         <button
-          onClick={() => onDelete(game.id, pending)}
+          onClick={() => onDelete(game)}
           title={pending ? "Оставить без оценки" : "Удалить"}
           className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
         >

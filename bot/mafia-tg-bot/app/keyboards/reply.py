@@ -39,10 +39,12 @@ def affiliation_keyboard() -> ReplyKeyboardMarkup:
 
 
 def game_type_keyboard() -> ReplyKeyboardMarkup:
+    # Турнирные игры больше не создаются через бота -- своя сетка этапов
+    # целиком на сайте (вкладка «Турниры» в админке).
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🏆 Турнир"), KeyboardButton(text="🎉 Фанки")],
-            [KeyboardButton(text="📚 Обучающие"), KeyboardButton(text="↩️ Назад")],
+            [KeyboardButton(text="🎉 Фанки"), KeyboardButton(text="📚 Обучающие")],
+            [KeyboardButton(text="↩️ Назад")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,
@@ -52,9 +54,8 @@ def game_type_keyboard() -> ReplyKeyboardMarkup:
 def game_type_with_all_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="🏆 Турнир"), KeyboardButton(text="🎉 Фанки")],
-            [KeyboardButton(text="📚 Обучающие"), KeyboardButton(text="📋 Все игры")],
-            [KeyboardButton(text="↩️ Назад")],
+            [KeyboardButton(text="🎉 Фанки"), KeyboardButton(text="📚 Обучающие")],
+            [KeyboardButton(text="📋 Все игры"), KeyboardButton(text="↩️ Назад")],
         ],
         resize_keyboard=True,
         one_time_keyboard=True,

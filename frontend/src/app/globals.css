@@ -37,8 +37,12 @@
   --color-ink-800: #252321;
   --color-ink-700: #332f2d;
   --color-ink-600: #443f3c;
-  --color-ink-500: #5c5652;
-  --color-ink-400: #7d766f;
+  /* ink-500 и ink-400 подняты по контрасту: на ink-950 они давали 2.71:1
+     и 4.37:1 при норме WCAG AA 4.5:1, а используются под самыми частыми
+     вторичными подписями -- заголовками таблиц, счётчиками, пояснением к
+     формуле рейтинга. Теперь 5.0:1 и 6.2:1. */
+  --color-ink-500: #8a837c;
+  --color-ink-400: #9b938b;
   --color-ink-300: #a49c93;
   --color-ink-200: #c9c1b8;
   --color-ink-100: #ebe6df;
@@ -54,17 +58,86 @@
 
 html {
   color-scheme: dark;
+  /* База 17px вместо браузерных 16. Все размеры в Tailwind заданы в rem, так
+     что текст и отступы подрастают согласованно -- сайт остаётся тем же, но
+     перестаёт быть мелким. Ровно один шаг: 18px уже ломает плотные таблицы
+     результатов на ноутбучных ширинах. */
+  font-size: 17px;
 }
 
 body {
-  background: var(--color-ink-950);
+  /* Основание глубже прежнего ровного #0d0c0b -- чистый чёрный фон стал темнее,
+     так что контраст текста по нему только вырос. Сам красный очаг лежит не
+     здесь, а в PageGlow: он и так fixed + pointer-events-none и специально
+     сделан так, чтобы не стоить перерисовки при прокрутке.
+     background-attachment: fixed здесь дал бы то же самое, но ценой заметных
+     тормозов прокрутки на мобильных.
+     Токен --color-ink-950 не трогаем: он держит поверхности (карточки,
+     заглушки аватаров), а не общий фон страницы. */
+  background: #0a0908;
   color: var(--color-ink-100);
   font-family: var(--font-sans);
+  /* Читаемость: у Golos Text по умолчанию тесный интерлиньяж на длинных
+     абзацах, а тёмная тема это подчёркивает. */
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Длинные абзацы не должны тянуться на всю ширину экрана: комфортная строка --
+   примерно 65 символов. Применяется точечно, таблицы не трогает. */
+.prose-measure {
+  max-width: 65ch;
+}
+
+/* Родные стрелочки type="number" убраны на узких полях таблицы результата
+   (Ci, ЖК, СК и т.п. -- w-16/w-20, всего пара символов места): в Chrome/Edge
+   спиннер занимает фиксированные ~20px и в такой ширине наезжает прямо на
+   значение, особенно когда браузер показывает дробную часть через запятую
+   (русская локаль) -- "0,5" превращалось в "0," со стрелочками поверх пятёрки.
+   Стрелочки не были рабочим способом ввода в этих полях и раньше (шаг 0.25 в
+   поле, где вводят точные баллы, кликать бессмысленно), так что просто
+   убираем их и оставляем ввод с клавиатуры. */
+.no-spinner::-webkit-inner-spin-button,
+.no-spinner::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.no-spinner {
+  -moz-appearance: textfield;
+}
+
+/* Видимый фокус клавиатуры. focus:outline-none стоит в одиннадцати местах по
+   проекту (поля форм, комбобокс, поиск), а замены не было нигде: у полей
+   оставался только сдвиг цвета рамки на 1px по тёмному фону, у комбобокса --
+   ничего. :focus-visible срабатывает только при навигации с клавиатуры, так
+   что вид при клике мышью не меняется. */
+:focus-visible {
+  outline: 2px solid var(--color-brand-400);
+  outline-offset: 2px;
+  border-radius: 4px;
 }
 
 ::selection {
   background: var(--color-brand-600);
   color: var(--color-ink-50);
+}
+
+/* Тёплый очаг над первым экраном -- см. components/page-glow.tsx.
+   На узком экране тот же радиус покрывает почти весь верх страницы, включая
+   абзацы: свечение под текстом осветляет фон и роняет контраст подписей.
+   Поэтому на мобильных очаг поджат и уведён выше -- красное остаётся в шапке
+   и за заголовком, полосы чтения возвращаются на чистый тёмный фон. */
+.page-glow-core {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(115% 85% at 78% -8%, #1c0d0b 0%, #110908 36%, transparent 70%);
+}
+
+@media (max-width: 768px) {
+  .page-glow-core {
+    background: radial-gradient(90% 42% at 82% -6%, #1c0d0b 0%, #110908 38%, transparent 72%);
+  }
 }
 
 /* Fixed, non-scrolling grain layer per skill 6.E: pointer-events-none, never
@@ -77,6 +150,28 @@ body {
   opacity: 0.05;
   mix-blend-mode: overlay;
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+}
+
+/* Появление блоков при скролле -- см. components/reveal.tsx. Кривая и тайминги
+   те же, что были у motion/react: 0.6s, ease [0.16, 1, 0.3, 1]. */
+.reveal {
+  opacity: 0;
+  transform: translateY(20px);
+  transition:
+    opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1),
+    transform 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.reveal-in {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

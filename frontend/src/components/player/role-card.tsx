@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { formatPercent } from "@/lib/format";
+import { formatPercent, plural } from "@/lib/format";
 
 export function RoleCard({
   label,
@@ -23,7 +23,7 @@ export function RoleCard({
       <div className="mt-3 flex items-end justify-between">
         <div>
           <p className="font-mono text-2xl font-medium text-ink-50">{games}</p>
-          <p className="text-xs text-ink-500">игр</p>
+          <p className="text-xs text-ink-500">{plural(games, ["игра", "игры", "игр"])}</p>
         </div>
         <div className="text-right">
           <p className="font-mono text-2xl font-medium text-ink-50">{formatPercent(winRate)}</p>

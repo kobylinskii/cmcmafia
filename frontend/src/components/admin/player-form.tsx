@@ -23,7 +23,12 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
 
   const [nickname, setNickname] = useState(player?.nickname ?? "");
   const [slug, setSlug] = useState(player?.slug ?? "");
-  const [slugTouched, setSlugTouched] = useState(isEdit);
+  // Отслеживает только ручную правку slug. Раньше в режиме редактирования флаг
+  // сразу ставился в true и вместе со вторым условием в handleNicknameBlur
+  // полностью выключал автоподбор -- при смене ника предложения не было.
+  const [slugTouched, setSlugTouched] = useState(false);
+  const [slugSuggestion, setSlugSuggestion] = useState<string | null>(null);
+  const originalNickname = player?.nickname ?? "";
   const [fullName, setFullName] = useState(player?.full_name ?? "");
   const [age, setAge] = useState(player?.age?.toString() ?? "");
   const [favoriteRole, setFavoriteRole] = useState<InGameRole | "">(player?.favorite_role ?? "");
@@ -34,13 +39,25 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
   const [slugLoading, setSlugLoading] = useState(false);
 
   async function handleNicknameBlur() {
-    if (slugTouched || !nickname.trim() || isEdit) return;
+    setSlugSuggestion(null);
+    if (slugTouched || !nickname.trim()) return;
+    // При редактировании подбираем только если ник действительно поменяли.
+    if (isEdit && nickname.trim() === originalNickname) return;
+
     setSlugLoading(true);
     try {
       const res = await clientFetch<{ slug: string }>(
         `/api/admin/players/slug-suggestion?nickname=${encodeURIComponent(nickname)}`
       );
-      setSlug(res.slug);
+      if (res.slug === slug) return;
+      if (isEdit) {
+        // Молча менять slug у существующего игрока нельзя: это его публичный
+        // адрес, по нему уже могут быть ссылки. Показываем предложение, решает
+        // администратор.
+        setSlugSuggestion(res.slug);
+      } else {
+        setSlug(res.slug);
+      }
     } catch {
       // ignore -- admin can still type the slug manually
     } finally {
@@ -106,6 +123,32 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
           pattern="[a-z0-9][a-z0-9-]{1,48}[a-z0-9]"
           required
         />
+        {slugSuggestion && (
+          <span className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-900/25 px-3 py-2 font-normal text-ink-200">
+            Ник изменился. Предложение: <code className="font-mono text-ink-50">{slugSuggestion}</code>
+            <button
+              type="button"
+              onClick={() => {
+                setSlug(slugSuggestion);
+                setSlugTouched(true);
+                setSlugSuggestion(null);
+              }}
+              className="rounded-pill bg-brand-600 px-3 py-1 text-xs font-medium text-ink-50 hover:bg-brand-500"
+            >
+              Подставить
+            </button>
+            <button
+              type="button"
+              onClick={() => setSlugSuggestion(null)}
+              className="rounded-pill border border-ink-700 px-3 py-1 text-xs text-ink-300 hover:border-ink-500"
+            >
+              Оставить как есть
+            </button>
+            <span className="w-full text-ink-500">
+              Меняя slug, вы меняете адрес страницы игрока — старые ссылки перестанут работать.
+            </span>
+          </span>
+        )}
         <span className="font-normal text-ink-500">
           Только латиница, цифры и дефис. Автопредложение по нику — перевод, не транслит, проверьте вручную.
         </span>
@@ -123,7 +166,7 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
             type="number"
             min={5}
             max={100}
-            className={field}
+            className={`${field} no-spinner`}
             value={age}
             onChange={(e) => setAge(e.target.value)}
           />

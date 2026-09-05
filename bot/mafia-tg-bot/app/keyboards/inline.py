@@ -4,7 +4,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.api_client import format_day_time
 
 GAME_TYPE_LABELS = {
-    "tournament": "🏆 Турнир",
+    # Турнирные игры больше не создаются и не набираются через бота -- у них
+    # своя сетка этапов, целиком на сайте (см. вкладку «Турниры» в админке).
     "funky": "🎉 Фанки",
     "training": "📚 Обучающие",
 }

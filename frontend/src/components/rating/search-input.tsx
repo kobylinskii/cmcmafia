@@ -17,6 +17,7 @@ export function RatingSearchInput() {
       const params = new URLSearchParams(searchParams.toString());
       if (value) params.set("q", value);
       else params.delete("q");
+      params.delete("offset"); // новый поиск -- всегда с первой страницы
       router.push(`${pathname}?${params.toString()}`);
     }, 300);
     return () => {
@@ -33,6 +34,7 @@ export function RatingSearchInput() {
         value={value}
         onChange={(e) => setValue(e.target.value)}
         placeholder="Найти игрока по нику"
+        aria-label="Поиск игрока по нику"
         className="w-full rounded-pill border border-ink-700 bg-ink-850 py-2.5 pr-4 pl-10 text-sm text-ink-100 placeholder:text-ink-500 focus:border-brand-500 focus:outline-none"
       />
     </div>

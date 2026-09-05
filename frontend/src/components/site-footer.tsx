@@ -15,10 +15,10 @@ export function SiteFooter() {
     <footer className="border-t border-ink-800 mt-24">
       <Container className="flex flex-col gap-8 py-12 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
-          <LogoMark size={32} />
+          <LogoMark size={64} />
           <div>
-            <p className="font-display text-sm text-ink-50">Мафия ВМК</p>
-            <p className="text-xs text-ink-400">Клуб спортивной мафии ВМК МГУ</p>
+            <p className="font-display text-base text-ink-50">Мафия ВМК</p>
+            <p className="text-sm text-ink-400">Клуб спортивной мафии ВМК МГУ</p>
           </div>
         </div>
         <nav className="flex items-center gap-4 text-ink-300">

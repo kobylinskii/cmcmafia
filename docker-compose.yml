@@ -28,10 +28,32 @@ services:
         condition: service_started
     env_file:
       - ./backend/.env
+    environment:
+      # Перекрывают значения из backend/.env: тот файл рассчитан на запуск
+      # uvicorn прямо на хосте (там postgres/redis доступны как localhost),
+      # а внутри compose-сети адреса -- это имена сервисов. env_file читается
+      # первым, environment побеждает.
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/mafia
+      REDIS_URL: redis://redis:6379/0
+      # Единственный, кто ходит в API -- nginx из этой же сети, поэтому его
+      # X-Forwarded-For можно доверять. Без этого uvicorn доверяет заголовку
+      # только с 127.0.0.1, и все rate limit'ы считаются по IP контейнера
+      # nginx, то есть схлопываются в одну корзину на весь сайт целиком
+      # (см. backend/app/rate_limit.py). Безопасно ровно до тех пор, пока
+      # порт 8000 не проброшен наружу -- см. комментарий про ports ниже.
+      FORWARDED_ALLOW_IPS: "*"
+      # Стек из коробки слушает только :80, а браузер выбрасывает Secure-куки
+      # на http-origin -- с COOKIE_SECURE=true логин в админку возвращает 200,
+      # но сессия не сохраняется. Как только перед nginx появится TLS,
+      # выставить COOKIE_SECURE=true в окружении хоста.
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
       - media_players:/app/media/players
-    ports:
-      - "8000:8000"  # временно наружу для разработки; в проде — только через nginx
+    # Порт наружу НЕ пробрасывается: API доступен только через nginx
+    # (ARCHITECTURE.md, раздел 10). С проброшенным портом FORWARDED_ALLOW_IPS=*
+    # позволил бы кому угодно подделать X-Forwarded-For и обойти rate limit,
+    # а /api/bot/* оказался бы доступен из интернета в обход прокси.
+    # Для разовой локальной отладки: docker compose run --service-ports api
 
   bot:
     build: ./bot/mafia-tg-bot
@@ -39,7 +61,13 @@ services:
     depends_on:
       - api
     env_file:
+      # Создать перед первым запуском, иначе compose не стартует вообще:
+      # cp bot/mafia-tg-bot/.env.example bot/mafia-tg-bot/.env
       - ./bot/mafia-tg-bot/.env
+    environment:
+      # То же, что у api: внутри compose-сети бэкенд -- это имя сервиса,
+      # а не localhost, на который рассчитан .env для запуска бота с хоста.
+      API_BASE_URL: http://api:8000
 
   frontend:
     build:
@@ -49,8 +77,11 @@ services:
         # См. frontend/.env.example про разницу между этой переменной и
         # API_INTERNAL_URL ниже (эта вшивается в бандл на этапе сборки).
         NEXT_PUBLIC_API_URL: ""
-        NEXT_PUBLIC_BOT_USERNAME: ""
-        NEXT_PUBLIC_SITE_URL: ""
+        NEXT_PUBLIC_BOT_USERNAME: "${NEXT_PUBLIC_BOT_USERNAME:-}"
+        # Абсолютный origin сайта -- нужен для sitemap.xml и robots.txt, там
+        # относительные URL невалидны. Обязательно задать перед проддеплоем:
+        # NEXT_PUBLIC_SITE_URL=https://example.ru docker compose build frontend
+        NEXT_PUBLIC_SITE_URL: "${NEXT_PUBLIC_SITE_URL:-http://localhost}"
     restart: unless-stopped
     depends_on:
       - api

@@ -1,30 +1,46 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { serverGet } from "@/lib/api";
-import type { GameListOut } from "@/types/api";
+import { serverGet } from "@/lib/api-server";
+import type { GameListOut, TournamentListItem } from "@/types/api";
 import { Container } from "@/components/ui/container";
 import { GamesFilterBar } from "@/components/games/filter-bar";
 import { GameCard } from "@/components/games/game-card";
-import { firstParam } from "@/lib/search-params";
+import { firstParam, intParam } from "@/lib/search-params";
 
 export const metadata: Metadata = { title: "Игры" };
-export const dynamic = "force-dynamic";
+export const revalidate = 300;
 
 export default async function GamesPage({
   searchParams,
 }: PageProps<"/mafia/games">) {
   const params = await searchParams;
-  const limit = Number(firstParam(params, "limit") ?? 10);
-  const offset = Number(firstParam(params, "offset") ?? 0);
+  // Через intParam, а не Number(): "abc" давало NaN, "0" и "-5" уходили в API
+  // как есть, бэкенд отвечал 422 -- и страница падала в 500.
+  const limit = intParam(params, "limit", { def: 10, min: 1, max: 100 });
+  const offset = intParam(params, "offset", { def: 0, min: 0, max: 100_000 });
   const game_type = firstParam(params, "game_type");
-  const result = firstParam(params, "result");
+  const tournament_slug = firstParam(params, "tournament_slug");
+  const date_from = firstParam(params, "date_from");
+  const date_to = firstParam(params, "date_to");
 
-  const data = await serverGet<GameListOut>("/api/games", { limit, offset, game_type, result });
+  const [data, tournaments] = await Promise.all([
+    serverGet<GameListOut>("/api/games", {
+      limit,
+      offset,
+      game_type,
+      tournament_slug,
+      date_from,
+      date_to,
+    }),
+    serverGet<TournamentListItem[]>("/api/tournaments"),
+  ]);
 
   const buildUrl = (nextOffset: number) => {
     const p = new URLSearchParams();
     if (game_type) p.set("game_type", game_type);
-    if (result) p.set("result", result);
+    if (tournament_slug) p.set("tournament_slug", tournament_slug);
+    if (date_from) p.set("date_from", date_from);
+    if (date_to) p.set("date_to", date_to);
     p.set("limit", String(limit));
     p.set("offset", String(nextOffset));
     return `/mafia/games?${p.toString()}`;
@@ -40,7 +56,7 @@ export default async function GamesPage({
       </div>
 
       <div className="mt-8">
-        <GamesFilterBar />
+        <GamesFilterBar tournaments={tournaments} />
       </div>
 
       <div className="mt-6 flex flex-col gap-3">
