@@ -55,9 +55,18 @@ class PlayerStatsOut(BaseModel):
     avg_bonus: float | None
 
 
+class PlayerDetailOut(BaseModel):
+    """Ответ GET /api/players/{slug}. Раньше ручка возвращала голый dict и в
+    OpenAPI выглядела объектом неизвестной формы, хотя обе половины уже были
+    описаны схемами."""
+
+    player: PlayerPublic
+    stats: PlayerStatsOut
+
+
 class PlayerCreate(BaseModel):
     nickname: str = Field(min_length=2, max_length=100)
-    slug: str = Field(min_length=2, max_length=50)
+    slug: str = Field(min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=150)
     age: int | None = Field(default=None, ge=5, le=100)
     favorite_role: str | None = None
@@ -74,7 +83,7 @@ class PlayerCreate(BaseModel):
 
 class PlayerUpdate(BaseModel):
     nickname: str | None = Field(default=None, min_length=2, max_length=100)
-    slug: str | None = Field(default=None, min_length=2, max_length=50)
+    slug: str | None = Field(default=None, min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=150)
     age: int | None = Field(default=None, ge=5, le=100)
     favorite_role: str | None = None

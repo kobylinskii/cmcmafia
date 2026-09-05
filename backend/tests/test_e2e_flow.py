@@ -8,45 +8,21 @@ Postgres-специфичные типы (JSONB, TIMESTAMPTZ), sqlite не по�
 
 from __future__ import annotations
 
-import os
+import pytest
+from fastapi.testclient import TestClient
 
-os.environ.setdefault("JWT_SECRET", "test-secret")
-os.environ.setdefault("BOT_SERVICE_TOKEN", "test-bot-token")
-os.environ.setdefault("REDIS_URL", "memory://")
-os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:55432/mafia"
-)
-# TestClient talks plain http://testserver; a Secure cookie (correct default for
-# real deployments, see app/config.py) would be silently dropped by the client.
-os.environ.setdefault("COOKIE_SECURE", "false")
+from app.database import SessionLocal
+from app.main import app
+from app.services import player_service
 
-import pytest  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import text  # noqa: E402
-
-from app.database import SessionLocal  # noqa: E402
-from app.main import app  # noqa: E402
-from app.services import player_service  # noqa: E402
-
-BOT_HEADERS = {"Authorization": "Bearer test-bot-token"}
-
-
-def _truncate_all() -> None:
-    db = SessionLocal()
-    try:
-        db.execute(
-            text(
-                "TRUNCATE audit_log, player_rating_history, player_rating, game_participants, "
-                "reserves, registrations, games, pending_bot_admins, players RESTART IDENTITY CASCADE"
-            )
-        )
-        db.commit()
-    finally:
-        db.close()
+# Настройка окружения и очистка базы -- в tests/conftest.py: pytest импортирует
+# его раньше любого тестового модуля, то есть до того, как app.config закэширует
+# настройки через lru_cache.
+from tests.conftest import BOT_HEADERS, make_tournament, make_tournament_game, reset_state
 
 
 def test_full_flow():
-    _truncate_all()
+    reset_state()
     client = TestClient(app)
 
     # --- bootstrap a site admin directly through the service layer ---
@@ -112,19 +88,14 @@ def test_full_flow():
             p["points_judge"] = 1.5
         participants.append(p)
 
-    resp = client.post(
-        "/api/admin/games",
-        json={
-            "starts_at": "2026-01-10T18:00:00Z",
-            "location": "Клуб",
-            "game_type": "tournament",
-            "result": "mafia_win",
-            "participants": participants,
-        },
-        headers=admin_headers(),
+    tournament_id = make_tournament(client, admin_headers())
+
+    # Турнирная игра теперь создаётся не одним POST: сперва слот (см.
+    # «Турниры» в админке), потом его оценка -- см. make_tournament_game.
+    game = make_tournament_game(
+        client, admin_headers(), tournament_id=tournament_id,
+        starts_at="2026-01-10T18:00:00Z", participants=participants,
     )
-    assert resp.status_code == 200, resp.text
-    game = resp.json()
     assert game["status"] == "rated"
     assert len(game["participants"]) == 10
 
@@ -221,7 +192,7 @@ def test_full_flow():
         json={
             "starts_at": "2026-12-01T18:00:00Z",
             "location": "Клуб",
-            "game_type": "tournament",
+            "game_type": "funky",
             "max_players": 2,
         },
     )
@@ -232,7 +203,7 @@ def test_full_flow():
     resp = client.post(
         f"/api/bot/admin/sessions?telegram_id=111111111",
         headers=BOT_HEADERS,
-        json={"starts_at": "2026-12-01T18:00:00Z", "location": "x", "game_type": "tournament"},
+        json={"starts_at": "2026-12-01T18:00:00Z", "location": "x", "game_type": "funky"},
     )
     assert resp.status_code == 404  # unknown telegram_id -> no actor found
 
@@ -304,7 +275,7 @@ def test_full_flow():
 
 
 def test_schedule_admin_flow():
-    _truncate_all()
+    reset_state()
     client = TestClient(app)
 
     resp = client.post(
@@ -340,7 +311,7 @@ def test_schedule_admin_flow():
                 "2026-03-05T20:00:00Z",
             ],
             "location": "Клуб",
-            "game_type": "tournament",
+            "game_type": "funky",
         },
     )
     assert resp.status_code == 200, resp.text
@@ -350,7 +321,7 @@ def test_schedule_admin_flow():
     # day-cards groups by day across all statuses
     resp = client.get("/api/bot/admin/sessions/day-cards?telegram_id=501", headers=BOT_HEADERS)
     assert resp.status_code == 200
-    assert resp.json() == [{"day": "05.03.2026", "types": ["tournament"]}]
+    assert resp.json() == [{"day": "05.03.2026", "types": ["funky"]}]
 
     # by-day lists all three sessions for that day
     resp = client.get(
@@ -437,7 +408,7 @@ def test_bootstrap_admin_via_config(monkeypatch):
     this replaces the bot's old direct-DB ensure_superadmin/ensure_admin_by_phone,
     which would otherwise be an unauthenticated privilege escalation over the API
     (granting admin normally requires already being one)."""
-    _truncate_all()
+    reset_state()
     client = TestClient(app)
 
     from app.config import get_settings

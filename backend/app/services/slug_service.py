@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from slugify import slugify
 from sqlalchemy.orm import Session
 
@@ -18,6 +20,9 @@ RESERVED_SLUGS = {
     "sitemap.xml",
     "_next",
     "mafia",
+    # /mafia/tournaments -- отдельный раздел, он не должен перекрываться
+    # игроком с таким slug (страницы игроков живут прямо в /mafia/[slug]).
+    "tournaments",
 }
 
 
@@ -45,9 +50,7 @@ def is_slug_taken(slug: str, db: Session, exclude_player_id: int | None = None) 
 
 
 def validate_slug(slug: str) -> None:
-    import re
-
     if slug in RESERVED_SLUGS:
         raise ValueError(f"Slug «{slug}» зарезервирован системой")
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{1,48}[a-z0-9]", slug):
-        raise ValueError("Slug должен состоять из латинских букв, цифр и дефисов (2-50 символов)")
+        raise ValueError("Slug должен состоять из латинских букв, цифр и дефисов (3-50 символов)")

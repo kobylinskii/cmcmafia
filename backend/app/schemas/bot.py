@@ -5,7 +5,10 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AFFILIATIONS = {"vmk", "mgu_no_pass", "outside_need_pass"}
-GAME_TYPES = {"tournament", "funky", "training"}
+# Турнирные игры больше не создаются и не набираются через бота вообще:
+# у них теперь своя сетка этапов, управляемая целиком на сайте (см. раздел
+# «Турниры» в админке). Бот работает только с фанки/обучающими сессиями.
+GAME_TYPES = {"funky", "training"}
 
 
 class BotPlayerRegisterIn(BaseModel):
@@ -84,7 +87,7 @@ class SessionOut(BaseModel):
 class SessionCreateIn(BaseModel):
     starts_at: datetime
     location: str = Field(min_length=1, max_length=200)
-    game_type: str = "tournament"
+    game_type: str = "funky"
     registration_until: datetime | None = None
     max_players: int = Field(default=10, ge=2, le=20)
 

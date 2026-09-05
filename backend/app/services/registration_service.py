@@ -45,6 +45,12 @@ def list_open_sessions(db: Session, *, game_type: str | None = None, exclude_pla
     query = db.query(models.Game).filter(
         models.Game.status == "scheduled",
         models.Game.starts_at >= datetime.now(timezone.utc),
+        # Турнирные слоты этапа тоже лежат в статусе 'scheduled' (плейсхолдер
+        # даты турнира может оказаться в будущем) -- но регистрации на них
+        # никогда не было и не будет, это чисто список мест за столом,
+        # заполняемый на сайте. Без этого исключения игрок мог бы записаться
+        # в бота на игру, которая на деле ждёт оценки турнирного этапа.
+        models.Game.game_type != "tournament",
     )
     if game_type and game_type != "all":
         query = query.filter(models.Game.game_type == game_type)

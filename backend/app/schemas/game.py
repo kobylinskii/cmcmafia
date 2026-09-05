@@ -4,10 +4,16 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.schemas.tournament import TournamentRef, TournamentStageRef
+
 IN_GAME_ROLES = {"mafia", "don", "sheriff", "citizen"}
 GAME_RESULTS = {"city_win", "mafia_win", "draw"}
 INFO_VALUES = {"first_killed", "killed", "voted_out"}
 GAME_TYPES = {"tournament", "funky", "training"}
+# Вкладка «Игры» в админке создаёт только бот-форматы: турнирные игры теперь
+# заводятся исключительно как слоты этапа (см. app.routers.admin, раздел
+# турниров) -- там сразу известны tournament_id/stage_id и плейсхолдер-дата.
+CREATABLE_GAME_TYPES = {"funky", "training"}
 
 
 def _round_half_step(value: float | None, step: float, field_name: str) -> float | None:
@@ -85,7 +91,11 @@ class ParticipantOut(BaseModel):
 class GameCreate(BaseModel):
     starts_at: datetime
     location: str | None = Field(default=None, max_length=200)
-    game_type: str = "tournament"
+    game_type: str = "funky"
+    # tournament_id/stage_id тут больше не нужны: 'tournament' вообще нельзя
+    # передать через этот эндпоинт (см. validate_game_type ниже).
+    tournament_id: int | None = None
+    stage_id: int | None = None
     result: str
     notes: str | None = Field(default=None, max_length=2000)
     participants: list[ParticipantIn]
@@ -93,8 +103,8 @@ class GameCreate(BaseModel):
     @field_validator("game_type")
     @classmethod
     def validate_game_type(cls, v: str) -> str:
-        if v not in GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {GAME_TYPES}")
+        if v not in CREATABLE_GAME_TYPES:
+            raise ValueError(f"game_type должен быть одним из {CREATABLE_GAME_TYPES}")
         return v
 
     @field_validator("result")
@@ -109,6 +119,8 @@ class GameUpdate(BaseModel):
     starts_at: datetime | None = None
     location: str | None = Field(default=None, max_length=200)
     game_type: str | None = None
+    tournament_id: int | None = None
+    stage_id: int | None = None
     result: str | None = None
     notes: str | None = Field(default=None, max_length=2000)
     participants: list[ParticipantIn] | None = None
@@ -128,6 +140,19 @@ class GameUpdate(BaseModel):
         return v
 
 
+class GameRosterEntry(BaseModel):
+    """Кто записался на игру ДО неё (ведущий/судья/игрок) -- это не то же самое,
+    что participants (места за столом с ролями и баллами, заполняются после).
+    Нужен админке, чтобы форма оценки игры из бота открывалась с уже
+    подставленным составом, а не пустой (ARCHITECTURE.md, раздел 8, шаг 4)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    player_id: int
+    nickname: str
+    role: str
+
+
 class GameOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -138,7 +163,11 @@ class GameOut(BaseModel):
     status: str
     result: str | None
     notes: str | None
+    tournament: TournamentRef | None = None
+    stage: TournamentStageRef | None = None
     participants: list[ParticipantOut]
+    # Пусто в публичном ответе: там игра уже оценена, состав виден в participants.
+    roster: list[GameRosterEntry] = []
 
 
 class GameListItem(BaseModel):
@@ -149,6 +178,7 @@ class GameListItem(BaseModel):
     location: str | None
     game_type: str
     result: str | None
+    tournament: TournamentRef | None = None
 
 
 class GameListOut(BaseModel):

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import uuid
 
@@ -12,12 +13,27 @@ from app.config import get_settings
 from app.services import slug_service
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 class PlayerValidationError(Exception):
     def __init__(self, message: str):
         self.message = message
         super().__init__(message)
+
+
+# Поля, которые нельзя обнулить через PUT: без них строка игрока невалидна.
+_NON_NULLABLE_FIELDS = frozenset({"nickname", "slug"})
+
+
+def _validate_slug(slug: str) -> None:
+    """slug_service -- общий модуль и кидает голый ValueError; роутеры ловят
+    только PlayerValidationError, поэтому без этой обёртки зарезервированный
+    или кривой slug превращался в 500 вместо понятного 422."""
+    try:
+        slug_service.validate_slug(slug)
+    except ValueError as exc:
+        raise PlayerValidationError(str(exc)) from exc
 
 
 def create_player(
@@ -34,7 +50,7 @@ def create_player(
     telegram_username: str | None = None,
     phone: str | None = None,
 ) -> models.Player:
-    slug_service.validate_slug(slug)
+    _validate_slug(slug)
     if slug_service.is_slug_taken(slug, db):
         raise PlayerValidationError(f"Slug «{slug}» уже занят")
     if db.query(models.Player).filter(models.Player.nickname.ilike(nickname)).first():
@@ -60,7 +76,7 @@ def create_player(
 def update_player(db: Session, *, player: models.Player, **fields) -> models.Player:
     if "slug" in fields and fields["slug"] is not None:
         new_slug = fields["slug"]
-        slug_service.validate_slug(new_slug)
+        _validate_slug(new_slug)
         if slug_service.is_slug_taken(new_slug, db, exclude_player_id=player.id):
             raise PlayerValidationError(f"Slug «{new_slug}» уже занят")
 
@@ -73,9 +89,17 @@ def update_player(db: Session, *, player: models.Player, **fields) -> models.Pla
         if existing:
             raise PlayerValidationError("Ник уже занят")
 
+    # Роутер отдаёт только те поля, что реально пришли в теле запроса
+    # (exclude_unset), поэтому явный null здесь -- это осознанная очистка
+    # поля, а не «не трогать». Раньше все None отбрасывались, и стереть
+    # био/возраст/имя через админку было невозможно: форма молча сохраняла
+    # старое значение.
     for key, value in fields.items():
-        if value is not None and hasattr(player, key):
-            setattr(player, key, value)
+        if not hasattr(player, key):
+            continue
+        if value is None and key in _NON_NULLABLE_FIELDS:
+            raise PlayerValidationError(f"Поле «{key}» нельзя оставить пустым")
+        setattr(player, key, value)
 
     db.flush()
     return player
@@ -140,13 +164,25 @@ def save_player_photo(db: Session, *, player: models.Player, raw_bytes: bytes) -
     if image.format not in ALLOWED_IMAGE_FORMATS:
         raise PlayerValidationError("Допустимые форматы: JPEG, PNG, WEBP")
 
-    image = image.convert("RGB")
-    image.thumbnail((800, 800))
+    # Всё дальше -- перекодирование и запись на диск -- ловится отдельно и
+    # широко: Pillow может упасть на не-UnidentifiedImageError исключении
+    # (битый после сигнатуры файл, экзотический режим цвета, полноразмерная
+    # анимация), а запись на диск -- на нехватке места или правах доступа.
+    # Раньше любое из этого улетало наружу как голый 500 без единого слова
+    # о причине -- админ видел просто "не работает".
+    try:
+        image = image.convert("RGB")
+        image.thumbnail((800, 800))
 
-    os.makedirs(settings.media_root, exist_ok=True)
-    filename = f"{uuid.uuid4().hex}.jpg"
-    path = os.path.join(settings.media_root, filename)
-    image.save(path, format="JPEG", quality=85)
+        os.makedirs(settings.media_root, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}.jpg"
+        path = os.path.join(settings.media_root, filename)
+        image.save(path, format="JPEG", quality=85)
+    except Exception as exc:
+        logger.exception("Не удалось обработать фото для игрока id=%s", player.id)
+        raise PlayerValidationError(
+            "Не удалось обработать изображение — попробуйте другой файл"
+        ) from exc
 
     player.photo_url = f"/media/players/{filename}"
     db.flush()

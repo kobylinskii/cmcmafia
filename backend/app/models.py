@@ -124,6 +124,115 @@ class PendingBotAdmin(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Tournament(Base):
+    """Турнир как самостоятельная сущность: у него своё название, описание,
+    место проведения и период проведения, и на него ссылаются игры с
+    game_type='tournament'.
+
+    Турнирные игры больше не создаются через бота (ни регистрации, ни
+    создания сессий для game_type='tournament' -- см. GAME_TYPES в
+    app/schemas/bot.py) -- вся турнирная сетка целиком заводится и
+    редактируется на сайте, поэтому связь games.tournament_id обязательна для
+    оценённых турнирных игр (см. ck_games_rated_tournament_has_tournament) без
+    компромисса на "бот ещё не знает турнир", актуального для старой модели.
+    """
+
+    __tablename__ = "tournaments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(150), unique=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(String(200))
+    # Период проведения турнира. Обязателен у любого турнира (даже простого,
+    # без этапов) -- помимо чисто информационного показа, дата начала служит
+    # плейсхолдером для только что созданных игровых слотов этапа: реальная
+    # дата каждой конкретной игры выставляется админом вручную позже, т.к.
+    # турнир обычно идёт несколько дней подряд или с недельным интервалом.
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    games: Mapped[list[Game]] = relationship(back_populates="tournament")
+    stages: Mapped[list[TournamentStage]] = relationship(
+        back_populates="tournament", cascade="all, delete-orphan", order_by="TournamentStage.order"
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            r"slug ~ '^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$'",
+            name="ck_tournaments_slug_format",
+        ),
+        CheckConstraint("ends_at >= starts_at", name="ck_tournaments_ends_after_starts"),
+    )
+
+
+class TournamentStage(Base):
+    """Отборочный этап турнира (по олимпийской системе, когда участников > 10):
+    "Отборочный стол 1", "Финал" и т.п. -- свободное название, задаёт админ.
+
+    Существует ТОЛЬКО когда турниру нужна сетка. Обычный турнир (участников
+    помещается за один стол, играется просто серия из N игр) этапов не имеет
+    вообще -- games.stage_id остаётся NULL, и вся публичная/турнирная логика
+    работает как раньше (см. ARCHITECTURE.md и game_service._resolve_stage).
+    """
+
+    __tablename__ = "tournament_stages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tournament_id: Mapped[int] = mapped_column(
+        ForeignKey("tournaments.id", ondelete="CASCADE"), nullable=False
+    )
+    name: Mapped[str] = mapped_column(String(150), nullable=False)
+    # Порядок отображения на странице турнира -- не обязательно совпадает с
+    # порядком создания (админ мог создать этапы не по порядку). Не пытаемся
+    # угадывать "это финал" по номеру: название -- свободный текст.
+    order: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=1)
+    # Ровно один этап турнира может быть отмечен финальным -- на публичной
+    # странице турнира его таблица развёрнута по умолчанию, остальные этапы
+    # свёрнуты (см. tournament_service.create_stage/update_stage, где
+    # проставление true у одного этапа снимает флаг с остальных).
+    is_final: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    tournament: Mapped[Tournament] = relationship(back_populates="stages")
+    games: Mapped[list[Game]] = relationship(back_populates="stage")
+    advances: Mapped[list[TournamentStageAdvance]] = relationship(
+        back_populates="stage", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("tournament_id", "name", name="uq_tournament_stages_tournament_name"),
+        Index("idx_tournament_stages_tournament", "tournament_id"),
+    )
+
+
+class TournamentStageAdvance(Base):
+    """Кто прошёл из этапа дальше. Простая пара (этап, игрок) без отдельного
+    булева поля: наличие строки и значит "прошёл". Ставится админом вручную
+    одним разом по всей сводной таблице этапа, когда все игры этапа сыграны --
+    никакого автоматического правила прохода нет (см. ARCHITECTURE.md)."""
+
+    __tablename__ = "tournament_stage_advances"
+
+    stage_id: Mapped[int] = mapped_column(
+        ForeignKey("tournament_stages.id", ondelete="CASCADE"), primary_key=True
+    )
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), primary_key=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    stage: Mapped[TournamentStage] = relationship(back_populates="advances")
+    player: Mapped[Player] = relationship()
+
+
 class Game(Base):
     __tablename__ = "games"
 
@@ -139,6 +248,19 @@ class Game(Base):
     results_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     notes: Mapped[str | None] = mapped_column(Text)
+    # RESTRICT, а не SET NULL: обнуление увело бы оценённые турнирные игры в
+    # нарушение чек-констрейнта ниже, а каскад стёр бы историю. Турнир с
+    # играми удалить нельзя -- сначала переносят игры.
+    tournament_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tournaments.id", ondelete="RESTRICT")
+    )
+    # RESTRICT по той же причине, что и у tournament_id: удалить этап с уже
+    # внесёнными играми нельзя, сначала их переносят на другой этап или в
+    # турнир без этапов. NULL -- игра не принадлежит никакому этапу (обычный
+    # турнир без сетки, либо не-турнирная игра).
+    stage_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tournament_stages.id", ondelete="RESTRICT")
+    )
     created_by: Mapped[int | None] = mapped_column(ForeignKey("players.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -152,6 +274,8 @@ class Game(Base):
         back_populates="game", cascade="all, delete-orphan"
     )
     reserves: Mapped[list[Reserve]] = relationship(back_populates="game", cascade="all, delete-orphan")
+    tournament: Mapped[Tournament | None] = relationship(back_populates="games")
+    stage: Mapped[TournamentStage | None] = relationship(back_populates="games")
 
     __table_args__ = (
         CheckConstraint(
@@ -170,7 +294,13 @@ class Game(Base):
             "game_type IN ('tournament','funky','training')",
             name="ck_games_type_enum",
         ),
+        CheckConstraint(
+            "status <> 'rated' OR game_type <> 'tournament' OR tournament_id IS NOT NULL",
+            name="ck_games_rated_tournament_has_tournament",
+        ),
         Index("idx_games_starts_at", "starts_at", "id"),
+        Index("idx_games_tournament", "tournament_id"),
+        Index("idx_games_stage", "stage_id"),
         Index("idx_games_status", "status"),
     )
 
@@ -242,7 +372,10 @@ class GameParticipant(Base):
             "info IS NULL OR info IN ('first_killed','killed','voted_out')",
             name="ck_participants_info_enum",
         ),
-        CheckConstraint("lh IS NULL OR (lh >= 0 AND lh <= 1.5)", name="ck_participants_lh_range"),
+        # Шкала попаданий ЛХ, а не диапазон: 0/3, 1/3, 2/3, 3/3. Промежуточные
+        # значения таблица баллов (rating_service.LH_POINTS) не знает и молча
+        # отдаёт по ним ноль -- см. миграцию a1c4f7e29b03.
+        CheckConstraint("lh IS NULL OR lh IN (0, 0.5, 1, 1.5)", name="ck_participants_lh_scale"),
         CheckConstraint("removals IS NULL OR removals >= 0", name="ck_participants_removals_nonneg"),
         CheckConstraint("zk IS NULL OR zk >= 0", name="ck_participants_zk_nonneg"),
         CheckConstraint("sk IS NULL OR sk >= 0", name="ck_participants_sk_nonneg"),

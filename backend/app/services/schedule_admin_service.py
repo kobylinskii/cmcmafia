@@ -4,12 +4,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models
-from app.timeutil import club_day
+from app.timeutil import CLUB_TZ
 
 
 def bulk_create_sessions(
@@ -47,28 +48,65 @@ def check_conflicts(
     return [r[0] for r in rows]
 
 
+def _club_day_bounds(day: str) -> tuple[datetime, datetime]:
+    """'ДД.ММ.ГГГГ' -> границы этих суток [начало, конец) в московском времени.
+
+    Именно в московском: игра в 00:30 МСК приходится на 21:30 UTC предыдущих
+    суток, и наивное сравнение по UTC отправило бы её в соседний день
+    (см. app/timeutil.py).
+    """
+    start = datetime.strptime(day, "%d.%m.%Y").replace(tzinfo=CLUB_TZ)
+    return start, start + timedelta(days=1)
+
+
+# Календарный день игры по московскому времени, посчитанный на стороне СУБД.
+_CLUB_DAY_SQL = func.date(func.timezone(str(CLUB_TZ), models.Game.starts_at))
+
+
 def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
-    query = db.query(models.Game.starts_at, models.Game.game_type)
+    """Группировка делается в SQL: раньше в память выгружались строки по каждой
+    игре клуба за всю историю, и список дней стоил O(всех игр)."""
+    query = (
+        db.query(
+            _CLUB_DAY_SQL.label("day"),
+            models.Game.game_type,
+            func.min(models.Game.starts_at).label("min_start"),
+        )
+        # Турнирные слоты этапа сюда не попадают: у бота для них нет ни одного
+        # осмысленного действия (нет регистрации, нет ростера через бота) --
+        # только фанки/обучающие, которыми бот-админ реально управляет.
+        .filter(models.Game.game_type != "tournament")
+        .group_by(_CLUB_DAY_SQL, models.Game.game_type)
+    )
     if game_type and game_type != "all":
         query = query.filter(models.Game.game_type == game_type)
 
     grouped: dict[str, dict] = {}
-    for starts_at, gtype in query.all():
-        day = club_day(starts_at)
-        entry = grouped.setdefault(day, {"types": set(), "min_start": starts_at})
+    for day, gtype, min_start in query.all():
+        key = day.strftime("%d.%m.%Y")
+        entry = grouped.setdefault(key, {"types": set(), "min_start": min_start})
         entry["types"].add(gtype)
-        if starts_at < entry["min_start"]:
-            entry["min_start"] = starts_at
+        if min_start < entry["min_start"]:
+            entry["min_start"] = min_start
 
     ordered = sorted(grouped.items(), key=lambda kv: kv[1]["min_start"])
     return [{"day": day, "types": sorted(v["types"])} for day, v in ordered]
 
 
 def games_by_day(db: Session, *, day: str) -> list[models.Game]:
-    games = db.query(models.Game).all()
-    matching = [g for g in games if club_day(g.starts_at) == day]
-    matching.sort(key=lambda g: g.starts_at)
-    return matching
+    """Отбор по диапазону в SQL, а не выгрузка всей таблицы с фильтрацией
+    на Python."""
+    start, end = _club_day_bounds(day)
+    return (
+        db.query(models.Game)
+        .filter(
+            models.Game.starts_at >= start,
+            models.Game.starts_at < end,
+            models.Game.game_type != "tournament",
+        )
+        .order_by(models.Game.starts_at.asc())
+        .all()
+    )
 
 
 def find_player_by_username(db: Session, username: str) -> models.Player | None:

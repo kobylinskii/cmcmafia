@@ -27,16 +27,24 @@ def get_current_site_user(request: Request, db: Session = Depends(get_db)) -> mo
     return player
 
 
+def require_csrf(request: Request) -> None:
+    """Double-submit проверка для любого изменяющего запроса из браузера.
+
+    Вынесена из require_site_admin: смена пароля доступна любому владельцу
+    сайт-логина, а не только админу, но защищать её от CSRF нужно ровно так же.
+    """
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    cookie_csrf = request.cookies.get(CSRF_COOKIE)
+    header_csrf = request.headers.get(CSRF_HEADER)
+    if not security.csrf_tokens_match(cookie_csrf, header_csrf):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Неверный CSRF-токен")
+
+
 def require_site_admin(request: Request, user: models.Player = Depends(get_current_site_user)) -> models.Player:
     if not user.is_site_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Требуются права администратора сайта")
-
-    if request.method not in ("GET", "HEAD", "OPTIONS"):
-        cookie_csrf = request.cookies.get(CSRF_COOKIE)
-        header_csrf = request.headers.get(CSRF_HEADER)
-        if not security.csrf_tokens_match(cookie_csrf, header_csrf):
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Неверный CSRF-токен")
-
+    require_csrf(request)
     return user
 
 
