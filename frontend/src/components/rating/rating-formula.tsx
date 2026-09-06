@@ -13,7 +13,10 @@ import { Badge } from "@/components/ui/badge";
  */
 export function RatingFormula({ formula }: { formula: RatingFormulaOut }) {
   return (
-    <section className="mt-14">
+    // id и scroll-mt: с главной на этот блок ведёт якорная ссылка
+    // «Подробнее о формуле», а фиксированная шапка иначе накрывает
+    // заголовок, к которому проскроллили.
+    <section id="formula" className="mt-14 scroll-mt-24">
       <h2 className="font-display text-2xl font-medium text-ink-50 md:text-3xl">
         Как считается рейтинг
       </h2>

@@ -18,8 +18,11 @@ import os
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("BOT_SERVICE_TOKEN", "test-bot-token")
 os.environ.setdefault("REDIS_URL", "memory://")
+# Отдельная база от той, на которой крутится локальный стенд: reset_state()
+# вычищает таблицы целиком, и прогон тестов по общей базе стирал данные
+# работающего сайта вместе с администратором.
 os.environ.setdefault(
-    "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:55432/mafia"
+    "DATABASE_URL", "postgresql+psycopg://postgres:postgres@localhost:55432/mafia_test"
 )
 # TestClient ходит по http://testserver; Secure-кука (правильный дефолт для
 # реального деплоя, см. app/config.py) была бы молча выброшена клиентом.
@@ -40,7 +43,11 @@ BOT_HEADERS = {"Authorization": "Bearer test-bot-token"}
 _ALL_TABLES = (
     "audit_log, player_rating_history, player_rating, game_participants, "
     "reserves, registrations, games, tournament_stage_advances, tournament_stages, "
-    "tournaments, pending_bot_admins, players"
+    # club_settings живёт одной строкой, созданной миграцией, и переживает
+    # рестарты -- но между тестами она обязана обнуляться: иначе рубеж
+    # пропускной недели, выставленный одним тестом, менял окно у следующего.
+    # Строку заново создаёт settings_service.get_settings.
+    "tournaments, pending_bot_admins, club_settings, players"
 )
 
 

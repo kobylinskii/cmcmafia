@@ -56,18 +56,22 @@ services:
     # Для разовой локальной отладки: docker compose run --service-ports api
 
   bot:
-    build: ./bot/mafia-tg-bot
+    build: ./bot
     restart: unless-stopped
     depends_on:
       - api
+      - redis
     env_file:
       # Создать перед первым запуском, иначе compose не стартует вообще:
-      # cp bot/mafia-tg-bot/.env.example bot/mafia-tg-bot/.env
-      - ./bot/mafia-tg-bot/.env
+      # cp bot/.env.example bot/.env
+      - ./bot/.env
     environment:
       # То же, что у api: внутри compose-сети бэкенд -- это имя сервиса,
       # а не localhost, на который рассчитан .env для запуска бота с хоста.
       API_BASE_URL: http://api:8000
+      # FSM бота: без внешнего хранилища незавершённая регистрация терялась
+      # при каждом рестарте контейнера (см. bot/bot.py, build_storage).
+      REDIS_URL: redis://redis:6379/0
 
   frontend:
     build:

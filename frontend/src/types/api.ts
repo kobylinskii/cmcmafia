@@ -47,6 +47,9 @@ export interface GameOut {
 }
 
 export interface TournamentRef {
+  /** Нужен админке: после оценки турнирной игры форма возвращает в карточку
+   * того же турнира, а не в общий список игр. */
+  id: number;
   slug: string;
   name: string;
 }
@@ -181,6 +184,8 @@ export interface PlayerAdminOut {
   bio: string | null;
   photo_url: string | null;
   is_active: boolean;
+  confirmation_status: ConfirmationStatus;
+  rejection_reason: string | null;
   is_bot_admin: boolean;
   is_site_admin: boolean;
   site_username: string | null;
@@ -188,6 +193,113 @@ export interface PlayerAdminOut {
   telegram_username: string | null;
   created_at: string;
 }
+
+/** Модерация игрока, зарегистрировавшегося через бота (см. бэкенд,
+ * models.ConfirmationStatus). Пока статус не confirmed, игрока нет ни в
+ * рейтинге, ни в списке игроков, ни на своей странице. */
+export type ConfirmationStatus = "pending" | "confirmed" | "rejected";
+
+export type Affiliation = "vmk" | "mgu_no_pass" | "outside_need_pass";
+
+export const AFFILIATION_LABELS: Record<Affiliation, string> = {
+  vmk: "С ВМК",
+  mgu_no_pass: "Из МГУ, пропуск не нужен",
+  outside_need_pass: "Вне МГУ, нужен пропуск",
+};
+
+export const CONFIRMATION_STATUS_LABELS: Record<ConfirmationStatus, string> = {
+  pending: "На проверке",
+  confirmed: "Подтверждён",
+  rejected: "Отклонён",
+};
+
+export interface PendingPlayerOut {
+  id: number;
+  nickname: string;
+  slug: string;
+  full_name: string | null;
+  salutation: string | null;
+  affiliation: Affiliation | null;
+  phone: string | null;
+  telegram_id: number | null;
+  telegram_username: string | null;
+  can_play: boolean;
+  can_staff: boolean;
+  age: number | null;
+  favorite_role: InGameRole | null;
+  experience: string | null;
+  bio: string | null;
+  created_at: string;
+}
+
+/** Правка профиля из бота, ждущая решения админа.
+ *
+ * `current_value` считается на момент чтения, а не хранится: пока правка
+ * ждала, поле мог поменять и сам админ.
+ */
+export interface ProfileChangeOut {
+  id: number;
+  player_id: number;
+  player_nickname: string;
+  player_slug: string;
+  telegram_username: string | null;
+  field: string;
+  field_label: string;
+  current_value: string | null;
+  new_value: string | null;
+  created_at: string;
+}
+
+/** Роль в конкретной игре недели: три роли записи плюс резерв. */
+export type PassListRole = RegistrationRole | "reserve";
+
+export const PASS_LIST_ROLE_LABELS: Record<PassListRole, string> = {
+  player: "Игрок",
+  host: "Ведущий",
+  judge: "Судья",
+  reserve: "Резерв",
+};
+
+export interface PassListGameOut {
+  game_id: number;
+  starts_at: string;
+  game_type: GameType;
+  location: string | null;
+  role: PassListRole;
+}
+
+export interface PassListEntryOut {
+  player_id: number;
+  nickname: string;
+  full_name: string | null;
+  phone: string | null;
+  confirmation_status: ConfirmationStatus;
+  games: PassListGameOut[];
+}
+
+export interface PassListOut {
+  week_start: string;
+  week_end: string;
+  rollover_weekday: number;
+  rollover_time: string;
+  entries: PassListEntryOut[];
+}
+
+export interface PassWeekSettings {
+  pass_week_rollover_weekday: number;
+  pass_week_rollover_time: string;
+}
+
+/** 0 = понедельник, как в Python datetime.weekday() на бэкенде. */
+export const WEEKDAY_LABELS = [
+  "Понедельник",
+  "Вторник",
+  "Среда",
+  "Четверг",
+  "Пятница",
+  "Суббота",
+  "Воскресенье",
+] as const;
 
 export interface LoginOut {
   nickname: string;
@@ -423,9 +535,10 @@ export function lhPoints(raw: number | null | undefined): number {
 // (SCORE_PENALTY_PER_REMOVAL / SCORE_PENALTY_PPK). ЖК и СК уже хранятся как
 // баллы, удаления и ППК -- как счётчик и флаг, поэтому им нужны ставки. Это не
 // то же самое, что штрафы в очках Эло (там 3..15 очков рейтинга).
-// ДОПУЩЕНИЕ, регламентом клуба не подтверждено -- см. комментарий в бэкенде.
+// Ставка за ППК -- 2.5 балла, по регламенту клуба. Ставка за удаление
+// регламентом не подтверждена -- см. комментарий в бэкенде.
 export const SCORE_PENALTY_PER_REMOVAL = 0.5;
-export const SCORE_PENALTY_PPK = 1.0;
+export const SCORE_PENALTY_PPK = 2.5;
 
 /** Итог по игроку за игру: все баллы минус все штрафы. Та же формула, что и
  * backend stats_service._SCORE_SQL (avg_score до усреднения по играм). */

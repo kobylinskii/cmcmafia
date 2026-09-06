@@ -16,6 +16,8 @@ import type {
 } from "@/types/api";
 import { RESULT_LABELS, ROLE_LABELS, INFO_LABELS, LH_SCALE } from "@/types/api";
 import { PlayerCombobox } from "@/components/admin/player-combobox";
+import { ScoreInput } from "@/components/admin/score-input";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 /** Тут создаются и правятся только бот-форматы -- турнирные игры заводятся
  * целиком во вкладке «Турниры» (см. TournamentStagesManager), а привязку к
@@ -39,6 +41,31 @@ type Row = {
   ppk: boolean;
   zk: string;
   sk: string;
+};
+
+// Шаги и границы -- те же, что проверяет бэкенд (backend/app/schemas/game.py).
+// Держать в синхроне: разойдутся -- форма начнёт отправлять то, что API отобьёт.
+const SCORE_STEPS = {
+  points_win: { step: 0.25, min: 0, max: 10 },
+  points_judge: { step: 0.25, min: 0, max: 5 },
+  ci: { step: 0.5, min: -20, max: 20 },
+  zk: { step: 0.5, min: 0, max: 10 },
+  sk: { step: 0.5, min: 0, max: 10 },
+  removals: { step: 1, min: 0, max: 10 },
+} as const;
+
+// Балл за победу, который проставляется команде-победителю автоматически при
+// выборе исхода. Ничья ничего не проставляет: делить очки за неё -- решение
+// судьи, а не формы.
+const WIN_POINTS = 2.5;
+
+const BLACK_ROLES: InGameRole[] = ["mafia", "don"];
+
+/** ППК -- поражение по причине нарушения: победа присуждается команде
+ * соперников. Ключ -- команда нарушителя. */
+const PPK_AWARDS_WIN_TO: Record<"black" | "red", GameResult> = {
+  black: "city_win",
+  red: "mafia_win",
 };
 
 const DEFAULT_ROLES: InGameRole[] = ["don", "mafia", "mafia", "sheriff", "citizen", "citizen", "citizen", "citizen", "citizen", "citizen"];
@@ -124,6 +151,10 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
   const [rows, setRows] = useState<Row[]>(emptyRows());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // Бэкенд отбивает смену состава в турнирной таблице, где уже есть другие
+  // оценённые игры (код ROSTER_MISMATCH). Это не тупик, а вопрос: показываем
+  // последствие и повторяем запрос с явным разрешением.
+  const [rosterConfirm, setRosterConfirm] = useState<Record<string, unknown> | null>(null);
 
   useEffect(() => {
     // /api/admin/players carries numeric ids the public /api/players list doesn't.
@@ -169,6 +200,72 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
     setRows((prev) => prev.map((r, i) => (i === index ? { ...r, ...patch } : r)));
   }
 
+  /** Раздаёт баллы за победу по исходу: 2.5 победившей команде, ноль
+   * проигравшей. Ничья ничего не трогает -- как делить очки за неё, решает
+   * судья. Значения остаются редактируемыми. */
+  function withWinPoints(prev: Row[], outcome: GameResult): Row[] {
+    if (outcome === "draw") return prev;
+    const blackWon = outcome === "mafia_win";
+    return prev.map((r) => {
+      const isBlack = BLACK_ROLES.includes(r.role);
+      return { ...r, points_win: isBlack === blackWon ? String(WIN_POINTS) : "0" };
+    });
+  }
+
+  /** Выбор исхода вручную. Подавляющее большинство заполнений -- это ровно
+   * «победившим по 2.5», а раньше админ правил десять полей каждый раз. */
+  function applyResult(next: GameResult | "") {
+    setResult(next);
+    if (next === "city_win" || next === "mafia_win") {
+      setRows((prev) => withWinPoints(prev, next));
+    }
+  }
+
+  /** Смена роли. Если у игрока стоит ППК и он поменял команду, победа
+   * переезжает к новым соперникам -- иначе исход разошёлся бы с правилом и
+   * сохранение отбил бы бэкенд. */
+  function changeRole(index: number, role: InGameRole) {
+    const row = rows[index];
+    if (!row.ppk) {
+      updateRow(index, { role });
+      return;
+    }
+    const outcome = PPK_AWARDS_WIN_TO[BLACK_ROLES.includes(role) ? "black" : "red"];
+    setResult(outcome);
+    setRows((prev) =>
+      withWinPoints(
+        prev.map((r, i) => (i === index ? { ...r, role } : r)),
+        outcome
+      )
+    );
+  }
+
+  /** Отметка ППК меняет исход игры: победа присуждается команде соперников,
+   * а нарушитель остаётся без дополнительных баллов -- ни судейских, ни за ЛХ
+   * (штраф за сам ППК и за карточки считается отдельно, при подсчёте итога).
+   * Те же правила проверяет бэкенд, см. game_service._validate_ppk. */
+  function togglePpk(index: number, checked: boolean) {
+    if (!checked) {
+      updateRow(index, { ppk: false });
+      return;
+    }
+    const offender = rows[index];
+    const team = BLACK_ROLES.includes(offender.role) ? "black" : "red";
+    const outcome = PPK_AWARDS_WIN_TO[team];
+    setResult(outcome);
+    setRows((prev) =>
+      withWinPoints(
+        // ППК снимается с остальных: нарушитель в игре один.
+        prev.map((r, i) =>
+          i === index
+            ? { ...r, ppk: true, points_judge: "0", lh: "" }
+            : { ...r, ppk: false }
+        ),
+        outcome
+      )
+    );
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -205,6 +302,22 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
       setError("ЛХ заполняется только у первоубиенного");
       return;
     }
+    const offenders = rows.filter((r) => r.ppk);
+    if (offenders.length > 1) {
+      setError("ППК в игре может быть только у одного игрока");
+      return;
+    }
+    if (offenders.length === 1) {
+      const team = BLACK_ROLES.includes(offenders[0].role) ? "black" : "red";
+      if (result !== PPK_AWARDS_WIN_TO[team]) {
+        setError(
+          `При ППК победа присуждается команде соперников — ${
+            PPK_AWARDS_WIN_TO[team] === "city_win" ? "городу" : "мафии"
+          }. Исправьте исход игры.`
+        );
+        return;
+      }
+    }
 
     const participants = rows.map((r) => ({
       player_id: r.player_id as number,
@@ -237,16 +350,33 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
       participants,
     };
 
+    await save(payload);
+  }
+
+  /** Куда возвращаться после сохранения. Турнирную игру админ открывает из
+   * карточки турнира, и общий список игр (где турнирных вообще нет) -- не то
+   * место, куда он шёл. */
+  const backHref = game?.tournament
+    ? `/mafia/admin/tournaments/${game.tournament.id}/edit`
+    : "/mafia/admin/games";
+
+  async function save(payload: Record<string, unknown>) {
     setLoading(true);
+    setError(null);
     try {
       if (isEdit) {
         await clientFetch(`/api/admin/games/${game!.id}`, { method: "PUT", body: JSON.stringify(payload) });
       } else {
         await clientFetch("/api/admin/games", { method: "POST", body: JSON.stringify(payload) });
       }
-      router.push("/mafia/admin/games");
+      setRosterConfirm(null);
+      router.push(backHref);
       router.refresh();
     } catch (err) {
+      if (err instanceof ApiError && err.message.includes("ROSTER_MISMATCH")) {
+        setRosterConfirm(payload);
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Не удалось сохранить игру");
     } finally {
       setLoading(false);
@@ -299,7 +429,12 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
         )}
         <label className={label}>
           Исход
-          <select className={field} value={result} onChange={(e) => setResult(e.target.value as GameResult)} required>
+          <select
+            className={field}
+            value={result}
+            onChange={(e) => applyResult(e.target.value as GameResult | "")}
+            required
+          >
             <option value="">Не выбран</option>
             {Object.entries(RESULT_LABELS).map(([v, l]) => (
               <option key={v} value={v}>
@@ -330,21 +465,21 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
       )}
 
       <div className="overflow-x-auto rounded-card border border-ink-800">
-        <table aria-label="Состав игры: места, роли и баллы" className="w-full min-w-[1180px] border-collapse">
+        <table aria-label="Состав игры: места, роли и баллы" className="w-full min-w-[1500px] border-collapse">
           <thead>
             <tr className="border-b border-ink-800 bg-ink-900 text-left text-xs font-medium text-ink-400">
               <th scope="col" className="px-2 py-2.5 w-10">№</th>
               <th scope="col" className="px-2 py-2.5 w-48">Игрок</th>
               <th scope="col" className="px-2 py-2.5 w-28">Роль</th>
-              <th scope="col" className="px-2 py-2.5 w-20">За победу</th>
-              <th scope="col" className="px-2 py-2.5 w-20">От судей</th>
+              <th scope="col" className="px-2 py-2.5 w-32">За победу</th>
+              <th scope="col" className="px-2 py-2.5 w-32">От судей</th>
               <th scope="col" className="px-2 py-2.5 w-20" title="Сколько из трёх названных оказались чёрными">ЛХ (из 3)</th>
-              <th scope="col" className="px-2 py-2.5 w-16">Ci</th>
+              <th scope="col" className="px-2 py-2.5 w-32">Ci</th>
               <th scope="col" className="px-2 py-2.5 w-32">Инфо</th>
-              <th scope="col" className="px-2 py-2.5 w-20">Удаления</th>
+              <th scope="col" className="px-2 py-2.5 w-32">Удаления</th>
               <th scope="col" className="px-2 py-2.5 w-16">ППК</th>
-              <th scope="col" className="px-2 py-2.5 w-16">ЖК</th>
-              <th scope="col" className="px-2 py-2.5 w-16">СК</th>
+              <th scope="col" className="px-2 py-2.5 w-32">ЖК</th>
+              <th scope="col" className="px-2 py-2.5 w-32">СК</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-ink-800">
@@ -364,7 +499,7 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                     aria-label={`Место ${row.seat_number}: роль`}
                     className={field}
                     value={row.role}
-                    onChange={(e) => updateRow(i, { role: e.target.value as InGameRole })}
+                    onChange={(e) => changeRole(i, e.target.value as InGameRole)}
                   >
                     {Object.entries(ROLE_LABELS).map(([v, l]) => (
                       <option key={v} value={v}>
@@ -374,10 +509,25 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                   </select>
                 </td>
                 <td className="px-2 py-1.5">
-                  <input aria-label={`Место ${row.seat_number}: баллы за победу`} className={`${field} no-spinner`} type="number" step="0.25" value={row.points_win} onChange={(e) => updateRow(i, { points_win: e.target.value })} />
+                  <ScoreInput
+                    label={`Место ${row.seat_number}: баллы за победу`}
+                    value={row.points_win}
+                    onChange={(v) => updateRow(i, { points_win: v })}
+                    placeholder="0"
+                    {...SCORE_STEPS.points_win}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input aria-label={`Место ${row.seat_number}: баллы от судей`} className={`${field} no-spinner`} type="number" step="0.25" value={row.points_judge} onChange={(e) => updateRow(i, { points_judge: e.target.value })} />
+                  <ScoreInput
+                    label={`Место ${row.seat_number}: баллы от судей`}
+                    value={row.points_judge}
+                    onChange={(v) => updateRow(i, { points_judge: v })}
+                    placeholder="0"
+                    // Игрок с ППК дополнительных баллов не получает -- поле
+                    // заблокировано, чтобы не вводить то, что бэкенд отобьёт.
+                    disabled={row.ppk}
+                    {...SCORE_STEPS.points_judge}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
                   {/* Попадания, а не баллы: судья считает «сколько из трёх
@@ -387,6 +537,7 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                     aria-label={`Место ${row.seat_number}: ЛХ, попаданий из трёх`}
                     className={field}
                     value={row.lh}
+                    disabled={row.ppk}
                     onChange={(e) => updateRow(i, { lh: e.target.value })}
                   >
                     <option value="">—</option>
@@ -398,7 +549,12 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                   </select>
                 </td>
                 <td className="px-2 py-1.5">
-                  <input aria-label={`Место ${row.seat_number}: Ci`} className={`${field} no-spinner`} type="number" step="0.5" placeholder="—" value={row.ci} onChange={(e) => updateRow(i, { ci: e.target.value })} />
+                  <ScoreInput
+                    label={`Место ${row.seat_number}: Ci`}
+                    value={row.ci}
+                    onChange={(v) => updateRow(i, { ci: v })}
+                    {...SCORE_STEPS.ci}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
                   <select
@@ -416,16 +572,31 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                   </select>
                 </td>
                 <td className="px-2 py-1.5">
-                  <input aria-label={`Место ${row.seat_number}: удаления`} className={`${field} no-spinner`} type="number" min="0" placeholder="—" value={row.removals} onChange={(e) => updateRow(i, { removals: e.target.value })} />
+                  <ScoreInput
+                    label={`Место ${row.seat_number}: удаления`}
+                    value={row.removals}
+                    onChange={(v) => updateRow(i, { removals: v })}
+                    {...SCORE_STEPS.removals}
+                  />
                 </td>
                 <td className="px-2 py-1.5 text-center">
-                  <input aria-label={`Место ${row.seat_number}: ППК`} type="checkbox" className="h-4 w-4 accent-brand-600" checked={row.ppk} onChange={(e) => updateRow(i, { ppk: e.target.checked })} />
+                  <input aria-label={`Место ${row.seat_number}: ППК`} type="checkbox" className="h-4 w-4 accent-brand-600" checked={row.ppk} onChange={(e) => togglePpk(i, e.target.checked)} />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input aria-label={`Место ${row.seat_number}: ЖК`} className={`${field} no-spinner`} type="number" step="0.5" min="0" placeholder="—" value={row.zk} onChange={(e) => updateRow(i, { zk: e.target.value })} />
+                  <ScoreInput
+                    label={`Место ${row.seat_number}: ЖК`}
+                    value={row.zk}
+                    onChange={(v) => updateRow(i, { zk: v })}
+                    {...SCORE_STEPS.zk}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
-                  <input aria-label={`Место ${row.seat_number}: СК`} className={`${field} no-spinner`} type="number" step="0.5" min="0" placeholder="—" value={row.sk} onChange={(e) => updateRow(i, { sk: e.target.value })} />
+                  <ScoreInput
+                    label={`Место ${row.seat_number}: СК`}
+                    value={row.sk}
+                    onChange={(v) => updateRow(i, { sk: v })}
+                    {...SCORE_STEPS.sk}
+                  />
                 </td>
               </tr>
             ))}
@@ -449,6 +620,22 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
           {loading ? "Сохраняем…" : isEdit ? "Сохранить игру" : "Добавить игру"}
         </Button>
       </div>
+
+      <ConfirmDialog
+        open={rosterConfirm !== null}
+        title="Состав отличается от других игр этой таблицы"
+        description={
+          "В турнирной таблице очки суммируются по всем играм, поэтому сравнивать " +
+          "участников можно только при одинаковом составе. Если сохранить, у игроков " +
+          "окажется разное число игр, и на странице турнира над таблицей появится " +
+          "предупреждение, что места в ней условны. Обычно это то, что нужно, когда " +
+          "исправляешь ошибку в уже внесённой игре."
+        }
+        confirmLabel="Всё равно сохранить"
+        busy={loading}
+        onConfirm={() => rosterConfirm && save({ ...rosterConfirm, allow_roster_change: true })}
+        onCancel={() => setRosterConfirm(null)}
+      />
     </form>
   );
 }

@@ -90,7 +90,9 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
   }
 
   return (
-    <form onSubmit={handleSubmit} className="flex max-w-xl flex-col gap-5">
+    // Без max-w-xl: форма живёт в своей колонке и её ширину задаёт
+    // колонка, а не сама форма (см. страницу редактирования турнира).
+    <form onSubmit={handleSubmit} className="@container flex flex-col gap-4">
       <label className={label}>
         Название
         <input
@@ -140,7 +142,10 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
         <span className="font-normal text-ink-500">Только латиница, цифры и дефис.</span>
       </label>
 
-      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
+      {/* Контейнерный запрос, а не sm:: форма стоит в колонке 380px, и
+          обычный медиазапрос втиснул бы две даты в эту ширину, ориентируясь
+          на ширину ОКНА. Здесь решает ширина самой формы. */}
+      <div className="grid grid-cols-1 gap-4 @md:grid-cols-2">
         <label className={label}>
           Начало турнира
           <input

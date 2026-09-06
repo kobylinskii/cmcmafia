@@ -5,10 +5,10 @@ import { Reveal } from "@/components/reveal";
 
 const cards = [
   {
-    href: "/mafia/games",
-    icon: ListChecks,
-    title: "Игры",
-    body: "Полная таблица каждой сыгранной партии: состав, роли, баллы и исход.",
+    href: "/mafia/rating",
+    icon: ChartLineUp,
+    title: "Рейтинг",
+    body: "Таблица клуба по системе Эло, разбор формулы и поиск конкретного игрока.",
     tone: "large" as const,
   },
   {
@@ -19,10 +19,10 @@ const cards = [
     tone: "compact" as const,
   },
   {
-    href: "/mafia/rating",
-    icon: ChartLineUp,
-    title: "Рейтинг",
-    body: "Таблица клуба по системе Эло и поиск конкретного игрока.",
+    href: "/mafia/games",
+    icon: ListChecks,
+    title: "Игры",
+    body: "Полная таблица каждой сыгранной партии: состав, роли, баллы и исход.",
     tone: "compact" as const,
   },
 ];
@@ -34,9 +34,9 @@ export function ExploreSection() {
         <Reveal>
           <h2 className="font-display text-2xl font-medium text-ink-50 md:text-3xl">Что внутри</h2>
         </Reveal>
-        {/* Асимметричная сетка (2fr/1fr/1fr), а не три равные колонки: "Игры" --
-            самый насыщенный раздел (состав, роли, баллы каждой партии) и по
-            праву занимает вдвое больше места, чем два более лёгких входа. */}
+        {/* Асимметричная сетка (2fr/1fr/1fr), а не три равные колонки: рейтинг --
+            главная страница клуба, за ней приходят чаще всего, и она открывает
+            блок крупной карточкой. Турниры и игры -- входы поменьше. */}
         <div className="mt-8 grid grid-cols-1 gap-5 lg:grid-cols-[2fr_1fr_1fr]">
           {cards.map((card, i) => (
             <Reveal key={card.href} delay={i * 0.1}>

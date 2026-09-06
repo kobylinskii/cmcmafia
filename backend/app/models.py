@@ -63,6 +63,38 @@ class GameType(str, enum.Enum):
     training = "training"
 
 
+class ProfileChangeStatus(str, enum.Enum):
+    """Судьба правки профиля, отправленной игроком из бота.
+
+    Игрок клуба -- это в первую очередь ФИО в списке на пропуск и ник в
+    рейтинге, поэтому подтверждённый участник не переписывает их молча:
+    правка ложится сюда и ждёт админа, а в профиле продолжает действовать
+    прежнее значение (см. app/services/profile_change_service.py).
+    """
+
+    pending = "pending"
+    applied = "applied"
+    rejected = "rejected"
+
+
+class ConfirmationStatus(str, enum.Enum):
+    """Модерация нового игрока, пришедшего из бота.
+
+    Регистрация в боте открыта кому угодно, поэтому свежая запись сначала
+    попадает в 'pending' и не показывается на публичной части сайта (рейтинг,
+    список игроков, карточка, счётчики на главной -- см. app/services/
+    visibility.py). Записываться на игры при этом можно сразу: клуб не хочет
+    держать новичка в очереди из-за того, что админ отошёл.
+
+    Игроки, заведённые админом на сайте, создаются сразу 'confirmed' -- их
+    уже подтвердил тот, кто их завёл.
+    """
+
+    pending = "pending"
+    confirmed = "confirmed"
+    rejected = "rejected"
+
+
 class Player(Base):
     __tablename__ = "players"
 
@@ -94,6 +126,21 @@ class Player(Base):
 
     is_bot_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
+    # Модерация регистрации из бота, см. ConfirmationStatus. Отдельное поле, а
+    # не переиспользованный is_active: is_active -- это мягкое удаление уже
+    # принятого игрока, и смешивать «ещё не проверен» с «больше не в клубе»
+    # значило бы терять причину, по которой человека нет в рейтинге.
+    confirmation_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=ConfirmationStatus.confirmed.value,
+        server_default=ConfirmationStatus.confirmed.value,
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    confirmation_decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Когда бот уже сообщил игроку о решении админа. NULL при непустом
+    # confirmation_decided_at -- это очередь на отправку, которую бот
+    # разгребает опросом (см. /api/bot/players/confirmation-notifications).
+    confirmation_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -111,8 +158,30 @@ class Player(Base):
             r"slug ~ '^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$'",
             name="ck_players_slug_format",
         ),
+        CheckConstraint(
+            "confirmation_status IN ('pending','confirmed','rejected')",
+            name="ck_players_confirmation_status_enum",
+        ),
+        CheckConstraint(
+            "confirmation_status <> 'rejected' OR rejection_reason IS NOT NULL",
+            name="ck_players_rejected_has_reason",
+        ),
         Index("idx_players_active", "is_active"),
         Index("idx_players_is_bot_admin", "is_bot_admin", postgresql_where=text("is_bot_admin")),
+        # Оба списка админки читаются на каждом открытии «Обзора»: частичные
+        # индексы держат их дешёвыми независимо от размера таблицы игроков.
+        Index(
+            "idx_players_pending_confirmation",
+            "created_at",
+            postgresql_where=text("confirmation_status = 'pending'"),
+        ),
+        Index(
+            "idx_players_confirmation_unnotified",
+            "confirmation_decided_at",
+            postgresql_where=text(
+                "confirmation_decided_at IS NOT NULL AND confirmation_notified_at IS NULL"
+            ),
+        ),
     )
 
 
@@ -122,6 +191,46 @@ class PendingBotAdmin(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ClubSettings(Base):
+    """Единственная строка (id=1) с клубными настройками, которые админ правит
+    из интерфейса, а не из .env.
+
+    Пока настройка одна -- рубеж пропускной недели: день недели и время, когда
+    список ФИО на пропуск переключается на следующую неделю (по умолчанию
+    воскресенье 18:00 МСК). В .env её держать нельзя: значение меняет админ на
+    вкладке «Обзор», а не деплой.
+    """
+
+    __tablename__ = "club_settings"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    # 0 = понедельник ... 6 = воскресенье, как в datetime.weekday().
+    pass_week_rollover_weekday: Mapped[int] = mapped_column(
+        SmallInteger, nullable=False, default=6, server_default=text("6")
+    )
+    # Время рубежа в московской зоне, хранится строкой "ЧЧ:ММ" -- сравнивать и
+    # показывать её проще, чем TIME без зоны, а арифметика всё равно идёт
+    # через zoneinfo в pass_list_service.
+    pass_week_rollover_time: Mapped[str] = mapped_column(
+        String(5), nullable=False, default="18:00", server_default="18:00"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint("id = 1", name="ck_club_settings_singleton"),
+        CheckConstraint(
+            "pass_week_rollover_weekday BETWEEN 0 AND 6",
+            name="ck_club_settings_rollover_weekday_range",
+        ),
+        CheckConstraint(
+            r"pass_week_rollover_time ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'",
+            name="ck_club_settings_rollover_time_format",
+        ),
+    )
 
 
 class Tournament(Base):
@@ -302,6 +411,59 @@ class Game(Base):
         Index("idx_games_tournament", "tournament_id"),
         Index("idx_games_stage", "stage_id"),
         Index("idx_games_status", "status"),
+    )
+
+
+class PlayerProfileChange(Base):
+    """Одна правка одного поля профиля, ждущая решения админа."""
+
+    __tablename__ = "player_profile_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), nullable=False
+    )
+    field: Mapped[str] = mapped_column(String(20), nullable=False)
+    # NULL -- осознанная очистка необязательного поля («убрать возраст»), а не
+    # отсутствие правки: сам факт правки задаётся строкой в этой таблице.
+    new_value: Mapped[str | None] = mapped_column(Text)
+
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=ProfileChangeStatus.pending.value
+    )
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Та же пара «решено / доставлено», что и у модерации регистраций: решение
+    # принимает сайт, а сообщение в Telegram шлёт бот, забирая очередь опросом.
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    player: Mapped[Player] = relationship()
+
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending','applied','rejected')",
+            name="ck_profile_changes_status_enum",
+        ),
+        CheckConstraint(
+            "field IN ('full_name','nickname','age','experience','bio')",
+            name="ck_profile_changes_field_enum",
+        ),
+        CheckConstraint(
+            "status <> 'rejected' OR rejection_reason IS NOT NULL",
+            name="ck_profile_changes_rejected_has_reason",
+        ),
+        # Одно поле -- одна очередь: повторная правка того же поля заменяет
+        # прежнюю, иначе админ разбирал бы стопку промежуточных вариантов.
+        Index(
+            "uq_profile_changes_one_pending_per_field",
+            "player_id",
+            "field",
+            unique=True,
+            postgresql_where=text("status = 'pending'"),
+        ),
+        Index("idx_profile_changes_status", "status"),
     )
 
 

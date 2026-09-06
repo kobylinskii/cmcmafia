@@ -20,7 +20,7 @@ from app.schemas.tournament import (
     TournamentStandingOut,
 )
 from app import serializers
-from app.services import rating_service, stats_service, tournament_service
+from app.services import rating_service, stats_service, tournament_service, visibility
 
 router = APIRouter(prefix="/api", tags=["public"])
 
@@ -202,7 +202,7 @@ def list_players(
     по-старому, пока игроков меньше пятисот; sitemap.ts обходит страницами."""
     return (
         db.query(models.Player)
-        .filter(models.Player.is_active.is_(True))
+        .filter(*visibility.public_player_criteria())
         .order_by(models.Player.nickname.asc(), models.Player.id.asc())
         .offset(offset)
         .limit(limit)
@@ -215,7 +215,7 @@ def list_players(
 def get_player(request: Request, slug: str, db: Session = Depends(get_db)) -> PlayerDetailOut:
     player = (
         db.query(models.Player)
-        .filter(models.Player.slug == slug, models.Player.is_active.is_(True))
+        .filter(models.Player.slug == slug, *visibility.public_player_criteria())
         .one_or_none()
     )
     if player is None:

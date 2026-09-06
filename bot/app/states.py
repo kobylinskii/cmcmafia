@@ -1,31 +1,47 @@
+"""Состояния FSM.
+
+Их заметно меньше, чем было: навигация по меню теперь целиком инлайновая и
+состояний не требует -- вся нужная информация лежит в callback_data. FSM
+остался ровно там, где пользователь вводит текст руками, и каждое такое
+состояние существует только между вопросом и ответом.
+"""
+
 from aiogram.fsm.state import State, StatesGroup
 
 
 class RegistrationStates(StatesGroup):
+    """Регистрация нового игрока: шесть шагов, из них текстом вводятся два."""
+
     waiting_for_contact = State()
-    waiting_for_salutation = State()
-    waiting_for_full_name = State()
-    waiting_for_affiliation = State()
-    waiting_for_preferred_roles = State()
+    # Один состояние на шаги 2-5: обращение, ФИО, статус прохода и роли живут в
+    # одном экране, и различает их не состояние, а то, что уже лежит в данных
+    # FSM. Отдельные состояния здесь означали бы четыре почти одинаковых
+    # обработчика текста, каждый со своим шансом разъехаться с экраном.
+    filling_details = State()
     waiting_for_nickname = State()
 
 
-class AdminStates(StatesGroup):
-    waiting_for_admin_to_add = State()
-    waiting_for_admin_to_remove = State()
-    waiting_for_game_type = State()
-    waiting_for_game_day = State()
-    waiting_for_game_location = State()
-    waiting_for_game_time_range = State()
-    waiting_for_game_id_to_delete = State()
-    waiting_for_edit_game_type = State()
-    waiting_for_edit_game_day = State()
-    waiting_for_edit_day_action = State()
-    waiting_for_games_day_to_view = State()
-    waiting_for_game_id_to_view = State()
-    waiting_for_edit_value = State()
-
-
 class ProfileStates(StatesGroup):
-    waiting_for_edit_field = State()
-    waiting_for_new_value = State()
+    """Свободный ввод значения выбранного поля профиля.
+
+    Одно состояние на все поля: какое именно поле правится, лежит в данных FSM
+    (profile_field) -- отдельное состояние на каждое поле означало бы шесть
+    почти одинаковых обработчиков.
+    """
+
+    waiting_for_value = State()
+
+
+class AdminStates(StatesGroup):
+    """Ввод текста в админке остался в двух местах.
+
+    День, часы и место из уже использованных выбираются кнопками, поэтому
+    состояний под дату и диапазон времени больше нет -- вся эта информация
+    приезжает в callback_data.
+    """
+
+    waiting_for_admin_to_add = State()
+    # Место, которого ещё не было ни в одной игре.
+    waiting_for_game_location = State()
+    # Новое место уже созданной игры.
+    waiting_for_edit_value = State()

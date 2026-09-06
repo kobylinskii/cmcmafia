@@ -1,186 +1,256 @@
+"""Профиль игрока: карточка, редактирование и повторная заявка.
+
+Это же место закрывает и «анкету для сайта» -- возраст, любимую роль, опыт и
+рассказ о себе. Всё, кроме фотографии: её загрузка остаётся на сайте.
+
+Экран всегда один и тот же, он перерисовывается по шагам (карточка -> список
+полей -> ввод значения -> карточка). Раньше редактирование профиля жило на
+reply-клавиатурах, и после сохранения на экране оставались кнопки полей,
+которые уже ничего не редактировали.
+"""
+
+from __future__ import annotations
+
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.api_client import ApiClient, ConflictError
-from app.keyboards.inline import preferred_roles_select_keyboard
-from app.keyboards.reply import (
+from app import texts
+from app.api_client import ApiClient, ApiError, ConflictError
+from app.handlers.common import require_profile
+from app.keyboards.inline import (
     affiliation_keyboard,
-    main_keyboard,
-    profile_edit_field_keyboard,
+    cancel_input_keyboard,
+    favorite_role_keyboard,
+    preferred_roles_keyboard,
+    profile_fields_keyboard,
+    profile_keyboard,
+    profile_value_keyboard,
     salutation_keyboard,
 )
 from app.states import ProfileStates
+from app.ui import consume_input, edit_screen, open_screen
 from app.utils import validate_full_name, validate_nickname
 
 router = Router(name="profile")
 
-AFFILIATION_LABELS = {
-    "vmk": "С ВМК",
-    "mgu_no_pass": "Из МГУ, пропуск не нужен",
-    "outside_need_pass": "Вне МГУ, нужен пропуск",
+# Поля, которые вводятся текстом: подсказка + сообщение об ошибке разбора.
+TEXT_FIELDS: dict[str, tuple[str, str]] = {
+    "full_name": (
+        "Введите ФИО полностью — Фамилия Имя Отчество.",
+        "Нужны ровно три слова на русском языке, только буквы.",
+    ),
+    "nickname": (
+        "Введите новый никнейм — от 3 до 32 букв, без цифр и знаков.",
+        "Никнейм должен быть от 3 до 32 символов и состоять только из букв.",
+    ),
+    "age": ("Сколько вам лет?", "Возраст — это число от 5 до 100."),
+    "experience": (
+        "Расскажите об игровом опыте — сколько играете, где, какие турниры.",
+        "Слишком длинно: не больше 2000 символов.",
+    ),
+    "bio": (
+        "Пара слов о себе для страницы на сайте.",
+        "Слишком длинно: не больше 4000 символов.",
+    ),
 }
 
 
-def _profile_text(user: dict) -> str:
-    affiliation = AFFILIATION_LABELS.get(user.get("affiliation") or "", "-")
-    role_parts: list[str] = []
-    if user.get("can_play"):
-        role_parts.append("игрок")
-    if user.get("can_staff"):
-        role_parts.append("ведущий/судья")
-    preferred_roles = ", ".join(role_parts) if role_parts else "-"
-    return (
-        "Ваш профиль:\n"
-        f"• Обращение: {user.get('salutation') or '-'}\n"
-        f"• ФИО: {user.get('full_name') or '-'}\n"
-        f"• Статус: {affiliation}\n"
-        f"• Предпочтение по ролям: {preferred_roles}\n"
-        f"• Никнейм: {user.get('nickname')}\n"
-        f"• Телефон: {user.get('phone') or '-'}"
-    )
+def moderation_note(user: dict) -> str:
+    """Предупреждение перед вводом. Все поля этого раздела -- текстовые, и у
+    подтверждённого игрока каждое из них проходит проверку админа (бэкенд,
+    profile_change_service.MODERATED_FIELDS). Молча принять текст и не
+    показать его в профиле означало бы выглядеть сломанным."""
+    if user.get("confirmation_status") != "confirmed":
+        return ""
+    return "\n\n⏳ Изменение вступит в силу после проверки администратора."
 
 
-@router.message(F.text.in_({"Редактировать профиль", "📝 Редактировать профиль"}))
-async def profile_edit_start(message: Message, state: FSMContext, api: ApiClient) -> None:
-    user = await api.get_profile(message.from_user.id)
-    if not user:
-        await message.answer("Сначала пройдите регистрацию через /start")
-        return
+def _pending_note(user: dict, field: str) -> str:
+    """Приписка «ждёт проверки» к полю, которое игрок уже поправил.
 
-    await state.set_state(ProfileStates.waiting_for_edit_field)
-    await message.answer(
-        f"{_profile_text(user)}\n\nЧто хотите изменить?",
-        reply_markup=profile_edit_field_keyboard(),
-    )
-
-
-@router.message(ProfileStates.waiting_for_edit_field, ~F.text.in_({"Назад", "↩️ Назад"}))
-async def profile_pick_field(message: Message, state: FSMContext, api: ApiClient) -> None:
-    text = (message.text or "").strip()
-    mapping = {
-        "Обращение": "salutation",
-        "🤵 Обращение": "salutation",
-        "ФИО": "full_name",
-        "🪪 ФИО": "full_name",
-        "Статус по пропуску": "affiliation",
-        "🎓 Статус по пропуску": "affiliation",
-        "Роль": "preferred_roles",
-        "🎭 Роль": "preferred_roles",
-        "Никнейм": "nickname",
-        "🏷️ Никнейм": "nickname",
-    }
-    field = mapping.get(text)
-    if not field:
-        await message.answer("Выберите поле кнопкой.")
-        return
-
-    await state.update_data(profile_edit_field=field)
-    await state.set_state(ProfileStates.waiting_for_new_value)
-    if field == "salutation":
-        await message.answer("Выберите обращение:", reply_markup=salutation_keyboard())
-    elif field == "affiliation":
-        await message.answer(
-            "Выберите актуальный статус:",
-            reply_markup=affiliation_keyboard(),
-        )
-    elif field == "preferred_roles":
-        user = await api.get_profile(message.from_user.id)
-        can_play = bool(user and user.get("can_play"))
-        can_staff = bool(user and user.get("can_staff"))
-        await state.update_data(pref_can_play=can_play, pref_can_staff=can_staff)
-        await message.answer(
-            "Отметьте нужные роли и нажмите «Готово»:",
-            reply_markup=preferred_roles_select_keyboard(can_play=can_play, can_staff=can_staff),
-        )
-    elif field == "full_name":
-        await message.answer("Введите новое ФИО:")
-    else:
-        await message.answer("Введите новый никнейм:")
+    Без неё экран выглядит так, будто правка не сохранилась: значение в
+    профиле остаётся прежним до решения админа, и человек отправляет её
+    второй и третий раз."""
+    changes = user.get("pending_changes") or {}
+    if field not in changes:
+        return ""
+    value = changes[field]
+    return f"\n   ⏳ на проверке: {value if value else 'очистить поле'}"
 
 
-@router.message(ProfileStates.waiting_for_new_value, ~F.text.in_({"Назад", "↩️ Назад"}))
-async def profile_save_value(message: Message, state: FSMContext, api: ApiClient) -> None:
-    tg_id = message.from_user.id
+def _profile_text(user: dict, stats: dict | None) -> str:
+    status = user.get("confirmation_status") or "confirmed"
+    lines = [
+        "👤 Профиль",
+        "",
+        f"Статус: {texts.CONFIRMATION_STATUS.get(status, status)}",
+    ]
+    if status == "rejected" and user.get("rejection_reason"):
+        lines.append(f"Причина: {user['rejection_reason']}")
+    if status == "pending":
+        lines.append("Записываться на игры можно уже сейчас.")
+
+    lines += [
+        "",
+        f"• Обращение: {texts.SALUTATIONS.get(user.get('salutation') or '', '—').lstrip('🤵👒 ')}",
+        f"• ФИО: {user.get('full_name') or '—'}{_pending_note(user, 'full_name')}",
+        f"• Проход: {texts.AFFILIATION_SHORT.get(user.get('affiliation') or '', '—')}",
+        f"• Роли: {texts.preferred_roles_text(bool(user.get('can_play')), bool(user.get('can_staff')))}",
+        f"• Никнейм: {user['nickname']}{_pending_note(user, 'nickname')}",
+        f"• Телефон: {user.get('phone') or '—'}",
+        "",
+        "Анкета для сайта:",
+        f"• Возраст: {user.get('age') or '—'}{_pending_note(user, 'age')}",
+        f"• Любимая роль: {texts.FAVORITE_ROLES.get(user.get('favorite_role') or '', '—')}",
+        f"• Опыт: {user.get('experience') or '—'}{_pending_note(user, 'experience')}",
+        f"• О себе: {user.get('bio') or '—'}{_pending_note(user, 'bio')}",
+        "",
+        _stats_line(stats),
+    ]
+    if user.get("pending_changes"):
+        lines += ["", "⏳ Правки ждут проверки администратора. До неё действуют прежние значения."]
+    return "\n".join(lines)
+
+
+def _stats_line(stats: dict | None) -> str:
+    """Очень краткая сводка -- одна строка. Подробности живут на сайте, и
+    тащить их в чат смысла нет."""
+    if not stats or not stats.get("total_games"):
+        return "📊 Сыгранных игр пока нет."
+    parts = [f"игр {stats['total_games']}", f"побед {stats['wins']}"]
+    if stats.get("win_rate") is not None:
+        parts.append(f"{round(stats['win_rate'] * 100)}%")
+    if stats.get("rating") is not None:
+        rank = f" (#{stats['rank']})" if stats.get("rank") else ""
+        parts.append(f"рейтинг {round(float(stats['rating']))}{rank}")
+    return "📊 " + " · ".join(parts)
+
+
+async def _load_card(api: ApiClient, tg_id: int) -> tuple[dict, str] | None:
     user = await api.get_profile(tg_id)
-    if not user:
-        await state.clear()
-        await message.answer("Сначала пройдите регистрацию через /start")
-        return
-
-    data = await state.get_data()
-    field = data.get("profile_edit_field")
-    raw = (message.text or "").strip()
-    if field not in {"salutation", "full_name", "affiliation", "nickname"}:
-        await state.clear()
-        await message.answer("Поле не выбрано. Начните заново.")
-        return
-
-    value = raw
-    if field == "salutation":
-        salutation_map = {
-            "господин": "господин",
-            "🤵 господин": "господин",
-            "госпожа": "госпожа",
-            "👒 госпожа": "госпожа",
-        }
-        value = salutation_map.get(raw.lower(), "")
-        if not value:
-            await message.answer("Выберите обращение кнопкой: «Господин» или «Госпожа».")
-            return
-    elif field == "full_name":
-        value = validate_full_name(raw) or ""
-        if not value:
-            await message.answer(
-                "ФИО должно состоять ровно из 3 слов на русском языке (Фамилия Имя Отчество), "
-                "только буквы, без цифр, латиницы и лишних символов. Попробуйте ещё раз."
-            )
-            return
-    elif field == "affiliation":
-        affiliation_map = {
-            "С ВМК": "vmk",
-            "🎓 С ВМК": "vmk",
-            "Из МГУ, пропуск не нужен": "mgu_no_pass",
-            "🏛️ Из МГУ, пропуск не нужен": "mgu_no_pass",
-            "Вне МГУ, нужен пропуск": "outside_need_pass",
-            "🪪 Вне МГУ, нужен пропуск": "outside_need_pass",
-        }
-        value = affiliation_map.get(raw, "")
-        if not value:
-            await message.answer("Выберите статус одной из кнопок.")
-            return
-    elif field == "nickname":
-        value = validate_nickname(raw) or ""
-        if not value or len(value) < 3 or len(value) > 32:
-            await message.answer(
-                "Никнейм должен быть от 3 до 32 символов, только русские или латинские буквы, "
-                "без цифр и других символов."
-            )
-            return
-
+    if user is None:
+        return None
     try:
-        refreshed = await api.update_profile(tg_id, **{field: value})
-    except ConflictError:
-        await message.answer("Такой никнейм уже занят. Введите другой.")
-        return
+        stats = await api.my_stats(tg_id)
+    except ApiError:
+        # Статистика -- украшение карточки, а не её смысл: недоступный агрегат
+        # не должен мешать человеку открыть профиль и поправить ФИО.
+        stats = None
+    return user, _profile_text(user, stats)
 
-    await state.clear()
-    await message.answer(
-        f"Профиль обновлён ✅\n\n{_profile_text(refreshed)}",
-        reply_markup=main_keyboard(is_admin=refreshed["is_bot_admin"]),
+
+async def _show_card(callback: CallbackQuery, state: FSMContext, api: ApiClient, *, alert: str | None = None) -> None:
+    card = await _load_card(api, callback.from_user.id)
+    if card is None:
+        await callback.answer("Профиль не найден, начните с /start.", show_alert=True)
+        return
+    user, text = card
+    await state.set_state(None)
+    await edit_screen(
+        callback,
+        state,
+        text,
+        profile_keyboard(can_resubmit=user.get("confirmation_status") == "rejected"),
+        alert=alert,
     )
 
 
-@router.callback_query(ProfileStates.waiting_for_new_value, F.data.startswith("prefrole_toggle:"))
-async def profile_toggle_preferred_role(callback: CallbackQuery, state: FSMContext) -> None:
-    data = await state.get_data()
-    if data.get("profile_edit_field") != "preferred_roles":
-        await callback.answer()
+@router.message(Command("profile"))
+async def open_profile(message: Message, state: FSMContext, api: ApiClient) -> None:
+    await consume_input(message)
+    if not await require_profile(message, state, api):
         return
-    role = callback.data.split(":")[1]
-    can_play = bool(data.get("pref_can_play", False))
-    can_staff = bool(data.get("pref_can_staff", False))
+    await state.set_state(None)
+    card = await _load_card(api, message.from_user.id)
+    if card is None:
+        return
+    user, text = card
+    await open_screen(
+        message, state, text, profile_keyboard(can_resubmit=user.get("confirmation_status") == "rejected")
+    )
+
+
+@router.callback_query(F.data == "pf:menu")
+async def back_to_card(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await _show_card(callback, state, api)
+
+
+@router.callback_query(F.data == "pf:edit")
+async def choose_field(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(None)
+    await edit_screen(callback, state, "Что изменить?", profile_fields_keyboard())
+
+
+@router.callback_query(F.data.startswith("pf:field:"))
+async def open_field(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    field = callback.data.split(":")[2]
+    user = await api.get_profile(callback.from_user.id)
+    if user is None:
+        await callback.answer("Профиль не найден, начните с /start.", show_alert=True)
+        return
+
+    if field == "salutation":
+        await edit_screen(
+            callback, state, "Как к вам обращаться?",
+            profile_value_keyboard(field, salutation_keyboard("pf")),
+        )
+        return
+    if field == "affiliation":
+        await edit_screen(
+            callback, state, "Нужен ли вам пропуск на факультет?",
+            profile_value_keyboard(field, affiliation_keyboard("pf")),
+        )
+        return
+    if field == "favorite_role":
+        await edit_screen(
+            callback, state, "Какая роль нравится больше всего?",
+            profile_value_keyboard(field, favorite_role_keyboard("pf")),
+        )
+        return
+    if field == "roles":
+        await state.update_data(
+            pf_can_play=bool(user.get("can_play")), pf_can_staff=bool(user.get("can_staff"))
+        )
+        await edit_screen(
+            callback, state, "За кого вы готовы играть?",
+            profile_value_keyboard(
+                field,
+                preferred_roles_keyboard(
+                    "pf", can_play=bool(user.get("can_play")), can_staff=bool(user.get("can_staff"))
+                ),
+            ),
+        )
+        return
+
+    prompt = TEXT_FIELDS.get(field)
+    if prompt is None:
+        await callback.answer("Это поле нельзя изменить в боте.", show_alert=True)
+        return
+    await state.set_state(ProfileStates.waiting_for_value)
+    await state.update_data(profile_field=field)
+    await edit_screen(callback, state, prompt[0] + moderation_note(user), cancel_input_keyboard("pf:edit"))
+
+
+@router.callback_query(F.data.startswith("pf:salutation:"))
+@router.callback_query(F.data.startswith("pf:affiliation:"))
+@router.callback_query(F.data.startswith("pf:favorite_role:"))
+async def save_choice(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    _, field, value = callback.data.split(":", 2)
+    try:
+        await api.update_profile(callback.from_user.id, **{field: value})
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await _show_card(callback, state, api, alert="Сохранено ✅")
+
+
+@router.callback_query(F.data.startswith("pf:toggle:"))
+async def toggle_role(callback: CallbackQuery, state: FSMContext) -> None:
+    role = callback.data.split(":")[2]
+    data = await state.get_data()
+    can_play, can_staff = bool(data.get("pf_can_play")), bool(data.get("pf_can_staff"))
     if role == "player":
         can_play = not can_play
     elif role == "staff":
@@ -188,42 +258,111 @@ async def profile_toggle_preferred_role(callback: CallbackQuery, state: FSMConte
     else:
         await callback.answer()
         return
-    await state.update_data(pref_can_play=can_play, pref_can_staff=can_staff)
-    try:
-        await callback.message.edit_reply_markup(
-            reply_markup=preferred_roles_select_keyboard(can_play=can_play, can_staff=can_staff)
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc).lower():
-            raise
-    await callback.answer()
-
-
-@router.callback_query(ProfileStates.waiting_for_new_value, F.data == "prefrole_confirm")
-async def profile_confirm_preferred_roles(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    data = await state.get_data()
-    if data.get("profile_edit_field") != "preferred_roles":
-        await callback.answer()
-        return
-    can_play = bool(data.get("pref_can_play", False))
-    can_staff = bool(data.get("pref_can_staff", False))
-    if not (can_play or can_staff):
-        await callback.answer("Выберите хотя бы одну роль.", show_alert=True)
-        return
-
-    tg_id = callback.from_user.id
-    user = await api.get_profile(tg_id)
-    if not user:
-        await callback.answer("Пользователь не найден.", show_alert=True)
-        return
-    refreshed = await api.update_profile(tg_id, can_play=can_play, can_staff=can_staff)
-    await state.clear()
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except TelegramBadRequest:
-        pass
-    await callback.message.answer(
-        f"Профиль обновлён ✅\n\n{_profile_text(refreshed)}",
-        reply_markup=main_keyboard(is_admin=refreshed["is_bot_admin"]),
+    await state.update_data(pf_can_play=can_play, pf_can_staff=can_staff)
+    await edit_screen(
+        callback,
+        state,
+        "За кого вы готовы играть?",
+        profile_value_keyboard("roles", preferred_roles_keyboard("pf", can_play=can_play, can_staff=can_staff)),
     )
-    await callback.answer()
+
+
+@router.callback_query(F.data == "pf:save")
+async def save_roles(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    data = await state.get_data()
+    can_play, can_staff = bool(data.get("pf_can_play")), bool(data.get("pf_can_staff"))
+    if not (can_play or can_staff):
+        await callback.answer("Оставьте хотя бы один вариант.", show_alert=True)
+        return
+    try:
+        await api.update_profile(callback.from_user.id, can_play=can_play, can_staff=can_staff)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await _show_card(callback, state, api, alert="Сохранено ✅")
+
+
+@router.callback_query(F.data.startswith("pf:clear:"))
+async def clear_field(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    field = callback.data.split(":")[2]
+    try:
+        await api.update_profile(callback.from_user.id, **{field: None})
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await _show_card(callback, state, api, alert="Поле очищено")
+
+
+@router.callback_query(F.data == "pf:resubmit")
+async def resubmit(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    try:
+        await api.resubmit_profile(callback.from_user.id)
+    except ConflictError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await _show_card(callback, state, api, alert="Заявка снова на проверке ⏳")
+
+
+@router.message(ProfileStates.waiting_for_value)
+async def save_text_value(message: Message, state: FSMContext, api: ApiClient) -> None:
+    await consume_input(message)
+    data = await state.get_data()
+    field = data.get("profile_field")
+    prompt = TEXT_FIELDS.get(field or "")
+    if prompt is None:
+        await state.set_state(None)
+        await open_screen(message, state, "Поле не выбрано.", profile_fields_keyboard())
+        return
+
+    value = _parse(field, message.text or "")
+    if value is None:
+        await open_screen(message, state, f"{prompt[1]}\n\n{prompt[0]}", cancel_input_keyboard("pf:edit"))
+        return
+
+    try:
+        updated = await api.update_profile(message.from_user.id, **{field: value})
+    except ConflictError as exc:
+        await open_screen(message, state, f"{exc.message}\n\n{prompt[0]}", cancel_input_keyboard("pf:edit"))
+        return
+    except ApiError as exc:
+        await open_screen(message, state, f"Не удалось сохранить: {exc.message}", profile_fields_keyboard())
+        return
+
+    await state.set_state(None)
+    card = await _load_card(api, message.from_user.id)
+    if card is None:
+        return
+    user, text = card
+    # Текстовые поля подтверждённого игрока сохраняются не сразу: они уходят
+    # админу на проверку, и обещать «сохранено» в этом случае нельзя.
+    queued = field in (updated.get("pending_changes") or {})
+    headline = (
+        "⏳ Отправлено на проверку администратору.\nПока действует прежнее значение."
+        if queued
+        else "Сохранено ✅"
+    )
+    await open_screen(
+        message,
+        state,
+        f"{headline}\n\n{text}",
+        profile_keyboard(can_resubmit=user.get("confirmation_status") == "rejected"),
+    )
+
+
+def _parse(field: str, raw: str) -> str | int | None:
+    text = (raw or "").strip()
+    if field == "full_name":
+        return validate_full_name(text)
+    if field == "nickname":
+        nickname = validate_nickname(text)
+        return nickname if nickname and 3 <= len(nickname) <= 32 else None
+    if field == "age":
+        return int(text) if text.isdigit() and 5 <= int(text) <= 100 else None
+    if field == "experience":
+        return text if 0 < len(text) <= 2000 else None
+    if field == "bio":
+        return text if 0 < len(text) <= 4000 else None
+    return None

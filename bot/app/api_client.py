@@ -80,6 +80,17 @@ def format_day(value: str) -> str:
     return from_api_datetime(value).strftime("%d.%m.%Y")
 
 
+def now_local() -> datetime:
+    """Текущий момент в клубной зоне.
+
+    Единственный способ узнать «сейчас» в боте. Наивный datetime.now() сравнивался
+    с московским временем игр и в контейнере с UTC уводил границу «прошедшая
+    игра / предстоящая» на три часа: только что записавшийся игрок видел свою
+    вечернюю игру в списке завершённых.
+    """
+    return datetime.now(LOCAL_TZ)
+
+
 class ApiClient:
     def __init__(self, base_url: str, service_token: str, timeout: float = 10.0) -> None:
         self._client = httpx.AsyncClient(
@@ -152,6 +163,49 @@ class ApiClient:
         resp = await self._request("PUT", f"/api/bot/players/me?telegram_id={tg_id}", json=fields)
         return resp.json()
 
+    async def my_stats(self, tg_id: int) -> dict:
+        resp = await self._request("GET", "/api/bot/players/me/stats", params={"telegram_id": tg_id})
+        return resp.json()
+
+    async def resubmit_profile(self, tg_id: int) -> dict:
+        resp = await self._request(
+            "POST", "/api/bot/players/me/resubmit", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
+    # --------------------------------------------------- модерация регистраций
+    async def confirmation_notifications(self) -> list[dict]:
+        """Решения админа по заявкам, о которых игрок ещё не знает.
+
+        Ручка сервисная: действующего пользователя у неё нет, авторизует её
+        один лишь BOT_SERVICE_TOKEN -- рассылает бот целиком, а не кто-то из
+        своего диалога.
+        """
+        resp = await self._request("GET", "/api/bot/players/confirmation-notifications")
+        return resp.json()
+
+    async def ack_confirmations(self, player_ids: list[int]) -> int:
+        resp = await self._request(
+            "POST",
+            "/api/bot/players/confirmation-notifications/ack",
+            json={"player_ids": player_ids},
+        )
+        return int(resp.json().get("marked", 0))
+
+    async def profile_change_notifications(self) -> list[dict]:
+        """Решения админа по правкам профиля. Ручка сервисная, как и очередь
+        решений по заявкам выше."""
+        resp = await self._request("GET", "/api/bot/players/profile-change-notifications")
+        return resp.json()
+
+    async def ack_profile_changes(self, change_ids: list[int]) -> int:
+        resp = await self._request(
+            "POST",
+            "/api/bot/players/profile-change-notifications/ack",
+            json={"change_ids": change_ids},
+        )
+        return int(resp.json().get("marked", 0))
+
     # ------------------------------------------------------------- sessions (user)
     async def list_game_days(self, tg_id: int, game_type: str | None = None) -> list[str]:
         params = {"telegram_id": tg_id}
@@ -189,15 +243,6 @@ class ApiClient:
                 "available_from": available_from,
                 "available_until": available_until,
             },
-        )
-        return resp.json()
-
-    async def reserve_for_session(self, tg_id: int, session_id: int) -> dict:
-        resp = await self._request(
-            "POST",
-            f"/api/bot/sessions/{session_id}/reserve",
-            params={"telegram_id": tg_id},  # для rate limit, см. register_player
-            json={"telegram_id": tg_id},
         )
         return resp.json()
 
@@ -276,6 +321,34 @@ class ApiClient:
     async def admin_sessions_pending_review(self, tg_id: int) -> list[dict]:
         resp = await self._request(
             "GET", "/api/bot/admin/sessions/pending-review", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
+    async def admin_sessions_awaiting_confirmation(self, tg_id: int) -> list[dict]:
+        """Прошедшие игры, про которые админ ещё не сказал, состоялись ли они."""
+        resp = await self._request(
+            "GET", "/api/bot/admin/sessions/awaiting-confirmation", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
+    async def admin_mark_session_played(self, tg_id: int, session_id: int) -> dict:
+        """«Игра проведена»: только после этого игра попадает в «Ждут оценки»
+        на сайте -- фоновой задачи, делавшей это самой, больше нет."""
+        resp = await self._request(
+            "POST", f"/api/bot/admin/sessions/{session_id}/played", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
+    async def admin_recent_locations(self, tg_id: int) -> list[str]:
+        resp = await self._request(
+            "GET", "/api/bot/admin/sessions/locations", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
+    async def admin_weekly_broadcast(self, tg_id: int, days: int = 7) -> dict:
+        """Игры ближайшей недели и список тех, кому анонс ещё актуален."""
+        resp = await self._request(
+            "GET", "/api/bot/admin/broadcast/weekly", params={"telegram_id": tg_id, "days": days}
         )
         return resp.json()
 

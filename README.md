@@ -13,7 +13,7 @@
 |---|---|---|
 | [`backend/`](backend) | Единый API для сайта и бота | FastAPI + SQLAlchemy 2.0 + Postgres 16 |
 | [`frontend/`](frontend) | Публичный сайт и веб-админка | Next.js 16 (App Router) + TypeScript |
-| [`bot/mafia-tg-bot/`](bot/mafia-tg-bot) | Telegram-бот записи на игры | aiogram 3, тонкий HTTP-клиент к API |
+| [`bot/`](bot) | Telegram-бот записи на игры | aiogram 3, тонкий HTTP-клиент к API |
 
 Бот и фронтенд не обращаются к базе напрямую — оба ходят только в backend
 API. Поднимать их по отдельности можно, но бот и админка сайта без запущенного
@@ -23,7 +23,7 @@ backend не заработают.
 
 ```bash
 cp backend/.env.example backend/.env              # заполнить JWT_SECRET / BOT_SERVICE_TOKEN
-cp bot/mafia-tg-bot/.env.example bot/mafia-tg-bot/.env   # заполнить BOT_TOKEN, тот же BOT_SERVICE_TOKEN
+cp bot/.env.example bot/.env   # заполнить BOT_TOKEN, тот же BOT_SERVICE_TOKEN
 docker compose up -d --build
 ```
 
@@ -82,7 +82,7 @@ npm run dev     # http://localhost:3000, ждёт backend на NEXT_PUBLIC_API_U
 ## Бот отдельно
 
 ```bash
-cd bot/mafia-tg-bot
+cd bot
 pip install -r requirements.txt
 cp .env.example .env      # BOT_TOKEN, API_BASE_URL=http://localhost:8000, тот же BOT_SERVICE_TOKEN, что у backend
 python bot.py
@@ -92,6 +92,17 @@ python bot.py
 выдаются конфигом backend (`SUPERADMIN_TELEGRAM_IDS_RAW` /
 `BOOTSTRAP_ADMIN_PHONE_RAW` в `backend/.env`), не в самом боте — так
 самопожалование прав невозможно в обход авторизации API.
+
+Разделы бота открываются инлайн-кнопками и командами `/menu`, `/games`, `/my`,
+`/profile`, у админов — ещё `/admin`; нижнего меню у бота нет.
+
+Текстовые поля профиля (ФИО, ник, возраст, опыт, «о себе») подтверждённый
+игрок меняет **через проверку админа**: правка ждёт решения в `/mafia/admin`
+(блок «Правки профилей»), а до него действует прежнее значение.
+
+Важно для админов: **прошедшая игра сама в «Ждут оценки» на сайте не попадает**
+— её проведение подтверждают в боте (`/admin` → «✅ Подтвердить проведение»).
+Там же отмечается игра, которая не состоялась: она удаляется вместе с записями.
 
 ## Дальше
 

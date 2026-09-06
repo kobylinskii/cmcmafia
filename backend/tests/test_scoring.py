@@ -51,7 +51,12 @@ def _stats(client, slug):
 
 
 def test_average_score_counts_every_point_and_every_penalty(admin):
-    """Средний балл = (все баллы − все штрафы) / игр."""
+    """Средний балл = (все баллы − все штрафы) / игр.
+
+    Без ППК: он несовместим с доп. баллами -- нарушитель по правилу остаётся
+    и без судейских, и без ЛХ, так что в одной строке их не собрать. Итог
+    игрока с ППК проверяется отдельно, в tests/test_ppk_rule.py.
+    """
     client, headers = admin
     ids = make_players(client, headers, 10)
     tid = make_tournament(client, headers)
@@ -66,10 +71,9 @@ def test_average_score_counts_every_point_and_every_penalty(admin):
         "zk": 0.5,             # -0.5
         "sk": 1.0,             # -1.0
         "removals": 2,         # -2 * 0.5 = -1.0
-        "ppk": True,           # -1.0
     })
-    # 2.5 + 1.0 + 1.0 + 0.5 = 5.0 баллов;  0.5 + 1.0 + 1.0 + 1.0 = 3.5 штрафов
-    assert _stats(client, "player1")["avg_score"] == pytest.approx(1.5, abs=0.01)
+    # 2.5 + 1.0 + 1.0 + 0.5 = 5.0 баллов;  0.5 + 1.0 + 1.0 = 2.5 штрафов
+    assert _stats(client, "player1")["avg_score"] == pytest.approx(2.5, abs=0.01)
 
 
 def test_average_bonus_is_judge_points_plus_lh_without_ci(admin):

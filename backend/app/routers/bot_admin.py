@@ -8,6 +8,7 @@ from app.rate_limit import limiter
 from app.schemas.bot import (
     AdminInfoOut,
     BotAdminGrantIn,
+    BroadcastPlayerOut,
     BulkSessionCreateIn,
     ConflictCheckIn,
     DayCardOut,
@@ -15,10 +16,12 @@ from app.schemas.bot import (
     SessionCreateIn,
     SessionOut,
     SessionUpdateIn,
+    WeeklyBroadcastOut,
 )
 from app.schemas.game import GameListItem
 from app.serializers import session_to_out
-from app.services import admin_grant, game_service, schedule_admin_service
+from app.services import admin_grant, broadcast_service, game_service, schedule_admin_service
+from app.services.game_service import GameValidationError
 
 router = APIRouter(
     prefix="/api/bot/admin",
@@ -130,6 +133,59 @@ def delete_session(request: Request, telegram_id: int, session_id: int, db: Sess
 @limiter.limit("30/minute")
 def sessions_pending_review(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> list[models.Game]:
     return game_service.games_pending_review(db)
+
+
+@router.get("/sessions/awaiting-confirmation", response_model=list[SessionOut])
+@limiter.limit("30/minute")
+def sessions_awaiting_confirmation(
+    request: Request, telegram_id: int, db: Session = Depends(get_db)
+) -> list[SessionOut]:
+    """Прошедшие игры, проведение которых админ ещё не подтвердил."""
+    return [session_to_out(g) for g in game_service.sessions_awaiting_confirmation(db)]
+
+
+@router.post("/sessions/{session_id}/played", response_model=SessionOut)
+@limiter.limit("30/minute")
+def mark_session_played(
+    request: Request, telegram_id: int, session_id: int, db: Session = Depends(get_db)
+) -> SessionOut:
+    """«Игра проведена» из бота: единственный вход сессии в «Ждут оценки».
+
+    Фоновой задачи, делавшей это самой, больше нет -- см. app/main.py.
+    """
+    game = db.get(models.Game, session_id)
+    if game is None:
+        raise HTTPException(404, "Сессия не найдена")
+    try:
+        game_service.mark_session_played(db, game=game)
+        db.commit()
+    except GameValidationError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.message) from exc
+    db.refresh(game)
+    return session_to_out(game)
+
+
+@router.get("/sessions/locations", response_model=list[str])
+@limiter.limit("30/minute")
+def recent_locations(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> list[str]:
+    return schedule_admin_service.recent_locations(db)
+
+
+@router.get("/broadcast/weekly", response_model=WeeklyBroadcastOut)
+@limiter.limit("30/minute")
+def weekly_broadcast(
+    request: Request, telegram_id: int, days: int = broadcast_service.DEFAULT_WINDOW_DAYS, db: Session = Depends(get_db)
+) -> WeeklyBroadcastOut:
+    """Что рассылать и кому. Сам текст собирает и отправляет бот (раздел 12)."""
+    days = max(1, min(days, 31))
+    games = broadcast_service.upcoming_sessions(db, days=days)
+    recipients = broadcast_service.announcement_recipients(db, days=days)
+    return WeeklyBroadcastOut(
+        days=days,
+        games=[session_to_out(g) for g in games],
+        recipients=[BroadcastPlayerOut.model_validate(p) for p in recipients],
+    )
 
 
 @router.get("/players/by-username", response_model=PlayerLookupOut)

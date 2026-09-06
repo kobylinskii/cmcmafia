@@ -8,10 +8,12 @@ from .schedule import router as schedule_router
 
 
 def setup_routers(dp: Dispatcher) -> None:
-    # registration states are caught first to avoid state leaks
+    # Порядок важен ровно в двух местах:
+    #  * registration идёт первым -- его обработчики привязаны к состояниям
+    #    незавершённой регистрации и не должны конкурировать с меню;
+    #  * common идёт последним -- в нём catch-all на любой текст.
     dp.include_router(registration_router)
     dp.include_router(profile_router)
-    dp.include_router(admin_router)
     dp.include_router(schedule_router)
-    # common goes last: contains the catch-all fallback
+    dp.include_router(admin_router)
     dp.include_router(common_router)

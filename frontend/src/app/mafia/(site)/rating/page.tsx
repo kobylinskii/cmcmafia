@@ -5,12 +5,19 @@ import { Container } from "@/components/ui/container";
 import { RatingTable } from "@/components/rating/rating-table";
 import { RatingFormula } from "@/components/rating/rating-formula";
 import { RatingSearchInput } from "@/components/rating/search-input";
+import { ScrollToSection } from "@/components/scroll-to-section";
 import { firstParam } from "@/lib/search-params";
 import { withCount } from "@/lib/format";
 import Link from "next/link";
 
 export const metadata: Metadata = { title: "Рейтинг" };
-export const revalidate = 300;
+// Рендер на каждый запрос, а не пререндер при сборке. Кеширование живёт
+// уровнем ниже -- в serverGet, где у каждого запроса к API стоит
+// next: { revalidate, tags } (см. lib/api-server.ts), и сбрасывается по тегу
+// после правки в админке. Страничного revalidate здесь быть не должно: Next
+// тогда пытается собрать страницу статически в момент `docker compose build`,
+// где бэкенда ещё нет, и сборка падает на getaddrinfo ENOTFOUND api.
+export const dynamic = "force-dynamic";
 
 export default async function RatingPage({ searchParams }: PageProps<"/mafia/rating">) {
   const params = await searchParams;
@@ -35,6 +42,9 @@ export default async function RatingPage({ searchParams }: PageProps<"/mafia/rat
 
   return (
     <Container className="py-14">
+      {/* Кнопка «Подробнее о формуле» с главной просит доскроллить до
+          разбора формулы -- см. components/home/formula-link.tsx. */}
+      <ScrollToSection />
       <div className="max-w-2xl">
         <h1 className="font-display text-3xl font-medium text-ink-50 md:text-4xl">Рейтинг клуба</h1>
         <p className="mt-4 text-base leading-relaxed text-ink-300">

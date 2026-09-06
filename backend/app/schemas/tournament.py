@@ -6,10 +6,14 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TournamentRef(BaseModel):
-    """Минимальная ссылка на турнир внутри ответа об игре."""
+    """Минимальная ссылка на турнир внутри ответа об игре.
+
+    id нужен админке: после оценки турнирной игры форма возвращает не в общий
+    список игр, а в карточку того же турнира, откуда админ пришёл."""
 
     model_config = ConfigDict(from_attributes=True)
 
+    id: int
     slug: str
     name: str
 

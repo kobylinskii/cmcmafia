@@ -33,6 +33,13 @@ async function forwardedClientHeaders(): Promise<HeadersInit> {
  * нагрузка от повторных заходов исчезает. */
 export const PUBLIC_REVALIDATE_SECONDS = 300;
 
+/** Тег, которым помечены ВСЕ публичные чтения. Правка в админке сбрасывает его
+ * целиком через /api/revalidate -- иначе изменение (переименование турнира,
+ * оценка игры) не появлялось на сайте до истечения пяти минут, хотя в админке
+ * уже отображалось. Разделять теги по сущностям смысла мало: почти любая
+ * правка задевает и рейтинг, и списки, и страницы игроков. */
+export const PUBLIC_CACHE_TAG = "public-data";
+
 /** Server Components: public, unauthenticated reads. */
 export async function serverGet<T>(
   path: string,
@@ -45,7 +52,7 @@ export async function serverGet<T>(
     }
   }
   const res = await fetch(url, {
-    next: { revalidate: PUBLIC_REVALIDATE_SECONDS },
+    next: { revalidate: PUBLIC_REVALIDATE_SECONDS, tags: [PUBLIC_CACHE_TAG] },
     headers: await forwardedClientHeaders(),
   });
   return parseResponse<T>(res);

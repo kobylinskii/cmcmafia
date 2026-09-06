@@ -121,10 +121,31 @@ export async function clientFetch<T>(path: string, init: RequestInit = {}): Prom
   const res = await sendRequest(path, init);
   if (res.status === 401 && !NO_SESSION_RETRY.some((p) => path.startsWith(p))) {
     if (await refreshSession()) {
-      return parseResponse<T>(await sendRequest(path, init));
+      const retried = await sendRequest(path, init);
+      const data = await parseResponse<T>(retried);
+      revalidatePublicPages(path, init, retried);
+      return data;
     }
   }
-  return parseResponse<T>(res);
+  const data = await parseResponse<T>(res);
+  revalidatePublicPages(path, init, res);
+  return data;
+}
+
+/** Публичные страницы кешируют ответы бэкенда на пять минут. После любой
+ * удачной правки в админке этот кеш надо сбросить, иначе сайт показывает
+ * старое, пока окно не истечёт -- ровно так «потерялось» переименование
+ * турнира: в панели новое имя, на публичной вкладке старое.
+ *
+ * Вызов намеренно не ожидается: он не должен ни задерживать переход после
+ * сохранения, ни ронять его, если сброс почему-то не удался -- в худшем случае
+ * страница обновится сама через пять минут. */
+function revalidatePublicPages(path: string, init: RequestInit, res: Response): void {
+  const method = (init.method ?? "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD") return;
+  if (!res.ok) return;
+  if (!path.startsWith("/api/admin/")) return;
+  void fetch("/api/revalidate", { method: "POST", credentials: "include" }).catch(() => {});
 }
 
 export function mediaUrl(path: string | null | undefined): string | null {

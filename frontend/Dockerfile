@@ -16,6 +16,19 @@ ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_PUBLIC_BOT_USERNAME=$NEXT_PUBLIC_BOT_USERNAME
 ENV NEXT_PUBLIC_SITE_URL=$NEXT_PUBLIC_SITE_URL
 
+# Публичные страницы кешируются через ISR (`export const revalidate = 300`), а
+# не рендерятся строго по запросу, поэтому Next дёргает бэкенд ещё на сборке.
+# Без этого адреса `npm run build` падает на пререндере /mafia с ECONNREFUSED,
+# и образ фронтенда невозможно собрать на чистой машине вообще. Значение по
+# умолчанию верно для сборки внутри compose-сети; buildkit пользовательские
+# сети не поддерживает, поэтому на практике сборка идёт через host-сеть и
+# адрес поднятого контейнера api:
+#   API=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' cmcmafia-api-1)
+#   docker build --network host --build-arg API_INTERNAL_URL=http://$API:8000 \
+#     -t cmcmafia-frontend ./frontend
+ARG API_INTERNAL_URL="http://api:8000"
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
+
 RUN npm run build
 
 FROM node:20-slim AS run

@@ -1,768 +1,960 @@
+"""Админ-меню бота: игровые дни, подтверждение проведения, анонс и права.
+
+Навигация та же, что и в пользовательской части: один экран на раздел, у
+каждого шага «Назад». Ввод текста здесь остался ровно в двух местах -- новое
+место проведения и поиск человека по @username/телефону. Всё остальное
+(дата, часы, место из уже использованных) выбирается кнопками: раньше админ
+набирал «06.09.2026» и «15:00-17:00» руками, и в чате оставалась колонка из
+его собственных сообщений, а каждая опечатка стоила ещё одной пары.
+
+Что бот по-прежнему НЕ умеет и не должен: турнирные игры. У них своя сетка
+этапов, целиком на сайте (см. ARCHITECTURE.md, раздел 7.7).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from contextlib import suppress
+
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
-from datetime import datetime, timedelta
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNotFound
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 
-from app.api_client import ApiClient, format_day_time, format_time
-from app.keyboards.inline import (
-    GAME_TYPE_LABELS,
-    admin_edit_game_days_keyboard,
-    admin_game_days_keyboard,
-    admin_games_by_day_keyboard,
+from app import texts
+from app.api_client import (
+    ApiClient,
+    ApiError,
+    format_day,
+    format_day_time,
+    format_time,
+    from_api_datetime,
+    now_local,
 )
-from app.keyboards.reply import (
+from app.keyboards.inline import (
+    FIRST_HOUR,
+    LAST_HOUR,
+    admin_admins_keyboard,
+    admin_awaiting_keyboard,
+    admin_broadcast_keyboard,
+    admin_confirm_keyboard,
+    admin_day_keyboard,
+    admin_days_keyboard,
+    admin_game_keyboard,
+    admin_game_type_keyboard,
+    admin_game_types_keyboard,
     admin_menu_keyboard,
-    back_only_keyboard,
-    game_edit_field_keyboard,
-    game_type_keyboard,
-    game_type_with_all_keyboard,
+    announcement_keyboard,
+    calendar_keyboard,
+    cancel_input_keyboard,
+    hours_keyboard,
+    locations_keyboard,
 )
 from app.states import AdminStates
+from app.ui import consume_input, edit_screen, open_screen, screen_message
 from app.utils import normalize_phone
 
+logger = logging.getLogger(__name__)
+
 router = Router(name="admin")
-BACK_BUTTONS = {"Назад", "↩️ Назад"}
+
+MENU_TEXT = "🛠️ Админ-меню"
+ASK_LOCATION = "Где играем? Введите место — например, «ВМК МГУ, ауд. 685»."
+ASK_ADMIN = "Кого назначить администратором? Пришлите @username, номер телефона или Telegram ID."
+PICK_DAY = "Выберите день игр:"
+PICK_FROM = "Во сколько начинается первая игра?"
+PICK_LOCATION = "Где играем?"
+
+# Пауза между сообщениями рассылки. Telegram ограничивает бота примерно
+# тридцатью сообщениями в секунду разным людям; на 20/с очередь уходит без
+# 429, а клуб в несколько десятков человек обходится парой секунд.
+BROADCAST_PAUSE_SECONDS = 0.05
 
 
-async def _resolve_admin_target(raw_value: str, api: ApiClient, tg_id: int) -> tuple[int | None, str | None]:
-    raw = raw_value.strip()
-    if not raw:
-        return None, "Введите Telegram ID, номер телефона или @username."
-
-    if raw.lstrip("-").isdigit():
-        return int(raw), None
-
-    if raw.startswith("@"):
-        user = await api.admin_lookup_by_username(tg_id, raw)
-        if not user:
-            return None, "Пользователь с таким @username не найден среди зарегистрированных."
-        return int(user["telegram_id"]), None
-
-    phone = normalize_phone(raw)
-    if len(phone) >= 10:
-        user = await api.admin_lookup_by_phone(tg_id, phone)
-        if not user:
-            return None, "Пользователь с таким номером не найден среди зарегистрированных."
-        return int(user["telegram_id"]), None
-
-    return None, "Неверный формат. Введите Telegram ID, номер телефона или @username."
-
-
-async def _notify_about_admin_status(bot: Bot, target_tg_id: int) -> None:
+# ------------------------------------------------------------------- разбор
+def _to_minutes(raw: str) -> int | None:
     try:
-        await bot.send_message(
-            target_tg_id,
-            "🎉 Вам выданы права администратора.\nТеперь вам доступно «Админ-меню».",
-        )
-    except Exception:
-        # Пользователь мог ни разу не начать чат с ботом или заблокировать бота.
-        pass
+        hours, minutes = raw.split(":")
+        return int(hours) * 60 + int(minutes)
+    except (ValueError, TypeError):
+        return None
 
 
-async def _notify_users_about_game_update(
-    bot: Bot, api: ApiClient, tg_id: int, game_id: int, before: dict, after: dict
-) -> None:
-    changes: list[str] = []
-    if before["starts_at"] != after["starts_at"]:
-        changes.append(
-            f"• Время игры: {format_day_time(before['starts_at'])} -> {format_day_time(after['starts_at'])}"
-        )
-    if before["location"] != after["location"]:
-        changes.append(f"• Место: {before['location']} -> {after['location']}")
+def _hourly_starts(day: str, time_from: str, time_to: str) -> list[str]:
+    """Границы диапазона -- целые часы, слоты нарезаются по одному в час, и
+    правая граница в набор не входит: 18:00-21:00 -- это три игры."""
+    start, end = _to_minutes(time_from), _to_minutes(time_to)
+    if start is None or end is None:
+        return []
+    return [f"{day} {minute // 60:02d}:00" for minute in range(start, end, 60)]
 
-    if not changes:
-        return
 
-    text = f"📣 Обновление по игре #{game_id}\nАдмин изменил параметры игры:\n{chr(10).join(changes)}"
-    roster = await api.session_roster(tg_id, game_id)
-    notify_ids = {r["telegram_id"] for r in roster["registrations"] if r["telegram_id"]}
-    notify_ids |= {r["telegram_id"] for r in roster["reserves"] if r["telegram_id"]}
-    for user_tg_id in notify_ids:
-        try:
-            await bot.send_message(user_tg_id, text)
-        except Exception:
-            pass
+def _day_from_token(token: str) -> str | None:
+    if len(token) != 8 or not token.isdigit():
+        return None
+    return f"{token[:2]}.{token[2:4]}.{token[4:]}"
+
+
+def _token(day: str) -> str:
+    return day.replace(".", "")
 
 
 def _with_time(game: dict) -> dict:
     game = dict(game)
     game["time"] = format_time(game["starts_at"])
+    game["day_time"] = format_day_time(game["starts_at"])
     return game
 
 
-def _to_minutes(raw: str) -> int | None:
-    try:
-        hh, mm = raw.split(":")
-        return int(hh) * 60 + int(mm)
-    except (ValueError, TypeError):
-        return None
+def _needs_confirmation(game: dict) -> bool:
+    """Игра прошла, но админ ещё не сказал, состоялась ли она.
 
-
-def _parse_day(raw: str) -> str | None:
-    try:
-        dt = datetime.strptime(raw.strip(), "%d.%m.%Y")
-        return dt.strftime("%d.%m.%Y")
-    except ValueError:
-        return None
-
-
-def _parse_time(raw: str) -> str | None:
-    try:
-        dt = datetime.strptime(raw.strip(), "%H:%M")
-        return dt.strftime("%H:%M")
-    except ValueError:
-        return None
-
-
-def _parse_game_type_text(raw: str, allow_all: bool = False) -> str | None:
-    # Турнир сюда больше не мапится: турнирные игры создаются и оцениваются
-    # только на сайте (вкладка «Турниры» в админке), бот их не заводит.
-    mapping = {
-        "🎉 Фанки": "funky",
-        "Фанки": "funky",
-        "📚 Обучающие": "training",
-        "Обучающие": "training",
-    }
-    text = (raw or "").strip()
-    if allow_all and text in {"📋 Все игры", "Все игры"}:
-        return "all"
-    return mapping.get(text)
-
-
-async def _games_for_day_and_scope(api: ApiClient, tg_id: int, day: str, game_type: str) -> list[dict]:
-    games = await api.admin_sessions_by_day(tg_id, day)
-    if game_type == "all":
-        return games
-    return [game for game in games if game.get("game_type") == game_type]
-
-
-def _parse_time_range(raw: str) -> tuple[str, str] | None:
-    text = raw.replace("—", "-").replace("–", "-").strip()
-    if "-" not in text:
-        return None
-    start_raw, end_raw = [part.strip() for part in text.split("-", maxsplit=1)]
-    start_min = _to_minutes(start_raw)
-    end_min = _to_minutes(end_raw)
-    if start_min is None or end_min is None or end_min <= start_min:
-        return None
-    if (end_min - start_min) < 60:
-        return None
-    if start_min % 60 != 0 or end_min % 60 != 0:
-        return None
-    return (f"{start_min // 60:02d}:{start_min % 60:02d}", f"{end_min // 60:02d}:{end_min % 60:02d}")
-
-
-def _build_hourly_starts(day: str, time_from: str, time_to: str) -> list[str]:
-    start_min = _to_minutes(time_from)
-    end_min = _to_minutes(time_to)
-    if start_min is None or end_min is None:
-        return []
-    starts: list[str] = []
-    current = start_min
-    while current < end_min:
-        starts.append(f"{day} {current // 60:02d}:{current % 60:02d}")
-        current += 60
-    return starts
-
-
-def _username_suffix(username: str | None) -> str:
-    if not username:
-        return "(без @username)"
-    return f"(@{username})"
-
-
-async def _finish_edit_step(message: Message, confirmation_text: str) -> None:
-    await message.answer(
-        f"{confirmation_text}\n\nВыберите формат игр для следующего редактирования:",
-        reply_markup=game_type_with_all_keyboard(),
+    Раньше этот вопрос никто не задавал: фоновая задача сама переводила
+    прошедшую игру в 'played', и в «Ждут оценки» на сайте попадало в том числе
+    то, что не собралось.
+    """
+    return game.get("status") in {"scheduled", "registration_closed"} and (
+        from_api_datetime(game["starts_at"]) <= now_local()
     )
 
 
-async def _require_admin(message: Message, api: ApiClient) -> bool:
-    user = await api.get_profile(message.from_user.id)
-    if not user or not user["is_bot_admin"]:
-        await message.answer("У вас нет прав администратора.")
-        return False
-    return True
+async def _resolve_admin_target(raw: str, api: ApiClient, tg_id: int) -> tuple[int | None, str | None]:
+    value = (raw or "").strip()
+    if not value:
+        return None, "Пришлите Telegram ID, номер телефона или @username."
+    if value.lstrip("-").isdigit():
+        return int(value), None
+    if value.startswith("@"):
+        user = await api.admin_lookup_by_username(tg_id, value)
+        if not user:
+            return None, "Пользователь с таким @username среди зарегистрированных не найден."
+        return int(user["telegram_id"]), None
+    phone = normalize_phone(value)
+    if len(phone) >= 10:
+        user = await api.admin_lookup_by_phone(tg_id, phone)
+        if not user:
+            return None, "Пользователь с таким номером среди зарегистрированных не найден."
+        return int(user["telegram_id"]), None
+    return None, "Не разобрал. Пришлите Telegram ID, номер телефона или @username."
 
 
-@router.message(F.text.in_({"Админ-меню", "🛠️ Админ-меню"}))
-async def admin_menu_handler(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        return
-    await state.clear()
-    await message.answer("Админ-меню 🛠️", reply_markup=admin_menu_keyboard())
-
-
-# ------------------------------------------------------------ add admin flow
-
-@router.message(F.text.in_({"Добавить админа", "➕ Добавить админа"}))
-async def add_admin_start(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        return
-    await state.set_state(AdminStates.waiting_for_admin_to_add)
-    await message.answer(
-        "Введите Telegram ID, номер телефона или @username пользователя,\n"
-        "которого хотите назначить администратором.",
-        reply_markup=back_only_keyboard(),
-    )
-
-
-@router.message(AdminStates.waiting_for_admin_to_add, ~F.text.in_(BACK_BUTTONS))
-async def add_admin_finish(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
+async def _notify_players_about_change(
+    bot: Bot, api: ApiClient, tg_id: int, game_id: int, before: dict, after: dict
+) -> None:
+    changes = []
+    if before["starts_at"] != after["starts_at"]:
+        changes.append(
+            f"• Время: {format_day_time(before['starts_at'])} → {format_day_time(after['starts_at'])}"
+        )
+    if before.get("location") != after.get("location"):
+        changes.append(f"• Место: {before.get('location') or '—'} → {after.get('location') or '—'}")
+    if not changes:
         return
 
-    tg_id = message.from_user.id
-    raw = (message.text or "").strip()
-    if raw.startswith("@"):
-        username = raw.lstrip("@")
-        result = await api.admin_grant(tg_id, username=username)
-        await state.clear()
-        if result["status"] == "granted":
-            await _notify_about_admin_status(bot, result["telegram_id"])
-            await message.answer(f"Администратор @{username} добавлен ✅", reply_markup=admin_menu_keyboard())
-        elif result["status"] == "already_admin":
-            await message.answer(
-                f"Пользователь @{username} уже является администратором.", reply_markup=admin_menu_keyboard()
-            )
-        elif result["status"] == "pending":
-            await message.answer(
-                f"Пользователь @{username} пока не зарегистрирован.\n"
-                "Добавила его в список ожидания: как только он зайдёт в бота —\n"
-                "админ-права выдадутся автоматически ✅",
-                reply_markup=admin_menu_keyboard(),
-            )
+    text = "📣 Изменения по игре #{}\n{}".format(game_id, "\n".join(changes))
+    roster = await api.session_roster(tg_id, game_id)
+    recipients = {row["telegram_id"] for row in roster["registrations"] if row.get("telegram_id")}
+    recipients |= {row["telegram_id"] for row in roster["reserves"] if row.get("telegram_id")}
+    for recipient in recipients:
+        try:
+            await bot.send_message(recipient, text)
+        except Exception:
+            logger.warning("Не удалось уведомить %s об изменении игры %s", recipient, game_id)
+
+
+async def _is_admin(api: ApiClient, tg_id: int) -> bool:
+    user = await api.get_profile(tg_id)
+    return bool(user and user["is_bot_admin"])
+
+
+# --------------------------------------------------------------------- меню
+async def _awaiting_count(api: ApiClient, tg_id: int) -> int:
+    try:
+        return len(await api.admin_sessions_awaiting_confirmation(tg_id))
+    except ApiError:
+        # Счётчик на кнопке -- подсказка, а не смысл экрана: недоступный API
+        # не должен мешать открыть админку и, например, снять права.
+        return 0
+
+
+@router.message(Command("admin"))
+async def open_admin_menu(message: Message, state: FSMContext, api: ApiClient) -> None:
+    await consume_input(message)
+    if not await _is_admin(api, message.from_user.id):
+        await open_screen(message, state, "У вас нет прав администратора.")
+        return
+    await state.set_state(None)
+    awaiting = await _awaiting_count(api, message.from_user.id)
+    await open_screen(message, state, MENU_TEXT, admin_menu_keyboard(awaiting=awaiting))
+
+
+@router.callback_query(F.data == "am:menu")
+async def back_to_menu(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    if not await _is_admin(api, callback.from_user.id):
+        await callback.answer("У вас нет прав администратора.", show_alert=True)
+        return
+    await state.set_state(None)
+    awaiting = await _awaiting_count(api, callback.from_user.id)
+    await edit_screen(callback, state, MENU_TEXT, admin_menu_keyboard(awaiting=awaiting))
+
+
+# ------------------------------------------------------- создание игрового дня
+@router.callback_query(F.data == "am:create")
+async def create_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(None)
+    await edit_screen(callback, state, "Формат игр нового дня:", admin_game_types_keyboard())
+
+
+@router.callback_query(F.data.startswith("am:newtype:"))
+async def create_pick_type(callback: CallbackQuery, state: FSMContext) -> None:
+    game_type = callback.data.split(":")[2]
+    if game_type not in texts.GAME_TYPES:
+        await callback.answer("Неизвестный формат.", show_alert=True)
+        return
+    await state.set_state(None)
+    await state.update_data(am_flow="create", new_game_type=game_type)
+    await _render_calendar(callback, state)
+
+
+async def _render_calendar(callback: CallbackQuery, state: FSMContext, *, year: int | None = None, month: int | None = None) -> None:
+    """Календарь текущего (или пролистанного) месяца.
+
+    Месяц запоминается в состоянии: с экрана часов есть «Назад», и он обязан
+    вернуть человека туда же, откуда тот ушёл, а не в сегодняшний месяц.
+    """
+    data = await state.get_data()
+    today = now_local().date()
+    if year is None or month is None:
+        stored = data.get("am_month")
+        if stored:
+            year, month = int(str(stored)[:4]), int(str(stored)[4:])
         else:
-            await message.answer(f"Пользователь @{username} уже есть в списке ожидания.", reply_markup=admin_menu_keyboard())
+            year, month = today.year, today.month
+    await state.update_data(am_month=f"{year}{month:02d}")
+
+    editing = data.get("am_flow") == "edit"
+    back_to = f"am:game:{data.get('am_game_id')}" if editing else "am:create"
+    title = "Новая дата игры:" if editing else PICK_DAY
+    await edit_screen(callback, state, title, calendar_keyboard(year=year, month=month, today=today, back_to=back_to))
+
+
+@router.callback_query(F.data == "am:pickday")
+async def back_to_calendar(callback: CallbackQuery, state: FSMContext) -> None:
+    await _render_calendar(callback, state)
+
+
+@router.callback_query(F.data.startswith("am:cal:"))
+async def flip_month(callback: CallbackQuery, state: FSMContext) -> None:
+    token = callback.data.split(":")[2]
+    if len(token) != 6 or not token.isdigit():
+        await callback.answer()
         return
+    await _render_calendar(callback, state, year=int(token[:4]), month=int(token[4:]))
 
-    target, error = await _resolve_admin_target(raw, api, tg_id)
-    if error:
-        await message.answer(error)
+
+@router.callback_query(F.data.startswith("am:date:"))
+async def pick_date(callback: CallbackQuery, state: FSMContext) -> None:
+    day = _day_from_token(callback.data.split(":")[2])
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
         return
-
-    result = await api.admin_grant(tg_id, target_telegram_id=target)
-    await state.clear()
-    if result["status"] == "granted":
-        await _notify_about_admin_status(bot, target)
-        await message.answer(f"Администратор с ID {target} добавлен ✅", reply_markup=admin_menu_keyboard())
-    else:
-        await message.answer(f"Пользователь с ID {target} уже является администратором.", reply_markup=admin_menu_keyboard())
-
-
-# --------------------------------------------------------- remove admin flow
-
-@router.message(F.text.in_({"Удалить админа", "➖ Удалить админа"}))
-async def remove_admin_start(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
+    await state.update_data(new_day=day)
+    data = await state.get_data()
+    if data.get("am_flow") == "edit":
+        await _render_hours(callback, state, action="at", first=FIRST_HOUR, last=LAST_HOUR, prompt=f"{day}. Во сколько начинается игра?")
         return
-    admins = await api.admin_list_admins(message.from_user.id)
-    ids_text = ", ".join(str(a["telegram_id"]) for a in admins if a["telegram_id"]) or "нет"
-    await state.set_state(AdminStates.waiting_for_admin_to_remove)
-    await message.answer(
-        "Введите Telegram ID, номер телефона или @username администратора для удаления.\n"
-        f"Текущие администраторы: {ids_text}",
-        reply_markup=back_only_keyboard(),
+    await _render_hours(callback, state, action="from", first=FIRST_HOUR, last=LAST_HOUR, prompt=f"{day}. {PICK_FROM}")
+
+
+async def _render_hours(
+    callback: CallbackQuery, state: FSMContext, *, action: str, first: int, last: int, prompt: str
+) -> None:
+    back_to = "am:pickday" if action in {"from", "at"} else "am:pickfrom"
+    await edit_screen(callback, state, prompt, hours_keyboard(action=action, first=first, last=last, back_to=back_to))
+
+
+@router.callback_query(F.data == "am:pickfrom")
+async def back_to_from_hours(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    day = data.get("new_day") or ""
+    await _render_hours(callback, state, action="from", first=FIRST_HOUR, last=LAST_HOUR, prompt=f"{day}. {PICK_FROM}")
+
+
+@router.callback_query(F.data.startswith("am:from:"))
+async def pick_start_hour(callback: CallbackQuery, state: FSMContext) -> None:
+    hour = int(callback.data.split(":")[2])
+    await state.update_data(new_from=hour)
+    data = await state.get_data()
+    # Правая граница в набор не входит, поэтому последняя осмысленная -- 24:00
+    # (игра, начинающаяся в 23:00). Меньше чем на час день не нарезается.
+    await _render_hours(
+        callback,
+        state,
+        action="to",
+        first=hour + 1,
+        last=LAST_HOUR + 1,
+        prompt=f"{data.get('new_day')}, с {hour:02d}:00. До какого часа идут игры?\n\n"
+        "Бот создаст по одной игре на каждый час внутри диапазона.",
     )
 
 
-@router.message(AdminStates.waiting_for_admin_to_remove, ~F.text.in_(BACK_BUTTONS))
-async def remove_admin_finish(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
+@router.callback_query(F.data.startswith("am:to:"))
+async def pick_end_hour(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await state.update_data(new_to=int(callback.data.split(":")[2]))
+    await _render_locations(callback, state, api)
+
+
+@router.callback_query(F.data == "am:pickto")
+async def back_to_end_hours(callback: CallbackQuery, state: FSMContext) -> None:
+    data = await state.get_data()
+    hour = int(data.get("new_from") or FIRST_HOUR)
+    await _render_hours(
+        callback,
+        state,
+        action="to",
+        first=hour + 1,
+        last=LAST_HOUR + 1,
+        prompt=f"{data.get('new_day')}, с {hour:02d}:00. До какого часа идут игры?",
+    )
+
+
+async def _render_locations(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    locations = await api.admin_recent_locations(callback.from_user.id)
+    await state.set_state(None)
+    await state.update_data(am_locations=locations)
+    data = await state.get_data()
+    hint = f"{data.get('new_day')}, {int(data.get('new_from', 0)):02d}:00–{int(data.get('new_to', 0)):02d}:00"
+    await edit_screen(callback, state, f"{hint}\n\n{PICK_LOCATION}", locations_keyboard(locations, back_to="am:pickto"))
+
+
+@router.callback_query(F.data.startswith("am:loc:"))
+async def pick_location(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    index = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    locations = data.get("am_locations") or []
+    if not 0 <= index < len(locations):
+        await callback.answer("Это место больше не доступно, выберите другое.", show_alert=True)
         return
-
-    tg_id = message.from_user.id
-    raw = (message.text or "").strip()
-    if raw.startswith("@"):
-        username = raw.lstrip("@")
-        user = await api.admin_lookup_by_username(tg_id, username)
-        removed_admin = False
-        if user:
-            target = int(user["telegram_id"])
-            if target == tg_id:
-                await message.answer("Нельзя удалить самого себя из администраторов.")
-                return
-            removed_admin = await api.admin_revoke(tg_id, target)
-        removed_pending = await api.admin_revoke_pending(tg_id, username)
-        await state.clear()
-        if removed_admin and removed_pending:
-            await message.answer(
-                f"Администратор @{username} удалён. Также удалено отложенное назначение из списка ожидания.",
-                reply_markup=admin_menu_keyboard(),
-            )
-        elif removed_admin:
-            await message.answer(f"Администратор @{username} удалён.", reply_markup=admin_menu_keyboard())
-        elif removed_pending:
-            await message.answer(
-                f"Пользователь @{username} удалён из списка ожидания на админ-права.",
-                reply_markup=admin_menu_keyboard(),
-            )
-        else:
-            await message.answer(
-                f"Пользователь @{username} не найден ни среди администраторов, ни в списке ожидания.",
-                reply_markup=admin_menu_keyboard(),
-            )
-        return
-
-    target, error = await _resolve_admin_target(raw, api, tg_id)
-    if error:
-        await message.answer(error)
-        return
-
-    if target == tg_id:
-        await message.answer("Нельзя удалить самого себя из администраторов.")
-        return
-
-    removed = await api.admin_revoke(tg_id, target)
-    await state.clear()
-    if removed:
-        await message.answer(f"Администратор с ID {target} удалён.", reply_markup=admin_menu_keyboard())
-    else:
-        await message.answer(f"Администратор с ID {target} не найден.", reply_markup=admin_menu_keyboard())
+    await _create_day(callback.from_user.id, callback, None, state, api, locations[index])
 
 
-# ----------------------------------------------------------- create game flow
-
-@router.message(F.text.in_({"Создать игру", "🎮 Создать игру"}))
-async def create_game_start(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        return
-    await state.set_state(AdminStates.waiting_for_game_type)
-    await message.answer("Выберите формат игр:", reply_markup=game_type_keyboard())
-
-
-@router.message(AdminStates.waiting_for_game_type, ~F.text.in_(BACK_BUTTONS))
-async def create_game_type(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
-        return
-
-    game_type = _parse_game_type_text(message.text or "", allow_all=False)
-    if not game_type:
-        await message.answer("Выберите формат кнопкой: Фанки или Обучающие.")
-        return
-
-    await state.update_data(game_type=game_type)
-    await state.set_state(AdminStates.waiting_for_game_day)
-    await message.answer("Введите день игр в формате ДД.ММ.ГГГГ.\nПример: 21.06.2026")
-
-
-@router.message(AdminStates.waiting_for_game_day, ~F.text.in_(BACK_BUTTONS))
-async def create_game_day(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
-        return
-
-    day = _parse_day(message.text or "")
-    if not day:
-        await message.answer("Неверный формат дня. Пример: 21.06.2026")
-        return
-
-    await state.update_data(game_day=day)
+@router.callback_query(F.data == "am:locnew")
+async def ask_new_location(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(AdminStates.waiting_for_game_location)
-    await message.answer("Введите место проведения игры.")
+    await edit_screen(callback, state, ASK_LOCATION, cancel_input_keyboard("am:pickto"))
 
 
-@router.message(AdminStates.waiting_for_game_location, ~F.text.in_(BACK_BUTTONS))
-async def create_game_location(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
-        return
-
+@router.message(AdminStates.waiting_for_game_location)
+async def new_location_received(message: Message, state: FSMContext, api: ApiClient) -> None:
+    await consume_input(message)
     location = (message.text or "").strip()
-    if len(location) < 3:
-        await message.answer("Название места должно содержать не менее 3 символов.")
-        return
-
-    await state.update_data(location=location)
-    await state.set_state(AdminStates.waiting_for_game_time_range)
-    await message.answer(
-        "Введите временной диапазон в формате ЧЧ:ММ-ЧЧ:ММ.\n"
-        "Пример: 18:00-22:00\n"
-        "Каждая игра длится 1 час."
-    )
-
-
-@router.message(AdminStates.waiting_for_game_time_range, ~F.text.in_(BACK_BUTTONS))
-async def create_game_time_range(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
-        return
-
-    parsed = _parse_time_range(message.text or "")
-    if not parsed:
-        await message.answer(
-            "Некорректный диапазон. Используйте формат ЧЧ:ММ-ЧЧ:ММ, границы по часу и минимум 1 час."
+    if not 1 <= len(location) <= 200:
+        await open_screen(
+            message, state, f"Место должно быть от 1 до 200 символов.\n\n{ASK_LOCATION}",
+            cancel_input_keyboard("am:pickto"),
         )
         return
-    time_from, time_to = parsed
+    await _create_day(message.from_user.id, None, message, state, api, location)
+
+
+async def _create_day(
+    tg_id: int,
+    callback: CallbackQuery | None,
+    message: Message | None,
+    state: FSMContext,
+    api: ApiClient,
+    location: str,
+) -> None:
+    """Последний шаг создания игрового дня -- общий для обоих способов задать
+    место (кнопкой из прошлых и вводом руками)."""
     data = await state.get_data()
-    game_type = data.get("game_type")
-    game_day = data.get("game_day")
-    location = data.get("location")
-    if game_type not in GAME_TYPE_LABELS or not game_day or not location:
-        await message.answer("Данные создания игры потеряны. Начните заново.")
-        await state.clear()
+    day, game_type = data.get("new_day"), data.get("new_game_type")
+    hour_from, hour_to = data.get("new_from"), data.get("new_to")
+
+    async def show(text: str, keyboard) -> None:
+        if callback is not None:
+            await edit_screen(callback, state, text, keyboard)
+        elif message is not None:
+            await open_screen(message, state, text, keyboard)
+
+    if not (day and game_type and hour_from is not None and hour_to is not None):
+        await state.set_state(None)
+        await show("Данные потерялись, начнём заново.", admin_menu_keyboard())
         return
 
-    starts = _build_hourly_starts(day=game_day, time_from=time_from, time_to=time_to)
-    if not starts:
-        await message.answer("Не удалось собрать слоты по заданному диапазону.")
-        return
-
-    created_ids = await api.admin_create_sessions_bulk(message.from_user.id, starts, location, game_type)
-    await state.set_state(AdminStates.waiting_for_game_type)
-    await message.answer(
-        "Игры созданы ✅\n"
-        f"Формат: {GAME_TYPE_LABELS[game_type]}\n"
-        f"День: {game_day}\n"
-        f"Место: {location}\n"
-        f"Диапазон: {time_from}-{time_to}\n"
-        f"Создано игр: {len(created_ids)} (ID: {', '.join(map(str, created_ids))})\n\n"
-        "Можно сразу создать следующий игровой день.\n"
-        "Выберите формат игр:",
-        reply_markup=game_type_keyboard(),
-    )
-
-
-@router.message(F.text.in_({"Редактировать игру", "✏️ Редактировать игру"}))
-async def edit_game_start(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        return
-    await state.set_state(AdminStates.waiting_for_edit_game_type)
-    await message.answer(
-        "Выберите формат игр для редактирования или покажите все игры:",
-        reply_markup=game_type_with_all_keyboard(),
-    )
-
-
-@router.message(AdminStates.waiting_for_edit_game_type, ~F.text.in_(BACK_BUTTONS))
-async def edit_game_pick_type(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
-        return
-    game_type = _parse_game_type_text(message.text or "", allow_all=True)
-    if not game_type:
-        await message.answer("Выберите формат кнопкой: Фанки, Обучающие или Все игры.")
-        return
-    day_cards = await api.admin_day_cards(message.from_user.id, game_type=None if game_type == "all" else game_type)
-    if not day_cards:
-        await message.answer("Для выбранного формата игровые дни не найдены.")
-        return
-    await state.update_data(edit_scope_game_type=game_type)
-    await state.set_state(AdminStates.waiting_for_edit_game_day)
-    lines = ["Выберите игровой день для редактирования:"]
-    for card in day_cards:
-        types = ", ".join(GAME_TYPE_LABELS.get(t, t) for t in card.get("types", []))
-        lines.append(f"• {card['day']} | {types}" if types else f"• {card['day']}")
-    await message.answer("\n".join(lines), reply_markup=admin_edit_game_days_keyboard(day_cards))
-    await message.answer("Для отмены нажмите «Назад».", reply_markup=back_only_keyboard())
-
-
-@router.callback_query(F.data.startswith("adm_edit_day:"))
-async def edit_game_pick_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    user = await api.get_profile(callback.from_user.id)
-    if not user or not user["is_bot_admin"]:
-        await callback.answer("У вас нет прав администратора.", show_alert=True)
-        return
-    data = await state.get_data()
-    game_type = str(data.get("edit_scope_game_type", ""))
-    if game_type not in {"all", *GAME_TYPE_LABELS.keys()}:
-        await callback.answer("Сначала выберите формат для редактирования.", show_alert=True)
-        return
-    day_token = callback.data.split(":")[1]
-    day = _parse_day(f"{day_token[:2]}.{day_token[2:4]}.{day_token[4:]}")
-    if not day:
-        await callback.answer("Неверный формат дня.", show_alert=True)
-        return
-    games = await _games_for_day_and_scope(api, callback.from_user.id, day, game_type)
-    if not games:
-        await callback.answer("На выбранный день игр нет.", show_alert=True)
-        return
-    await state.update_data(edit_scope_day=day, edit_scope_game_ids=[int(game["id"]) for game in games])
-    await state.set_state(AdminStates.waiting_for_edit_day_action)
-    scope_label = "всех форматов" if game_type == "all" else GAME_TYPE_LABELS[game_type]
-    await callback.message.answer(
-        f"Выбран день {day} ({scope_label}). Что хотите изменить?",
-        reply_markup=game_edit_field_keyboard(),
-    )
-    await callback.answer()
-
-
-@router.message(AdminStates.waiting_for_edit_day_action, ~F.text.in_(BACK_BUTTONS))
-async def edit_game_pick_day_action(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
-        return
-    data = await state.get_data()
-    game_ids = data.get("edit_scope_game_ids") or []
-    if not game_ids:
-        await state.clear()
-        await message.answer("Игровой день не выбран. Начните заново.")
-        return
-    action_map = {
-        "Время": "time",
-        "🕒 Время": "time",
-        "Дата": "date",
-        "📅 Дата": "date",
-        "Место": "location",
-        "📍 Место": "location",
-        "Формат игры": "game_type",
-        "🎮 Формат игры": "game_type",
-        "Удалить игровой день": "delete_day",
-        "🗑️ Удалить игровой день": "delete_day",
-    }
-    action = action_map.get((message.text or "").strip())
-    if not action:
-        await message.answer("Выберите действие кнопкой.")
-        return
-    if action == "delete_day":
-        deleted = 0
-        for game_id in game_ids:
-            if await api.admin_delete_session(message.from_user.id, int(game_id)):
-                deleted += 1
-        await state.set_state(AdminStates.waiting_for_edit_game_type)
-        await state.update_data(edit_scope_day=None, edit_scope_game_ids=[])
-        await _finish_edit_step(message, f"Игровой день удалён ✅ Удалено игр: {deleted}.")
-        return
-    await state.update_data(edit_day_action=action)
-    await state.set_state(AdminStates.waiting_for_edit_value)
-    if action == "time":
-        await message.answer(
-            "Введите новое время старта первой игры дня в формате ЧЧ:ММ.\n"
-            "Остальные игры этого дня сдвинутся по часу.",
-            reply_markup=back_only_keyboard(),
+    time_from, time_to = f"{int(hour_from):02d}:00", f"{int(hour_to):02d}:00"
+    starts = _hourly_starts(day, time_from, time_to)
+    conflicts = await api.admin_check_conflicts(tg_id, starts)
+    if conflicts:
+        # Пересечение по времени -- почти всегда повторное создание уже
+        # заведённого дня, а не намерение посадить два стола в одной аудитории.
+        await show(
+            "На это время игры уже созданы:\n"
+            + "\n".join(f"• {item}" for item in conflicts)
+            + "\n\nВыберите другой диапазон.",
+            hours_keyboard(action="from", first=FIRST_HOUR, last=LAST_HOUR, back_to="am:pickday"),
         )
-    elif action == "date":
-        await message.answer("Введите новую дату в формате ДД.ММ.ГГГГ.", reply_markup=back_only_keyboard())
-    elif action == "location":
-        await message.answer("Введите новое место для всех игр выбранного дня.", reply_markup=back_only_keyboard())
-    elif action == "game_type":
-        await message.answer("Выберите новый формат игр для выбранного дня.", reply_markup=game_type_keyboard())
-
-
-@router.message(F.text.in_({"Список игр", "📋 Список игр"}))
-async def games_list_start(message: Message, state: FSMContext, api: ApiClient) -> None:
-    if not await _require_admin(message, api):
-        return
-    day_cards = await api.admin_day_cards(message.from_user.id)
-    if not day_cards:
-        await message.answer("Игр пока нет.")
-        return
-    lines = ["Доступные игровые дни:"]
-    for card in day_cards:
-        types = ", ".join(GAME_TYPE_LABELS.get(t, t) for t in card.get("types", []))
-        lines.append(f"• {card['day']} | {types}" if types else f"• {card['day']}")
-    lines.append("")
-    lines.append("Выберите день кнопкой:")
-    await message.answer("\n".join(lines), reply_markup=admin_game_days_keyboard(day_cards))
-    await state.update_data(admin_games_view_message_id=None)
-
-
-@router.callback_query(F.data.startswith("adm_day:"))
-async def games_list_pick_day(callback: CallbackQuery, api: ApiClient) -> None:
-    user = await api.get_profile(callback.from_user.id)
-    if not user or not user["is_bot_admin"]:
-        await callback.answer("У вас нет прав администратора.", show_alert=True)
         return
 
-    day_token = callback.data.split(":")[1]
-    day = _parse_day(f"{day_token[:2]}.{day_token[2:4]}.{day_token[4:]}")
-    if not day:
-        await callback.answer("Неверный формат дня.", show_alert=True)
+    try:
+        created = await api.admin_create_sessions_bulk(tg_id, starts, location, game_type)
+    except ApiError as exc:
+        await show(f"Не удалось создать игры: {exc.message}", admin_menu_keyboard())
         return
 
+    await state.set_state(None)
+    await show(
+        f"Создано игр: {len(created)} 🎮\n"
+        f"{texts.GAME_TYPES[game_type]} · {day} · {time_from}–{time_to}\n"
+        f"Место: {location}",
+        admin_menu_keyboard(),
+    )
+
+
+# ------------------------------------------------------------- игровые дни
+# Экраны вынесены в функции от явных аргументов, а не вызываются друг у друга
+# «подменив callback.data»: объекты aiogram — frozen-модели pydantic, и такая
+# подмена падает ValidationError уже в рантайме.
+async def _render_days(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await state.set_state(None)
+    cards = await api.admin_day_cards(callback.from_user.id)
+    if not cards:
+        await edit_screen(callback, state, "Игровых дней пока нет.", admin_menu_keyboard())
+        return
+    await edit_screen(callback, state, "Игровые дни:", admin_days_keyboard(cards))
+
+
+async def _render_day(callback: CallbackQuery, state: FSMContext, api: ApiClient, token: str) -> None:
+    day = _day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
     games = [_with_time(g) for g in await api.admin_sessions_by_day(callback.from_user.id, day)]
     if not games:
-        await callback.answer("На выбранный день игр нет.", show_alert=True)
+        # Последнюю игру дня удалили -- показывать пустой день нечего.
+        await _render_days(callback, state, api)
         return
-
-    lines = [f"Игры на {day}:"]
-    for game in games:
-        game_type = GAME_TYPE_LABELS.get(game.get("game_type", ""), game.get("game_type", "-"))
-        total_registered = int(game.get("players", 0)) + int(game.get("hosts", 0)) + int(game.get("judges", 0))
-        lines.append(f"• #{game['id']} | {game['time']} | {game['location']} | {game_type} ({total_registered}/13)")
-    lines.append("")
-    lines.append("Выберите игру кнопкой:")
-    await callback.message.edit_text("\n".join(lines), reply_markup=admin_games_by_day_keyboard(games))
-    await callback.answer()
+    await state.set_state(None)
+    await edit_screen(callback, state, f"Игры {day}:", admin_day_keyboard(token, games))
 
 
-@router.callback_query(F.data.startswith("adm_game:"))
-async def games_list_show_participants(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    user = await api.get_profile(callback.from_user.id)
-    if not user or not user["is_bot_admin"]:
-        await callback.answer("У вас нет прав администратора.", show_alert=True)
-        return
+@router.callback_query(F.data == "am:days")
+async def show_days(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await _render_days(callback, state, api)
 
-    game_id = int(callback.data.split(":")[1])
-    game = await api.get_session(callback.from_user.id, game_id)
-    if not game:
+
+@router.callback_query(F.data.startswith("am:day:"))
+async def show_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await _render_day(callback, state, api, callback.data.split(":")[2])
+
+
+@router.callback_query(F.data.startswith("am:game:"))
+async def show_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    await _render_game(callback, state, api, game_id)
+
+
+async def _render_game(
+    callback: CallbackQuery,
+    state: FSMContext,
+    api: ApiClient,
+    game_id: int,
+    *,
+    alert: str | None = None,
+    back_to: str | None = None,
+) -> None:
+    tg_id = callback.from_user.id
+    game = await api.get_session(tg_id, game_id)
+    if game is None:
         await callback.answer("Игра не найдена.", show_alert=True)
         return
+    roster = await api.session_roster(tg_id, game_id)
+    day = format_day(game["starts_at"])
+    await state.set_state(None)
+    await state.update_data(am_game_id=game_id, am_day_token=_token(day), am_back_to=back_to)
+    await edit_screen(
+        callback,
+        state,
+        _game_text(game, roster),
+        admin_game_keyboard(
+            game_id, _token(day), needs_confirmation=_needs_confirmation(game), back_to=back_to
+        ),
+        alert=alert,
+    )
 
-    roster = await api.session_roster(callback.from_user.id, game_id)
-    by_role: dict[str, list[dict]] = {"host": [], "judge": [], "player": []}
+
+STATUS_LINES: dict[str, str] = {
+    "played": "✅ Проведена, ждёт оценки на сайте",
+    "rated": "🏁 Оценена",
+}
+
+
+def _game_text(game: dict, roster: dict) -> str:
+    by_role: dict[str, list[str]] = {"host": [], "judge": [], "player": []}
     for row in roster["registrations"]:
-        by_role.setdefault(row["role"], []).append(row)
+        by_role.setdefault(row["role"], []).append(row["nickname"])
 
-    game_type = GAME_TYPE_LABELS.get(game.get("game_type", ""), game.get("game_type", "-"))
     lines = [
-        f"Состав игры #{game_id}",
+        f"Игра #{game['id']} · {texts.GAME_TYPES.get(game.get('game_type', ''), game.get('game_type', ''))}",
         f"Когда: {format_day_time(game['starts_at'])}",
-        f"Где: {game['location']}",
-        f"Тип: {game_type}",
-        "",
+        f"Где: {game.get('location') or '—'}",
     ]
-    role_titles = {"host": "Ведущий", "judge": "Судья", "player": "Игроки"}
+    status_line = STATUS_LINES.get(game.get("status", ""))
+    if status_line:
+        lines.append(status_line)
+    elif _needs_confirmation(game):
+        lines.append("⏳ Игра прошла — подтвердите, состоялась ли она")
+    lines.append("")
+
     for role in ("host", "judge", "player"):
-        items = by_role.get(role, [])
-        lines.append(f"{role_titles[role]}:")
-        if not items:
-            lines.append("• пока никого")
-            continue
-        for idx, item in enumerate(items, start=1):
-            suffix = _username_suffix(item.get("telegram_username"))
-            if role == "player":
-                lines.append(f"{idx}. {item['nickname']} {suffix}")
-            else:
-                lines.append(f"• {item['nickname']} {suffix}")
-        lines.append("")
+        members = by_role.get(role, [])
+        lines.append(f"{texts.ROSTER_ROLES[role]}: {', '.join(members) if members else '—'}")
+    reserves = [row["nickname"] for row in roster.get("reserves") or []]
+    if reserves:
+        lines.append(f"Резерв: {', '.join(reserves)}")
+    return "\n".join(lines)
 
-    reserves = roster.get("reserves") or []
-    lines.append("Резерв:")
-    if not reserves:
-        lines.append("• пусто")
-    else:
-        for idx, item in enumerate(reserves, start=1):
-            lines.append(f"{idx}. {item['nickname']}")
 
-    text = "\n".join(lines).strip()
+# ------------------------------------------------- подтверждение проведения
+async def _render_awaiting(callback: CallbackQuery, state: FSMContext, api: ApiClient, *, alert: str | None = None) -> None:
+    await state.set_state(None)
+    games = [_with_time(g) for g in await api.admin_sessions_awaiting_confirmation(callback.from_user.id)]
+    if not games:
+        await edit_screen(
+            callback, state, "Все прошедшие игры подтверждены 👌", admin_menu_keyboard(), alert=alert
+        )
+        return
+    await edit_screen(
+        callback,
+        state,
+        "Прошедшие игры ждут ответа: состоялась или нет.\n\n"
+        "Подтверждённая игра уходит на сайт во вкладку «Ждут оценки».",
+        admin_awaiting_keyboard(games),
+        alert=alert,
+    )
+
+
+@router.callback_query(F.data == "am:toconfirm")
+async def show_awaiting(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await _render_awaiting(callback, state, api)
+
+
+@router.callback_query(F.data.startswith("am:confirm:"))
+async def open_awaiting_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    await _render_game(callback, state, api, game_id, back_to="am:toconfirm")
+
+
+@router.callback_query(F.data.startswith("am:played:"))
+async def mark_played(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    try:
+        await api.admin_mark_session_played(callback.from_user.id, game_id)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
     data = await state.get_data()
-    previous_view_message_id = data.get("admin_games_view_message_id")
-    if previous_view_message_id:
+    if data.get("am_back_to") == "am:toconfirm":
+        await _render_awaiting(callback, state, api, alert=f"Игра #{game_id} проведена ✅")
+        return
+    await _render_game(callback, state, api, game_id, alert=f"Игра #{game_id} проведена ✅")
+
+
+@router.callback_query(F.data.startswith("am:notheld:"))
+async def confirm_not_held(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    game = await api.get_session(callback.from_user.id, game_id)
+    if game is None:
+        await callback.answer("Игра не найдена.", show_alert=True)
+        return
+    registered = int(game.get("players", 0)) + int(game.get("hosts", 0)) + int(game.get("judges", 0))
+    data = await state.get_data()
+    back_to = data.get("am_back_to") or f"am:game:{game_id}"
+    await edit_screen(
+        callback,
+        state,
+        f"Игра #{game_id} ({format_day_time(game['starts_at'])}) не состоялась?\n\n"
+        f"Записей: {registered}. Игра будет удалена вместе с ними — в статистику и рейтинг "
+        "она не попадёт.",
+        admin_confirm_keyboard(
+            confirm_data=f"am:notheldok:{game_id}", back_data=back_to, label="🚫 Да, не состоялась"
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("am:notheldok:"))
+async def drop_not_held(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    await api.admin_delete_session(callback.from_user.id, game_id)
+    data = await state.get_data()
+    if data.get("am_back_to") == "am:toconfirm":
+        await _render_awaiting(callback, state, api, alert="Игра удалена")
+        return
+    token = data.get("am_day_token")
+    if token:
+        await _render_day(callback, state, api, str(token))
+        return
+    await _render_days(callback, state, api)
+
+
+# ---------------------------------------------------------------- рассылка
+def _announcement_text(games: list[dict], days: int) -> str:
+    """Одно сообщение на весь список: отдельная строка на игру и один заголовок
+    на день, иначе анонс превращается в простыню."""
+    lines = [f"🎲 Игры на ближайшие {days} дней\n"]
+    current_day = ""
+    for game in games:
+        day = format_day(game["starts_at"])
+        if day != current_day:
+            current_day = day
+            lines.append(f"\n📅 {day}")
+        players, limit = int(game.get("players", 0)), int(game.get("max_players", 10))
+        seats = f"{limit - players} мест" if players < limit else "стол собран, есть резерв"
+        lines.append(
+            f"• {format_time(game['starts_at'])} — "
+            f"{texts.GAME_TYPES.get(game.get('game_type', ''), '')}, "
+            f"{game.get('location') or 'место уточняется'} ({seats})"
+        )
+    lines.append("\nНажмите «Записаться», чтобы выбрать игру.")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "am:cast")
+async def broadcast_preview(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    try:
+        payload = await api.admin_weekly_broadcast(callback.from_user.id)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+
+    games, recipients = payload["games"], payload["recipients"]
+    await state.set_state(None)
+    await state.update_data(am_cast_recipients=[r["telegram_id"] for r in recipients])
+
+    if not games:
+        await edit_screen(
+            callback, state, "На ближайшую неделю игр в расписании нет — анонсировать нечего.",
+            admin_broadcast_keyboard(can_send=False),
+        )
+        return
+
+    preview = _announcement_text(games, payload["days"])
+    await edit_screen(
+        callback,
+        state,
+        f"Получателей: {len(recipients)} — все, кроме уже записанных на эти игры.\n\n"
+        f"Текст сообщения:\n\n{preview}",
+        admin_broadcast_keyboard(can_send=bool(recipients)),
+    )
+
+
+@router.callback_query(F.data == "am:castgo")
+async def broadcast_send(callback: CallbackQuery, state: FSMContext, api: ApiClient, bot: Bot) -> None:
+    try:
+        payload = await api.admin_weekly_broadcast(callback.from_user.id)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+
+    games = payload["games"]
+    recipients = [r["telegram_id"] for r in payload["recipients"] if r.get("telegram_id")]
+    if not games or not recipients:
+        await edit_screen(callback, state, "Рассылать нечего или некому.", admin_menu_keyboard())
+        return
+
+    # Экран на время рассылки остаётся без кнопок: сотня сообщений уходит не
+    # мгновенно, и второе нажатие «Разослать» отправило бы всё повторно.
+    await edit_screen(callback, state, "📢 Рассылаю анонс…")
+    screen = screen_message(callback)
+
+    text = _announcement_text(games, payload["days"])
+    keyboard = announcement_keyboard()
+    delivered, blocked, failed = 0, 0, 0
+    for telegram_id in recipients:
         try:
-            await callback.bot.edit_message_text(
-                chat_id=callback.message.chat.id, message_id=int(previous_view_message_id), text=text
-            )
-            await callback.answer()
-            return
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                await callback.answer()
-                return
-    sent = await callback.message.answer(text)
-    await state.update_data(admin_games_view_message_id=sent.message_id)
-    await callback.answer()
+            await bot.send_message(telegram_id, text, reply_markup=keyboard)
+            delivered += 1
+        except (TelegramForbiddenError, TelegramNotFound):
+            # Человек заблокировал бота или удалил аккаунт: это не сбой
+            # рассылки, а нормальная убыль -- считаем отдельно.
+            blocked += 1
+        except Exception:
+            failed += 1
+            logger.warning("Анонс не доставлен %s", telegram_id, exc_info=True)
+        await asyncio.sleep(BROADCAST_PAUSE_SECONDS)
 
-
-@router.message(AdminStates.waiting_for_edit_value, ~F.text.in_(BACK_BUTTONS))
-async def edit_game_apply(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
-    if not await _require_admin(message, api):
-        await state.clear()
+    report = ["📢 Анонс разослан.\n", f"Доставлено: {delivered}"]
+    if blocked:
+        report.append(f"Заблокировали бота: {blocked}")
+    if failed:
+        report.append(f"Не удалось отправить: {failed}")
+    # Правим то же сообщение напрямую: на callback уже ответили выше, а
+    # второй ответ Telegram отвергает («query ID is invalid»).
+    if screen is None:
         return
-    tg_id = message.from_user.id
+    with suppress(TelegramBadRequest):
+        await screen.edit_text("\n".join(report), reply_markup=admin_menu_keyboard())
+
+
+# ------------------------------------------------------------- правка игры
+@router.callback_query(F.data.startswith("am:edit:"))
+async def edit_game_field(callback: CallbackQuery, state: FSMContext) -> None:
+    _, _, raw_id, field = callback.data.split(":")
+    game_id = int(raw_id)
+    if field == "game_type":
+        await edit_screen(callback, state, "Новый формат игры:", admin_game_type_keyboard(game_id))
+        return
+    if field == "starts_at":
+        # Дата и время правятся тем же календарём и той же сеткой часов, что и
+        # при создании дня: руками эту строку набирали в формате «ДД.ММ.ГГГГ
+        # ЧЧ:ММ» и ошибались в ней чаще, чем во всех остальных полях вместе.
+        await state.set_state(None)
+        await state.update_data(am_flow="edit", am_game_id=game_id, am_month=None)
+        await _render_calendar(callback, state)
+        return
+    if field != "location":
+        await callback.answer("Это поле изменить нельзя.", show_alert=True)
+        return
+    await state.set_state(AdminStates.waiting_for_edit_value)
+    await state.update_data(am_game_id=game_id, am_edit_field=field)
+    await edit_screen(callback, state, "Введите новое место проведения.", cancel_input_keyboard(f"am:game:{game_id}"))
+
+
+@router.callback_query(F.data.startswith("am:at:"))
+async def apply_new_start(callback: CallbackQuery, state: FSMContext, api: ApiClient, bot: Bot) -> None:
+    hour = int(callback.data.split(":")[2])
     data = await state.get_data()
-    day = data.get("edit_scope_day")
-    game_type = data.get("edit_scope_game_type")
-    game_ids = [int(item) for item in (data.get("edit_scope_game_ids") or [])]
-    action = data.get("edit_day_action")
-    if not day or not game_type or not game_ids or not action:
-        await state.clear()
-        await message.answer("Данные редактирования потеряны. Начните заново.")
+    game_id, day = data.get("am_game_id"), data.get("new_day")
+    if not game_id or not day:
+        await callback.answer("Игра не выбрана.", show_alert=True)
         return
 
-    selected_games = await _games_for_day_and_scope(api, tg_id, day, game_type)
-    selected_games = [game for game in selected_games if int(game["id"]) in set(game_ids)]
-    if not selected_games:
-        await state.clear()
-        await message.answer("Игры выбранного дня не найдены. Начните заново.")
+    tg_id = callback.from_user.id
+    before = await api.get_session(tg_id, int(game_id))
+    try:
+        after = await api.admin_update_session(tg_id, int(game_id), starts_at=f"{day} {hour:02d}:00")
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    if before:
+        await _notify_players_about_change(bot, api, tg_id, int(game_id), before, after)
+    await state.update_data(am_flow=None)
+    await _render_game(callback, state, api, int(game_id), alert="Время изменено ✅")
+
+
+@router.message(AdminStates.waiting_for_edit_value)
+async def apply_game_edit(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
+    await consume_input(message)
+    data = await state.get_data()
+    game_id, field = data.get("am_game_id"), data.get("am_edit_field")
+    if not game_id or field != "location":
+        await state.set_state(None)
+        await open_screen(message, state, "Игра не выбрана.", admin_menu_keyboard())
         return
 
-    value_raw = (message.text or "").strip()
-    selected_games.sort(key=lambda row: row["starts_at"])
-    scope_ids = [int(game["id"]) for game in selected_games]
-
-    if action == "time":
-        parsed_time = _parse_time(value_raw)
-        if not parsed_time:
-            await message.answer("Неверный формат времени. Используйте ЧЧ:ММ.")
-            return
-        first_dt = datetime.strptime(f"{day} {parsed_time}", "%d.%m.%Y %H:%M")
-        planned_by_game: dict[int, str] = {}
-        for idx, game in enumerate(selected_games):
-            new_dt = first_dt + timedelta(hours=idx)
-            if new_dt.strftime("%d.%m.%Y") != day:
-                await message.answer("Новый диапазон времени выходит за пределы суток. Укажите более раннее время.")
-                return
-            planned_by_game[int(game["id"])] = new_dt.strftime("%d.%m.%Y %H:%M")
-        conflicts = await api.admin_check_conflicts(tg_id, list(planned_by_game.values()), scope_ids)
-        if conflicts:
-            conflicts_text = "\n".join(f"• {item}" for item in conflicts)
-            await message.answer(f"На выбранные дату и время уже есть игры. Изменение не применено:\n{conflicts_text}")
-            return
-        for game in selected_games:
-            game_id = int(game["id"])
-            before = dict(game)
-            after = await api.admin_update_session(tg_id, game_id, starts_at=planned_by_game[game_id])
-            await _notify_users_about_game_update(bot, api, tg_id, game_id, before, after)
-        await state.set_state(AdminStates.waiting_for_edit_game_type)
-        await state.update_data(edit_scope_day=None, edit_scope_game_ids=[], edit_day_action=None)
-        await _finish_edit_step(message, "Время игр обновлено ✅")
+    value = (message.text or "").strip()
+    if not 1 <= len(value) <= 200:
+        await open_screen(
+            message, state, "Место должно быть от 1 до 200 символов.",
+            cancel_input_keyboard(f"am:game:{game_id}"),
+        )
         return
 
-    if action == "date":
-        parsed_day = _parse_day(value_raw)
-        if not parsed_day:
-            await message.answer("Неверный формат даты. Используйте ДД.ММ.ГГГГ.")
-            return
-        planned_by_game: dict[int, str] = {}
-        for game in selected_games:
-            time_raw = format_time(game["starts_at"])
-            planned_by_game[int(game["id"])] = f"{parsed_day} {time_raw}"
-        conflicts = await api.admin_check_conflicts(tg_id, list(planned_by_game.values()), scope_ids)
-        if conflicts:
-            conflicts_text = "\n".join(f"• {item}" for item in conflicts)
-            await message.answer(f"На выбранные дату и время уже есть игры. Изменение не применено:\n{conflicts_text}")
-            return
-        for game in selected_games:
-            game_id = int(game["id"])
-            before = dict(game)
-            after = await api.admin_update_session(tg_id, game_id, starts_at=planned_by_game[game_id])
-            await _notify_users_about_game_update(bot, api, tg_id, game_id, before, after)
-        await state.set_state(AdminStates.waiting_for_edit_game_type)
-        await state.update_data(edit_scope_day=None, edit_scope_game_ids=[], edit_day_action=None)
-        await _finish_edit_step(message, "Дата игр обновлена ✅")
+    tg_id = message.from_user.id
+    before = await api.get_session(tg_id, game_id)
+    try:
+        after = await api.admin_update_session(tg_id, game_id, location=value)
+    except ApiError as exc:
+        await open_screen(
+            message, state, f"Не удалось сохранить: {exc.message}", cancel_input_keyboard(f"am:game:{game_id}")
+        )
         return
 
-    if action == "location":
-        if len(value_raw) < 3:
-            await message.answer("Место должно быть не короче 3 символов.")
+    if before:
+        await _notify_players_about_change(bot, api, tg_id, game_id, before, after)
+
+    await state.set_state(None)
+    roster = await api.session_roster(tg_id, game_id)
+    day = format_day(after["starts_at"])
+    await open_screen(
+        message,
+        state,
+        f"Сохранено ✅\n\n{_game_text(after, roster)}",
+        admin_game_keyboard(game_id, _token(day), needs_confirmation=_needs_confirmation(after)),
+    )
+
+
+@router.callback_query(F.data.startswith("am:settype:"))
+async def set_game_type(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    _, _, raw_id, game_type = callback.data.split(":")
+    if game_type not in texts.GAME_TYPES:
+        await callback.answer("Неизвестный формат.", show_alert=True)
+        return
+    try:
+        await api.admin_update_session(callback.from_user.id, int(raw_id), game_type=game_type)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await _render_game(callback, state, api, int(raw_id), alert="Формат изменён ✅")
+
+
+@router.callback_query(F.data.startswith("am:rm:"))
+async def confirm_remove_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    game = await api.get_session(callback.from_user.id, game_id)
+    if game is None:
+        await callback.answer("Игра не найдена.", show_alert=True)
+        return
+    registered = int(game.get("players", 0)) + int(game.get("hosts", 0)) + int(game.get("judges", 0))
+    await edit_screen(
+        callback,
+        state,
+        f"Удалить игру #{game_id} ({format_day_time(game['starts_at'])})?\n\n"
+        f"Записано человек: {registered}. Их записи исчезнут вместе с игрой.",
+        admin_confirm_keyboard(
+            confirm_data=f"am:rmok:{game_id}", back_data=f"am:game:{game_id}", label="🗑️ Да, удалить"
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("am:rmok:"))
+async def remove_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    token = data.get("am_day_token")
+    await api.admin_delete_session(callback.from_user.id, game_id)
+    if token:
+        await _render_day(callback, state, api, str(token))
+        return
+    await _render_days(callback, state, api)
+
+
+@router.callback_query(F.data.startswith("am:dayrm:"))
+async def confirm_remove_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    token = callback.data.split(":")[2]
+    day = _day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+    games = await api.admin_sessions_by_day(callback.from_user.id, day)
+    await edit_screen(
+        callback,
+        state,
+        f"Удалить все игры за {day}? Это {len(games)} шт. вместе со всеми записями.",
+        admin_confirm_keyboard(
+            confirm_data=f"am:dayrmok:{token}", back_data=f"am:day:{token}", label="🗑️ Да, удалить день"
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("am:dayrmok:"))
+async def remove_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    token = callback.data.split(":")[2]
+    day = _day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+    tg_id = callback.from_user.id
+    for game in await api.admin_sessions_by_day(tg_id, day):
+        await api.admin_delete_session(tg_id, game["id"])
+    await _render_days(callback, state, api)
+
+
+# ------------------------------------------------------------ администраторы
+async def _render_admins(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await state.set_state(None)
+    tg_id = callback.from_user.id
+    admins = await api.admin_list_admins(tg_id)
+    pending = await api.admin_list_pending(tg_id)
+    await edit_screen(
+        callback,
+        state,
+        "👮 Администраторы бота\n\nНажмите на строку, чтобы снять права.\n"
+        "«Приглашён» — человек ещё не открывал бота, права выдадутся при первом /start.",
+        admin_admins_keyboard(admins, pending),
+    )
+
+
+@router.callback_query(F.data == "am:admins")
+async def show_admins(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await _render_admins(callback, state, api)
+
+
+@router.callback_query(F.data == "am:addadmin")
+async def add_admin_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await state.set_state(AdminStates.waiting_for_admin_to_add)
+    await edit_screen(callback, state, ASK_ADMIN, cancel_input_keyboard("am:admins"))
+
+
+@router.message(AdminStates.waiting_for_admin_to_add)
+async def add_admin_finish(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
+    await consume_input(message)
+    tg_id = message.from_user.id
+    raw = (message.text or "").strip()
+
+    # @username человека, который ещё не открывал бота, -- нормальный случай:
+    # права кладутся в «приглашения» и выдаются при первом /start.
+    if raw.startswith("@"):
+        try:
+            result = await api.admin_grant(tg_id, username=raw)
+        except ApiError as exc:
+            await open_screen(message, state, f"Не получилось: {exc.message}", cancel_input_keyboard("am:admins"))
             return
-        for game in selected_games:
-            game_id = int(game["id"])
-            before = dict(game)
-            after = await api.admin_update_session(tg_id, game_id, location=value_raw)
-            await _notify_users_about_game_update(bot, api, tg_id, game_id, before, after)
-        await state.set_state(AdminStates.waiting_for_edit_game_type)
-        await state.update_data(edit_scope_day=None, edit_scope_game_ids=[], edit_day_action=None)
-        await _finish_edit_step(message, "Место для игрового дня обновлено ✅")
+        await state.set_state(None)
+        granted = result.get("telegram_id")
+        if granted:
+            await _tell_about_admin_rights(bot, int(granted))
+        await open_screen(
+            message,
+            state,
+            f"Готово: {raw} " + ("получил права ✅" if granted else "получит права при первом входе ⏳"),
+            admin_menu_keyboard(),
+        )
         return
 
-    if action == "game_type":
-        new_type = _parse_game_type_text(value_raw, allow_all=False)
-        if not new_type:
-            await message.answer("Выберите формат кнопкой: Фанки или Обучающие.")
-            return
-        for game in selected_games:
-            await api.admin_update_session(tg_id, int(game["id"]), game_type=new_type)
-        await state.set_state(AdminStates.waiting_for_edit_game_type)
-        await state.update_data(edit_scope_day=None, edit_scope_game_ids=[], edit_day_action=None)
-        await _finish_edit_step(message, f"Формат игр обновлён на «{GAME_TYPE_LABELS[new_type]}» ✅")
+    target, error = await _resolve_admin_target(raw, api, tg_id)
+    if error:
+        await open_screen(message, state, f"{error}\n\n{ASK_ADMIN}", cancel_input_keyboard("am:admins"))
         return
 
-    await message.answer("Неизвестное действие. Выберите действие заново.")
+    try:
+        await api.admin_grant(tg_id, target_telegram_id=target)
+    except ApiError as exc:
+        await open_screen(message, state, f"Не получилось: {exc.message}", cancel_input_keyboard("am:admins"))
+        return
+
+    await state.set_state(None)
+    await _tell_about_admin_rights(bot, int(target))
+    await open_screen(message, state, "Права администратора выданы ✅", admin_menu_keyboard())
+
+
+async def _tell_about_admin_rights(bot: Bot, target_tg_id: int) -> None:
+    try:
+        await bot.send_message(
+            target_tg_id,
+            "🎉 Вам выданы права администратора. Админ-меню открывается командой /admin "
+            "или кнопкой в /menu.",
+        )
+    except Exception:
+        logger.info("Не удалось сообщить %s о правах администратора", target_tg_id)
+
+
+@router.callback_query(F.data.startswith("am:rmadmin:"))
+async def remove_admin(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    target = int(callback.data.split(":")[2])
+    if target == callback.from_user.id:
+        # Снятие прав с самого себя оставило бы клуб без администратора, если
+        # он последний, и в любом случае делается не в спешке через бота.
+        await callback.answer("Снять права с себя нельзя.", show_alert=True)
+        return
+    await api.admin_revoke(callback.from_user.id, target)
+    await _render_admins(callback, state, api)
+
+
+@router.callback_query(F.data.startswith("am:rmpending:"))
+async def remove_pending_admin(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    username = callback.data.split(":", 2)[2]
+    await api.admin_revoke_pending(callback.from_user.id, username)
+    await _render_admins(callback, state, api)

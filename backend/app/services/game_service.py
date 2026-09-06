@@ -37,6 +37,10 @@ class ParticipantInput:
 # ожидаемый результат E считается от средних рейтингов ровно двух команд.
 EXPECTED_ROLES = Counter({"don": 1, "mafia": 2, "sheriff": 1, "citizen": 6})
 
+# Какой исход присуждается, когда игрок получил ППК: победу забирает команда
+# соперников. Ключ -- команда нарушителя.
+PPK_AWARDS_WIN_TO = {"black": "city_win", "red": "mafia_win"}
+
 # Шкала ЛХ: попадания «сколько из трёх названных оказались чёрными».
 # Совпадает с rating_service.LH_POINTS и с CHECK-констрейнтом
 # ck_participants_lh_scale в БД.
@@ -83,6 +87,40 @@ def _validate_participants(participants: list[ParticipantInput]) -> None:
         raise GameValidationError("Первоубиенный в игре может быть только один")
     if any(p.lh is not None and p.info != "first_killed" for p in participants):
         raise GameValidationError("ЛХ заполняется только у первоубиенного")
+
+
+def _validate_ppk(participants: list[ParticipantInput], result: str) -> None:
+    """ППК -- поражение по причине нарушения: победа присуждается команде
+    соперников, а нарушитель остаётся без дополнительных баллов и получает
+    штраф (stats_service.SCORE_PENALTY_PPK).
+
+    Проверяется здесь, а не только в форме: правило меняет ИСХОД игры, а от
+    исхода зависит и рейтинг Эло, и победы в статистике каждого участника.
+    Разъехавшийся исход тихо испортил бы и то, и другое.
+    """
+    offenders = [p for p in participants if p.ppk]
+    if not offenders:
+        return
+    if len(offenders) > 1:
+        raise GameValidationError("ППК в игре может быть только у одного игрока")
+
+    offender = offenders[0]
+    team = "black" if offender.role in {"mafia", "don"} else "red"
+    expected = PPK_AWARDS_WIN_TO[team]
+    if result != expected:
+        awarded = "городу" if expected == "city_win" else "мафии"
+        raise GameValidationError(
+            f"При ППК победа присуждается команде соперников — {awarded}. "
+            f"Исправьте исход игры."
+        )
+
+    # «0 доп баллов за игру»: доп. балл -- это судейские плюс ЛХ
+    # (stats_service._BONUS_SQL). Штраф за сам ППК и карточки считаются
+    # отдельно и здесь не трогаются.
+    if offender.points_judge:
+        raise GameValidationError("Игрок с ППК не получает дополнительных баллов от судей")
+    if offender.lh is not None:
+        raise GameValidationError("Игрок с ППК не получает баллов за ЛХ")
 
 
 def _resolve_tournament(db: Session, *, game_type: str, tournament_id: int | None) -> int | None:
@@ -161,6 +199,7 @@ def create_rated_game(
     _validate_participants(participants)
     if result not in {"city_win", "mafia_win", "draw"}:
         raise GameValidationError("Недопустимый исход игры")
+    _validate_ppk(participants, result)
     tournament_id = _resolve_tournament(db, game_type=game_type, tournament_id=tournament_id)
     stage_id = _resolve_stage(db, tournament_id=tournament_id, stage_id=stage_id)
 
@@ -230,7 +269,8 @@ def _validate_tournament_roster_consistency(
     new_ids = {p.player_id for p in participants}
     if existing_ids != new_ids:
         raise GameValidationError(
-            "Состав игроков должен быть одинаковым во всех играх этой таблицы (турнира или этапа)"
+            "ROSTER_MISMATCH: состав игроков должен быть одинаковым во всех играх "
+            "этой таблицы (турнира или этапа)"
         )
 
 
@@ -246,6 +286,7 @@ def update_rated_game(
     result: str | None,
     notes: str | None,
     participants: list[ParticipantInput] | None,
+    allow_roster_change: bool = False,
 ) -> models.Game:
     if starts_at is not None:
         game.starts_at = starts_at
@@ -279,7 +320,20 @@ def update_rated_game(
             raise GameValidationError("При обновлении состава нужно указать исход игры")
         if result not in {"city_win", "mafia_win", "draw"}:
             raise GameValidationError("Недопустимый исход игры")
-        if game.game_type == "tournament":
+        # Тот же вызов, что и в create_rated_game. Без него правило ППК не
+        # действовало там, где оно нужно чаще всего: турнирная игра заводится
+        # пустым слотом и оценивается ИСКЛЮЧИТЕЛЬНО через этот путь, так что
+        # проверка только на создании для турниров не срабатывала никогда.
+        _validate_ppk(participants, result)
+        # Состав внутри одной турнирной таблицы должен совпадать во всех её
+        # играх -- иначе сумма очков перестаёт что-либо значить. Но админ живой
+        # и ошибается: если во второй игре обнаружилось, что в первой не тот
+        # игрок, запрет «правьте только до первой оценки» загоняет в тупик --
+        # пришлось бы удалять уже внесённые игры. Поэтому не запрет, а
+        # подтверждение: форма ловит эту 422, объясняет последствие и
+        # повторяет запрос с allow_roster_change. Публичная страница турнира
+        # при расхождении показывает предупреждение над таблицей.
+        if game.game_type == "tournament" and not allow_roster_change:
             _validate_tournament_roster_consistency(db, game=game, participants=participants)
 
         db.query(models.GameParticipant).filter(models.GameParticipant.game_id == game.id).delete()
@@ -333,25 +387,43 @@ def games_pending_review(db: Session) -> list[models.Game]:
     )
 
 
-def mark_past_sessions_as_played(db: Session) -> int:
-    """Переводит прошедшие 'scheduled'/'registration_closed' игры в 'played'.
-    Вызывается фоновой задачей API (см. app/tasks.py), которая подключена
-    через lifespan в app/main.py.
+# Статусы сессии, из которых её ещё можно подтвердить как проведённую.
+_UNCONFIRMED_STATUSES = ("scheduled", "registration_closed")
 
-    Турнирные слоты этапа НЕ трогает: у них starts_at -- дата турнира-
-    плейсхолдер (может уже быть в прошлом на момент создания слота), и они
-    оцениваются напрямую внутри своего этапа, минуя 'played' и общий дэшборд
-    «Ждут оценки» -- там про них никто не спрашивает, админ и так их видит.
+
+def sessions_awaiting_confirmation(db: Session) -> list[models.Game]:
+    """Прошедшие бот-сессии, которые админ ещё не подтвердил.
+
+    Раньше этого списка не существовало: фоновая задача сама переводила
+    прошедшую игру в 'played', и она немедленно оказывалась в «Ждут оценки» --
+    вместе с играми, которые на деле не собрались. Теперь переход делает
+    человек, и ему нужно место, где видно всё непподтверждённое, иначе
+    забытая игра не всплывёт нигде.
     """
-    now = datetime.now(timezone.utc)
-    rows = (
+    return (
         db.query(models.Game)
-        .filter(models.Game.status.in_(["scheduled", "registration_closed"]))
-        .filter(models.Game.starts_at < now)
+        .filter(models.Game.status.in_(_UNCONFIRMED_STATUSES))
+        .filter(models.Game.starts_at < datetime.now(timezone.utc))
         .filter(models.Game.game_type != "tournament")
+        .order_by(models.Game.starts_at.asc())
         .all()
     )
-    for game in rows:
-        game.status = "played"
+
+
+def mark_session_played(db: Session, *, game: models.Game) -> models.Game:
+    """«Игра проведена»: единственная дорога сессии в «Ждут оценки».
+
+    Турнирные слоты сюда не ходят -- они оцениваются внутри своего этапа,
+    минуя 'played' (см. раздел 7 ARCHITECTURE.md).
+    """
+    if game.game_type == "tournament":
+        raise GameValidationError("Турнирные игры оцениваются внутри этапа, а не через бота")
+    if game.status == "rated":
+        raise GameValidationError("Игра уже оценена")
+    if game.status == "played":
+        raise GameValidationError("Игра уже отмечена как проведённая")
+    if game.starts_at > datetime.now(timezone.utc):
+        raise GameValidationError("Игра ещё не началась — отметить её проведение пока нечем")
+    game.status = "played"
     db.flush()
-    return len(rows)
+    return game

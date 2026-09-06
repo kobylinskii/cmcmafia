@@ -8,7 +8,7 @@ from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
-from app.services import rating_service
+from app.services import rating_service, visibility
 from app.timeutil import CLUB_TZ
 
 # ЛХ хранится в game_participants.lh как ПОПАДАНИЯ («сколько из трёх названных
@@ -27,10 +27,11 @@ _LH_POINTS_SQL = case(
 # как счётчик и флаг, поэтому им нужны ставки. Это не то же самое, что штрафы
 # в очках Эло (rating_service._penalty_rates, там 3..15 очков рейтинга).
 #
-# ЗНАЧЕНИЯ НИЖЕ -- ДОПУЩЕНИЕ, регламентом клуба они не подтверждены. Если у вас
-# другие -- меняются здесь, в одном месте, и пересчёта БД не требуют.
+# Ставка за ППК -- 2.5 балла, по регламенту клуба. Ставка за удаление
+# регламентом не подтверждена и остаётся допущением. Меняются здесь, в одном
+# месте, и пересчёта БД не требуют.
 SCORE_PENALTY_PER_REMOVAL = 0.5
-SCORE_PENALTY_PPK = 1.0
+SCORE_PENALTY_PPK = 2.5
 
 _PENALTY_SQL = (
     func.coalesce(models.GameParticipant.zk, 0)
@@ -121,7 +122,7 @@ def site_counters(db: Session) -> dict[str, int]:
     players = (
         db.query(func.count())
         .select_from(models.Player)
-        .filter(models.Player.is_active.is_(True))
+        .filter(*visibility.public_player_criteria())
         .scalar()
     )
     tournaments = db.query(func.count()).select_from(models.Tournament).scalar()
@@ -190,7 +191,7 @@ def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: 
             func.rank().over(order_by=models.PlayerRating.rating.desc()).label("rank"),
         )
         .join(models.Player, models.Player.id == models.PlayerRating.player_id)
-        .filter(models.Player.is_active.is_(True), models.PlayerRating.games_count > 0)
+        .filter(*visibility.public_player_criteria(), models.PlayerRating.games_count > 0)
         .subquery()
     )
 
@@ -199,7 +200,7 @@ def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: 
         .join(models.PlayerRating, models.PlayerRating.player_id == models.Player.id)
         .join(rank_subq, rank_subq.c.player_id == models.Player.id)
         .outerjoin(avg_bonus_subq, avg_bonus_subq.c.player_id == models.Player.id)
-        .filter(models.Player.is_active.is_(True), models.PlayerRating.games_count > 0)
+        .filter(*visibility.public_player_criteria(), models.PlayerRating.games_count > 0)
     )
     if q:
         like = f"%{q.strip()}%"
@@ -510,7 +511,7 @@ def compute_player_stats(db: Session, player_id: int) -> PlayerStats:
             .select_from(models.PlayerRating)
             .join(models.Player, models.Player.id == models.PlayerRating.player_id)
             .filter(
-                models.Player.is_active.is_(True),
+                *visibility.public_player_criteria(),
                 models.PlayerRating.games_count > 0,
                 models.PlayerRating.rating > rating.rating,
             )

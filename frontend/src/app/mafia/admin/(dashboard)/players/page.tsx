@@ -71,6 +71,11 @@ export default function AdminPlayersPage() {
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap gap-1.5">
                     {!p.is_active && <Badge tone="outline">Скрыт</Badge>}
+                    {p.confirmation_status !== "confirmed" && (
+                      <Badge tone="outline">
+                        {p.confirmation_status === "pending" ? "На проверке" : "Отклонён"}
+                      </Badge>
+                    )}
                     {p.is_bot_admin && <Badge tone="outline">Бот-админ</Badge>}
                     {p.is_site_admin && <Badge tone="brand">Сайт-админ</Badge>}
                   </div>

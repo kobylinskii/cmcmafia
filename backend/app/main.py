@@ -1,38 +1,22 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
-from collections.abc import AsyncIterator
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from app import tasks
 from app.config import get_settings
 from app.rate_limit import limiter
 from app.routers import admin, auth, bot, bot_admin, public
 
 settings = get_settings()
 
-
-@contextlib.asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    """Держит фоновый перевод прошедших игр в 'played' (см. app/tasks.py).
-    Первый прогон происходит сразу на старте, поэтому после рестарта список
-    «ждут оценки» не остаётся устаревшим."""
-    sweeper = asyncio.create_task(tasks.sweep_loop())
-    try:
-        yield
-    finally:
-        sweeper.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await sweeper
-
-
-app = FastAPI(title="Mafia Club API", lifespan=lifespan)
+# Фоновых задач у API больше нет. Раньше здесь жил свип, сам переводивший
+# прошедшую игру в 'played': в «Ждут оценки» из-за него попадало всё подряд,
+# включая игры, которые не собрались. Теперь проведение подтверждает человек
+# кнопкой в боте (game_service.mark_session_played).
+app = FastAPI(title="Mafia Club API")
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)

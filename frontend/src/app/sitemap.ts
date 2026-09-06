@@ -1,4 +1,9 @@
 import type { MetadataRoute } from "next";
+
+// Карта сайта ходит в API за играми, игроками и турнирами. Собирать её на
+// этапе `docker compose build` нельзя -- бэкенда там ещё нет; строится по
+// запросу, как и сами страницы.
+export const dynamic = "force-dynamic";
 import { serverGet } from "@/lib/api-server";
 import type { GameListOut, PlayerListItem, TournamentListItem } from "@/types/api";
 

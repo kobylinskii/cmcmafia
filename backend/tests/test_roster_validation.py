@@ -106,3 +106,67 @@ def test_lh_off_the_scale_is_rejected(admin):
         _participants(ids, patch={1: {"info": "first_killed", "lh": 0.75}}),
     )
     assert resp.status_code == 422
+
+
+def _tournament_with_stage(client, headers, games_count=2):
+    t = client.post("/api/admin/tournaments", json={
+        "name": "Турнир состава", "slug": "t-roster",
+        "starts_at": "2026-01-01T00:00:00Z", "ends_at": "2026-01-05T00:00:00Z",
+    }, headers=headers).json()
+    stage = client.post(f"/api/admin/tournaments/{t['id']}/stages", json={
+        "name": "Этап 1", "order": 1, "games_count": games_count,
+    }, headers=headers).json()
+    games = client.get(
+        f"/api/admin/tournaments/{t['id']}/stages/{stage['id']}/games", headers=headers
+    ).json()
+    return t, stage, games
+
+
+def _rate(client, headers, game_id, player_ids, *, result="city_win", allow=False):
+    body = {
+        "starts_at": "2026-01-02T18:00:00Z",
+        "result": result,
+        "participants": _participants(player_ids),
+    }
+    if allow:
+        body["allow_roster_change"] = True
+    return client.put(f"/api/admin/games/{game_id}", json=body, headers=headers)
+
+
+def test_first_rated_game_roster_is_editable(admin):
+    """Пока в таблице оценена только одна игра, её состав правится свободно."""
+    client, headers = admin
+    ids = make_players(client, headers, 12)
+    _, _, games = _tournament_with_stage(client, headers)
+
+    assert _rate(client, headers, games[0]["id"], ids[:10]).status_code == 200
+    assert _rate(client, headers, games[0]["id"], ids[:9] + [ids[10]]).status_code == 200
+
+
+def test_roster_change_is_refused_but_offers_an_override(admin):
+    """Когда в таблице есть вторая оценённая игра, смена состава в первой
+    отклоняется кодом ROSTER_MISMATCH -- по нему форма показывает подтверждение."""
+    client, headers = admin
+    ids = make_players(client, headers, 12)
+    _, _, games = _tournament_with_stage(client, headers)
+
+    assert _rate(client, headers, games[0]["id"], ids[:10]).status_code == 200
+    assert _rate(client, headers, games[1]["id"], ids[:10], result="mafia_win").status_code == 200
+
+    refused = _rate(client, headers, games[0]["id"], ids[:9] + [ids[10]])
+    assert refused.status_code == 422
+    assert "ROSTER_MISMATCH" in refused.json()["detail"]
+
+
+def test_roster_change_goes_through_with_explicit_permission(admin):
+    """С подтверждением та же правка сохраняется -- админ исправляет ошибку в
+    уже внесённой игре, не удаляя следующие."""
+    client, headers = admin
+    ids = make_players(client, headers, 12)
+    _, _, games = _tournament_with_stage(client, headers)
+
+    assert _rate(client, headers, games[0]["id"], ids[:10]).status_code == 200
+    assert _rate(client, headers, games[1]["id"], ids[:10], result="mafia_win").status_code == 200
+
+    ok = _rate(client, headers, games[0]["id"], ids[:9] + [ids[10]], allow=True)
+    assert ok.status_code == 200, ok.text

@@ -62,6 +62,15 @@ def _club_day_bounds(day: str) -> tuple[datetime, datetime]:
 # Календарный день игры по московскому времени, посчитанный на стороне СУБД.
 _CLUB_DAY_SQL = func.date(func.timezone(str(CLUB_TZ), models.Game.starts_at))
 
+# Что бот-админ вообще видит в расписании: только свои, не-турнирные игры, и
+# только пока с ними есть что делать. Оценённая игра из списка уходит --
+# состав, баллы и исход правятся исключительно на сайте, а список дней иначе
+# рос бы на каждый отыгранный день и никогда не сокращался.
+_MANAGED_GAMES = (
+    models.Game.game_type != "tournament",
+    models.Game.status != "rated",
+)
+
 
 def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
     """Группировка делается в SQL: раньше в память выгружались строки по каждой
@@ -75,7 +84,7 @@ def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
         # Турнирные слоты этапа сюда не попадают: у бота для них нет ни одного
         # осмысленного действия (нет регистрации, нет ростера через бота) --
         # только фанки/обучающие, которыми бот-админ реально управляет.
-        .filter(models.Game.game_type != "tournament")
+        .filter(*_MANAGED_GAMES)
         .group_by(_CLUB_DAY_SQL, models.Game.game_type)
     )
     if game_type and game_type != "all":
@@ -95,18 +104,33 @@ def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
 
 def games_by_day(db: Session, *, day: str) -> list[models.Game]:
     """Отбор по диапазону в SQL, а не выгрузка всей таблицы с фильтрацией
-    на Python."""
+    на Python. Набор игр тот же, что и в day_cards (_MANAGED_GAMES): день,
+    целиком состоящий из оценённых игр, из бота исчезает вместе с ними."""
     start, end = _club_day_bounds(day)
     return (
         db.query(models.Game)
         .filter(
             models.Game.starts_at >= start,
             models.Game.starts_at < end,
-            models.Game.game_type != "tournament",
+            *_MANAGED_GAMES,
         )
         .order_by(models.Game.starts_at.asc())
         .all()
     )
+
+
+def recent_locations(db: Session, *, limit: int = 8) -> list[str]:
+    """Места последних игр -- чтобы админ выбирал их кнопкой, а не набирал
+    «ВМК МГУ, ауд. 685» руками каждый игровой день."""
+    rows = (
+        db.query(models.Game.location, func.max(models.Game.starts_at).label("last_used"))
+        .filter(models.Game.location.isnot(None), models.Game.location != "")
+        .group_by(models.Game.location)
+        .order_by(func.max(models.Game.starts_at).desc())
+        .limit(limit)
+        .all()
+    )
+    return [row[0] for row in rows]
 
 
 def find_player_by_username(db: Session, username: str) -> models.Player | None:

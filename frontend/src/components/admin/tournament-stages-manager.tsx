@@ -37,7 +37,13 @@ function GameSlotList({
   games: TournamentStageGameOut[];
   onChanged: () => void;
 }) {
-  const [toDelete, setToDelete] = useState<TournamentStageGameOut | null>(null);
+  // Номер игры в списке, а не её id: админ видит «Игра 1..N» внутри этапа, а
+  // не сквозной идентификатор из базы, который ни о чём ему не говорит и
+  // прыгает через десятки при удалении слотов. Ключ, ссылки и удаление
+  // по-прежнему идут по настоящему id.
+  const [toDelete, setToDelete] = useState<{ game: TournamentStageGameOut; number: number } | null>(
+    null
+  );
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
@@ -46,7 +52,7 @@ function GameSlotList({
     setDeleting(true);
     setDeleteError(null);
     try {
-      await clientFetch(`/api/admin/games/${toDelete.id}`, { method: "DELETE" });
+      await clientFetch(`/api/admin/games/${toDelete.game.id}`, { method: "DELETE" });
       onChanged();
       setToDelete(null);
     } catch (err) {
@@ -62,24 +68,36 @@ function GameSlotList({
 
   return (
     <>
-      <ul className="flex flex-col gap-2">
-        {games.map((game) => (
+      {/* Сетка, а не список в одну колонку: слотов у этапа бывает больше
+          десяти, и каждый занимал целую строку почти пустой ширины. Число
+          колонок задаёт ширина самого блока, а не окна -- блок стоит в
+          колонке рядом с панелью настроек. */}
+      {/* @container на обёртке, а не на самой сетке: контейнерный запрос
+          отвечает за ПОТОМКОВ элемента, так что @md: на том же узле, где
+          объявлен @container, не срабатывает никогда. */}
+      <div className="@container">
+      <ul className="grid grid-cols-1 gap-2 @md:grid-cols-2 @3xl:grid-cols-3">
+        {games.map((game, index) => (
           <li
             key={game.id}
-            className="flex items-center justify-between gap-3 rounded-lg border border-ink-800 bg-ink-850 px-3.5 py-2.5"
+            className="flex items-center justify-between gap-2 rounded-lg border border-ink-800 bg-ink-850 px-3.5 py-2.5"
           >
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <span className="text-ink-100">Игра №{game.id}</span>
-              <span className="text-ink-500">{formatDateTime(game.starts_at)}</span>
-              {game.status === "rated" ? (
-                <span className="rounded-pill bg-emerald-900/40 px-2.5 py-0.5 text-xs text-emerald-300">
-                  Оценена
-                </span>
-              ) : (
-                <span className="rounded-pill bg-ink-800 px-2.5 py-0.5 text-xs text-ink-400">Ждёт оценки</span>
-              )}
+            <div className="flex min-w-0 flex-col gap-0.5 text-sm">
+              <span className="flex items-center gap-2">
+                <span className="text-ink-100">Игра {index + 1}</span>
+                {game.status === "rated" ? (
+                  <span className="rounded-pill bg-emerald-900/40 px-2 py-0.5 text-[11px] text-emerald-300">
+                    Оценена
+                  </span>
+                ) : (
+                  <span className="rounded-pill bg-ink-800 px-2 py-0.5 text-[11px] text-ink-400">
+                    Ждёт оценки
+                  </span>
+                )}
+              </span>
+              <span className="truncate text-xs text-ink-500">{formatDateTime(game.starts_at)}</span>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Link
                 href={`/mafia/admin/games/${game.id}/edit`}
                 title={game.status === "rated" ? "Изменить" : "Оценить"}
@@ -88,7 +106,7 @@ function GameSlotList({
                 <PencilSimple size={16} />
               </Link>
               <button
-                onClick={() => setToDelete(game)}
+                onClick={() => setToDelete({ game, number: index + 1 })}
                 title="Удалить"
                 className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
               >
@@ -98,12 +116,13 @@ function GameSlotList({
           </li>
         ))}
       </ul>
+      </div>
 
       <ConfirmDialog
         open={toDelete !== null}
-        title={`Удалить игру №${toDelete?.id}?`}
+        title={toDelete ? `Удалить игру ${toDelete.number}?` : ""}
         description={
-          toDelete?.status === "rated"
+          toDelete?.game.status === "rated"
             ? "Игра уже оценена — результат удалится безвозвратно, рейтинг всех участников будет пересчитан заново."
             : "Пустой слот будет удалён безвозвратно."
         }
@@ -179,7 +198,7 @@ function FlatGamesPanel({ tournamentId }: { tournamentId: number }) {
   useEffect(load, [tournamentId]);
 
   return (
-    <div>
+    <div className="rounded-card border border-ink-800 bg-ink-900/60 p-5">
       <h2 className="font-display text-lg text-ink-50">Игры турнира</h2>
       <p className="mt-1 max-w-xl text-sm text-ink-400">
         Для турнира без сетки (≤10 участников) — просто добавьте нужное число игр и оцените
@@ -275,7 +294,7 @@ function StagesPanel({ tournamentId }: { tournamentId: number }) {
   }
 
   return (
-    <div>
+    <div className="rounded-card border border-ink-800 bg-ink-900/60 p-5">
       <h2 className="font-display text-lg text-ink-50">Этапы</h2>
       <p className="mt-1 max-w-xl text-sm text-ink-400">
         Нужны только если участников больше 10 и турнир играется отборочными столами по

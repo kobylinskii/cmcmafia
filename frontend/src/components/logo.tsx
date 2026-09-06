@@ -14,13 +14,24 @@ import Link from "next/link";
  * rounded-full, он превращался в тёмный диск, неразличимый на ink-950.
  * rounded-full тут больше не нужен и вреден: эмблема уже круглая, а клип по
  * границам бокса срезал бы ей внешнее кольцо. */
-export function LogoMark({ size = 40, priority = false }: { size?: number; priority?: boolean }) {
+export function LogoMark({
+  size = 40,
+  priority = false,
+  className,
+}: {
+  size?: number;
+  priority?: boolean;
+  /** Нужен там, где знак крупный и должен ужиматься на узком экране
+   * (страница 404): width/height задают только внутренний размер картинки. */
+  className?: string;
+}) {
   return (
     <Image
       src="/logo/logo-badge.png"
       alt="Мафия ВМК"
       width={size}
       height={size}
+      className={className}
       // priority по умолчанию выключен: этот знак стоит в подвале и на
       // служебных экранах, предзагружать его вперёд контента незачем.
       priority={priority}

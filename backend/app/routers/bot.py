@@ -10,6 +10,7 @@ from app.timeutil import club_day
 from app.schemas.bot import (
     BotPlayerProfileOut,
     BotPlayerProfileUpdateIn,
+    BotPlayerStatsOut,
     BotPlayerRegisterIn,
     MyRegistrationOut,
     RegisterIn,
@@ -18,21 +19,64 @@ from app.schemas.bot import (
     RosterOut,
     SessionOut,
 )
-from app.services import admin_grant, bootstrap_admin_service, registration_service, slug_service
+from app.schemas.club import (
+    BotConfirmationAckIn,
+    BotConfirmationNotificationOut,
+    BotProfileChangeAckIn,
+    BotProfileChangeNotificationOut,
+)
+from app.services import (
+    admin_grant,
+    bootstrap_admin_service,
+    player_confirmation_service,
+    profile_change_service,
+    registration_service,
+    slug_service,
+    stats_service,
+)
+from app.services.player_confirmation_service import ConfirmationError
+from app.services.profile_change_service import ProfileChangeError
 from app.services.registration_service import RegistrationError
 
 router = APIRouter(prefix="/api/bot", tags=["bot"])
+
+# Поля профиля, которые PUT не имеет права обнулить: их собирает регистрация,
+# и пустыми они делают профиль неполным (а ФИО со статусом прохода -- ещё и
+# бесполезным для списка пропусков).
+_NON_CLEARABLE_PROFILE_FIELDS = frozenset(
+    {"nickname", "salutation", "full_name", "affiliation", "can_play", "can_staff"}
+)
+
+
+def _profile_out(db: Session, player: models.Player) -> BotPlayerProfileOut:
+    """Профиль + то, что по нему ждёт решения админа.
+
+    Значения полей остаются прежними до применения правки: в этом и смысл
+    модерации (см. app/services/profile_change_service.py).
+    """
+    out = BotPlayerProfileOut.model_validate(player, from_attributes=True)
+    out.pending_changes = {
+        change.field: change.new_value
+        for change in profile_change_service.pending_for_player(db, player_id=player.id)
+    }
+    return out
 
 
 @router.post("/players/register", response_model=BotPlayerProfileOut)
 @limiter.limit("20/minute")
 def register_player(
     request: Request, data: BotPlayerRegisterIn, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
-) -> models.Player:
+) -> BotPlayerProfileOut:
     if db.query(models.Player).filter(models.Player.telegram_id == data.telegram_id).first():
         raise HTTPException(409, "Этот Telegram-аккаунт уже зарегистрирован")
     if db.query(models.Player).filter(models.Player.nickname.ilike(data.nickname)).first():
         raise HTTPException(409, "Ник уже занят")
+    # players.phone UNIQUE: без явной проверки повторный номер долетал до
+    # констрейнта и возвращал 500 вместо понятного отказа. Случай не
+    # экзотический -- так выглядит попытка завести второй аккаунт на тот же
+    # телефон после смены Telegram.
+    if data.phone and db.query(models.Player).filter(models.Player.phone == data.phone).first():
+        raise HTTPException(409, "Этот номер телефона уже зарегистрирован")
 
     slug = slug_service.suggest_slug(data.nickname, db)
     player = models.Player(
@@ -46,14 +90,23 @@ def register_player(
         affiliation=data.affiliation,
         can_play=data.can_play,
         can_staff=data.can_staff,
+        # Регистрация в боте открыта кому угодно, поэтому новичок ждёт решения
+        # админа: на сайте его пока не видно (см. models.ConfirmationStatus),
+        # записываться на игры он при этом может сразу.
+        confirmation_status=models.ConfirmationStatus.pending.value,
     )
     db.add(player)
     db.flush()
     admin_grant.consume_pending_admin(db, player=player)
     bootstrap_admin_service.maybe_grant_bootstrap_admin(db, player=player)
+    if player.is_bot_admin:
+        # Админа клуба некому и незачем подтверждать: права ему дали либо
+        # приглашением по @username от действующего админа, либо bootstrap'ом
+        # из конфига -- обе проверки строже, чем ручное подтверждение заявки.
+        player.confirmation_status = models.ConfirmationStatus.confirmed.value
     db.commit()
     db.refresh(player)
-    return player
+    return _profile_out(db, player)
 
 
 @router.get("/players/me", response_model=BotPlayerProfileOut)
@@ -63,7 +116,7 @@ def get_my_profile(
     telegram_username: str | None = None,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
-) -> models.Player:
+) -> BotPlayerProfileOut:
     # Оппортунистическая синхронизация username при каждом /start — телеграм
     # не уведомляет бэкенд о смене username, поэтому бот просто присылает
     # текущее значение при каждом обращении. Заодно переоцениваем bootstrap-права
@@ -79,7 +132,7 @@ def get_my_profile(
     if changed:
         db.commit()
         db.refresh(actor)
-    return actor
+    return _profile_out(db, actor)
 
 
 @router.put("/players/me", response_model=BotPlayerProfileOut)
@@ -89,18 +142,137 @@ def update_my_profile(
     data: BotPlayerProfileUpdateIn,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
-) -> models.Player:
+) -> BotPlayerProfileOut:
+    """Правка профиля из бота.
+
+    Поля свободного ввода подтверждённого игрока сохраняются не сразу: они
+    уходят в очередь на проверку админу, а в профиле остаётся прежнее
+    значение. Кнопочные поля (обращение, статус прохода, роли, любимая роль)
+    применяются немедленно -- варианты в них задаёт сам бот.
+    """
     if data.nickname and data.nickname.lower() != actor.nickname.lower():
         if db.query(models.Player).filter(models.Player.nickname.ilike(data.nickname)).first():
             raise HTTPException(409, "Ник уже занят")
 
-    for field in ("salutation", "full_name", "affiliation", "nickname", "can_play", "can_staff"):
-        value = getattr(data, field)
-        if value is not None:
-            setattr(actor, field, value)
+    # exclude_unset отличает «поле не прислали» от «прислали null»: второе --
+    # осознанная очистка анкетного поля («убрать из профиля возраст»), и она
+    # должна сохраниться. Поля из NON_CLEARABLE обнулить нельзя: без них
+    # профиль перестаёт быть валидным.
+    for field, value in data.model_dump(exclude_unset=True).items():
+        if value is None and field in _NON_CLEARABLE_PROFILE_FIELDS:
+            continue
+        if profile_change_service.requires_moderation(actor, field):
+            try:
+                profile_change_service.submit(db, player=actor, field=field, value=value)
+            except ProfileChangeError as exc:
+                db.rollback()
+                raise HTTPException(409, exc.message) from exc
+            continue
+        setattr(actor, field, value)
     db.commit()
     db.refresh(actor)
-    return actor
+    return _profile_out(db, actor)
+
+
+@router.get("/players/me/stats", response_model=BotPlayerStatsOut)
+@limiter.limit("20/minute")
+def get_my_stats(
+    request: Request, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
+) -> BotPlayerStatsOut:
+    """Свою статистику игрок видит независимо от модерации: скрытие касается
+    публичной части сайта, а не собственной карточки в боте."""
+    stats = stats_service.compute_player_stats(db, actor.id)
+    return BotPlayerStatsOut(
+        total_games=stats.total_games,
+        wins=stats.wins,
+        win_rate=stats.win_rate,
+        rating=stats.rating,
+        rating_games_count=stats.rating_games_count,
+        rank=stats.rank,
+    )
+
+
+@router.post("/players/me/resubmit", response_model=BotPlayerProfileOut)
+@limiter.limit("20/minute")
+def resubmit_my_profile(
+    request: Request, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
+) -> BotPlayerProfileOut:
+    """Отклонённый игрок поправил анкету и просит проверить заново."""
+    try:
+        player_confirmation_service.resubmit(db, player=actor)
+        db.commit()
+    except ConfirmationError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.message) from exc
+    db.refresh(actor)
+    return _profile_out(db, actor)
+
+
+@router.get("/players/confirmation-notifications", response_model=list[BotConfirmationNotificationOut])
+@limiter.limit("60/minute")
+def list_confirmation_notifications(
+    request: Request, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
+) -> list[models.Player]:
+    """Очередь решений админа, о которых игрок ещё не знает.
+
+    Бэкенд сам в Telegram не пишет -- токен бота живёт только в боте, и
+    заводить его второй копией в API ради одного сообщения значит расширять
+    поверхность утечки. Поэтому доставка устроена опросом: бот забирает
+    очередь, рассылает и подтверждает ack'ом (ниже).
+    """
+    return player_confirmation_service.pending_notifications(db)
+
+
+@router.post("/players/confirmation-notifications/ack")
+@limiter.limit("60/minute")
+def ack_confirmation_notifications(
+    request: Request,
+    data: BotConfirmationAckIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bot_service),
+) -> dict:
+    marked = player_confirmation_service.mark_notified(db, player_ids=data.player_ids)
+    db.commit()
+    return {"marked": marked}
+
+
+@router.get(
+    "/players/profile-change-notifications", response_model=list[BotProfileChangeNotificationOut]
+)
+@limiter.limit("60/minute")
+def list_profile_change_notifications(
+    request: Request, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
+) -> list[BotProfileChangeNotificationOut]:
+    """Решения по правкам профиля, о которых игрок ещё не знает.
+
+    Очередь отдельная от решений по заявкам: сообщения разные, и подтверждать
+    доставку надо независимо -- иначе одно недоставленное решение держало бы
+    второе.
+    """
+    return [
+        BotProfileChangeNotificationOut(
+            change_id=change.id,
+            telegram_id=change.player.telegram_id,
+            field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
+            new_value=change.new_value,
+            status=change.status,
+            rejection_reason=change.rejection_reason,
+        )
+        for change in profile_change_service.pending_notifications(db)
+    ]
+
+
+@router.post("/players/profile-change-notifications/ack")
+@limiter.limit("60/minute")
+def ack_profile_change_notifications(
+    request: Request,
+    data: BotProfileChangeAckIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bot_service),
+) -> dict:
+    marked = profile_change_service.mark_notified(db, change_ids=data.change_ids)
+    db.commit()
+    return {"marked": marked}
 
 
 @router.get("/game-days")
@@ -158,12 +330,25 @@ def register_for_session(
         raise HTTPException(404, "Сессия недоступна для записи")
 
     try:
-        registration_service.register_for_kind(db, game=game, player=actor, role_kind=data.role_kind)
+        result = registration_service.register_for_kind(
+            db, game=game, player=actor, role_kind=data.role_kind
+        )
         db.commit()
     except RegistrationError as exc:
         db.rollback()
         return RegistrationOut(ok=False, message=exc.message, reason=exc.reason)
-    return RegistrationOut(ok=True, message="Вы успешно записаны")
+
+    if result.reserved:
+        # Отказа «мест нет» больше нет: стол собирается первым, следующие
+        # встают в очередь тем же нажатием (registration_service.JoinResult).
+        return RegistrationOut(
+            ok=True,
+            message=f"Основной состав уже собран — вы в резерве, №{result.position}",
+            role=result.role,
+            is_reserve=True,
+            reserve_position=result.position,
+        )
+    return RegistrationOut(ok=True, message="Вы успешно записаны", role=result.role)
 
 
 @router.post("/sessions/{session_id}/reserve", response_model=RegistrationOut)
@@ -171,6 +356,13 @@ def register_for_session(
 def reserve_for_session(
     request: Request, session_id: int, data: ReserveIn, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
 ) -> RegistrationOut:
+    """Явная постановка в очередь.
+
+    Обычный путь другой: /register сам отправляет в резерв всех, кто пришёл
+    после того, как стол собрался (registration_service.register_for_kind) --
+    отдельного экрана «мест нет» в боте больше нет. Ручка осталась как прямой
+    способ встать в очередь, не пытаясь занять место за столом.
+    """
     actor = db.query(models.Player).filter(models.Player.telegram_id == data.telegram_id).one_or_none()
     if actor is None:
         raise HTTPException(404, "Игрок не найден")

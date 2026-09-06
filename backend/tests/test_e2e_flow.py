@@ -231,21 +231,18 @@ def test_full_flow():
         assert resp.status_code == 200
         assert resp.json()["ok"] is True
 
-    # third player: main roster full (max_players=2) -> goes to reserve
+    # third player: main roster full (max_players=2) -> the same call puts them
+    # in the reserve queue, no second step
     resp = client.post(
         f"/api/bot/sessions/{session_id}/register",
         headers=BOT_HEADERS,
         json={"telegram_id": 203, "role_kind": "player"},
     )
-    assert resp.json()["ok"] is False  # role full
-
-    resp = client.post(
-        f"/api/bot/sessions/{session_id}/reserve",
-        headers=BOT_HEADERS,
-        json={"telegram_id": 203},
-    )
     assert resp.status_code == 200
-    assert resp.json()["ok"] is True
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["is_reserve"] is True
+    assert body["reserve_position"] == 1
 
     # player 201 cancels -> 203 should be auto-promoted from reserve
     resp = client.delete(

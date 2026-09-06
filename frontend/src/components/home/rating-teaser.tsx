@@ -1,5 +1,5 @@
 import { Container } from "@/components/ui/container";
-import { LinkButton } from "@/components/ui/button";
+import { FormulaLink } from "@/components/home/formula-link";
 import { Reveal } from "@/components/reveal";
 
 export function RatingTeaser() {
@@ -16,9 +16,7 @@ export function RatingTeaser() {
             в первые тридцать игр набирают и теряют очки быстрее.
           </p>
           <div className="mt-6">
-            <LinkButton href="/mafia/rating" variant="secondary">
-              Подробнее о формуле
-            </LinkButton>
+            <FormulaLink />
           </div>
         </Reveal>
       </Container>

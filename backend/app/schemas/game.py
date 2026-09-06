@@ -17,6 +17,8 @@ CREATABLE_GAME_TYPES = {"funky", "training"}
 
 
 def _round_half_step(value: float | None, step: float, field_name: str) -> float | None:
+    """Значение должно быть кратно шагу. Шаги заданы регламентом клуба и
+    продублированы в форме оценки (frontend/src/components/admin/game-form.tsx)."""
     if value is None:
         return None
     ratio = value / step
@@ -30,7 +32,8 @@ class ParticipantIn(BaseModel):
     seat_number: int = Field(ge=1, le=10)
     role: str
     points_win: float = Field(default=0, ge=0, le=10)
-    points_judge: float = Field(default=0, ge=-10, le=10)
+    # Судейские баллы -- от 0 до 5 с шагом 0.25 (регламент клуба).
+    points_judge: float = Field(default=0, ge=0, le=5)
     lh: float | None = Field(default=None, ge=0, le=1.5)
     ci: float | None = Field(default=None, ge=-20, le=20)
     info: str | None = None
@@ -52,6 +55,21 @@ class ParticipantIn(BaseModel):
         if v is not None and v not in INFO_VALUES:
             raise ValueError(f"info должен быть одним из {INFO_VALUES}")
         return v
+
+    @field_validator("points_win")
+    @classmethod
+    def validate_points_win(cls, v: float) -> float:
+        return _round_half_step(v, 0.25, "Баллы за победу")
+
+    @field_validator("points_judge")
+    @classmethod
+    def validate_points_judge(cls, v: float) -> float:
+        return _round_half_step(v, 0.25, "Баллы от судей")
+
+    @field_validator("ci")
+    @classmethod
+    def validate_ci(cls, v: float | None) -> float | None:
+        return _round_half_step(v, 0.5, "Ci")
 
     @field_validator("lh")
     @classmethod
@@ -124,6 +142,10 @@ class GameUpdate(BaseModel):
     result: str | None = None
     notes: str | None = Field(default=None, max_length=2000)
     participants: list[ParticipantIn] | None = None
+    # Осознанная смена состава в турнирной таблице, где уже есть другие
+    # оценённые игры. По умолчанию такое отклоняется 422 с кодом
+    # ROSTER_MISMATCH -- флаг ставит форма после подтверждения администратором.
+    allow_roster_change: bool = False
 
     @field_validator("game_type")
     @classmethod

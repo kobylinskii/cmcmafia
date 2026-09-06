@@ -27,8 +27,32 @@ from app.schemas.player import (
     PlayerUpdate,
     SiteAccessGrantOut,
 )
+from app.schemas.club import (
+    PassListEntryOut,
+    PassListGameOut,
+    PassListOut,
+    PassWeekSettingsIn,
+    PassWeekSettingsOut,
+    PendingPlayerOut,
+    PlayerRejectIn,
+    ProfileChangeOut,
+    ProfileChangeRejectIn,
+)
 from app import serializers
-from app.services import admin_grant, game_service, player_service, slug_service, stats_service, tournament_service
+from app.services import (
+    admin_grant,
+    game_service,
+    pass_list_service,
+    player_confirmation_service,
+    player_service,
+    profile_change_service,
+    settings_service,
+    slug_service,
+    stats_service,
+    tournament_service,
+)
+from app.services.player_confirmation_service import ConfirmationError
+from app.services.profile_change_service import ProfileChangeError
 from app.services.tournament_service import TournamentValidationError
 from app.services.game_service import GameValidationError, ParticipantInput
 from app.services.player_service import PlayerValidationError
@@ -150,6 +174,7 @@ def update_game(request: Request, game_id: int, data: GameUpdate, db: Session = 
             result=data.result,
             notes=data.notes,
             participants=_to_participant_inputs(data.participants) if data.participants is not None else None,
+            allow_roster_change=data.allow_roster_change,
         )
         db.commit()
     except GameValidationError as exc:
@@ -500,6 +525,103 @@ def suggest_slug(request: Request, nickname: str, db: Session = Depends(get_db))
     return {"slug": slug_service.suggest_slug(nickname, db)}
 
 
+@router.get("/players/pending", response_model=list[PendingPlayerOut])
+@limiter.limit("30/minute")
+def list_pending_players(request: Request, db: Session = Depends(get_db)) -> list[models.Player]:
+    """Заявки из бота, ждущие решения админа (вкладка «Обзор»)."""
+    return player_confirmation_service.list_pending(db)
+
+
+@router.post("/players/{player_id}/confirm", response_model=PlayerAdminOut)
+@limiter.limit("30/minute")
+def confirm_player(request: Request, player_id: int, db: Session = Depends(get_db)) -> models.Player:
+    player = db.get(models.Player, player_id)
+    if player is None:
+        raise HTTPException(404, "Игрок не найден")
+    try:
+        player_confirmation_service.confirm(db, player=player)
+        db.commit()
+    except ConfirmationError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
+    db.refresh(player)
+    return player
+
+
+@router.post("/players/{player_id}/reject", response_model=PlayerAdminOut)
+@limiter.limit("30/minute")
+def reject_player(
+    request: Request, player_id: int, data: PlayerRejectIn, db: Session = Depends(get_db)
+) -> models.Player:
+    player = db.get(models.Player, player_id)
+    if player is None:
+        raise HTTPException(404, "Игрок не найден")
+    try:
+        player_confirmation_service.reject(db, player=player, reason=data.reason)
+        db.commit()
+    except ConfirmationError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
+    db.refresh(player)
+    return player
+
+
+def _profile_change_out(change: models.PlayerProfileChange) -> ProfileChangeOut:
+    return ProfileChangeOut(
+        id=change.id,
+        player_id=change.player_id,
+        player_nickname=change.player.nickname,
+        player_slug=change.player.slug,
+        telegram_username=change.player.telegram_username,
+        field=change.field,
+        field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
+        current_value=profile_change_service.current_value(change.player, change.field),
+        new_value=change.new_value,
+        created_at=change.created_at,
+    )
+
+
+@router.get("/players/profile-changes", response_model=list[ProfileChangeOut])
+@limiter.limit("30/minute")
+def list_profile_changes(request: Request, db: Session = Depends(get_db)) -> list[ProfileChangeOut]:
+    """Правки профилей из бота, ждущие решения (вкладка «Обзор»)."""
+    return [_profile_change_out(change) for change in profile_change_service.list_pending(db)]
+
+
+@router.post("/players/profile-changes/{change_id}/apply", response_model=PlayerAdminOut)
+@limiter.limit("30/minute")
+def apply_profile_change(request: Request, change_id: int, db: Session = Depends(get_db)) -> models.Player:
+    change = db.get(models.PlayerProfileChange, change_id)
+    if change is None:
+        raise HTTPException(404, "Правка не найдена")
+    try:
+        profile_change_service.apply(db, change=change)
+        db.commit()
+    except ProfileChangeError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
+    db.refresh(change.player)
+    return change.player
+
+
+@router.post("/players/profile-changes/{change_id}/reject", response_model=PlayerAdminOut)
+@limiter.limit("30/minute")
+def reject_profile_change(
+    request: Request, change_id: int, data: ProfileChangeRejectIn, db: Session = Depends(get_db)
+) -> models.Player:
+    change = db.get(models.PlayerProfileChange, change_id)
+    if change is None:
+        raise HTTPException(404, "Правка не найдена")
+    try:
+        profile_change_service.reject(db, change=change, reason=data.reason)
+        db.commit()
+    except ProfileChangeError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
+    db.refresh(change.player)
+    return change.player
+
+
 @router.get("/players/{player_id}", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
 def get_player(request: Request, player_id: int, db: Session = Depends(get_db)) -> models.Player:
@@ -607,3 +729,64 @@ def remove_bot_admin(request: Request, player_id: int, db: Session = Depends(get
     player_service.set_bot_admin(db, player=player, is_admin=False)
     db.commit()
     return {"ok": True}
+
+
+@router.get("/pass-list", response_model=PassListOut)
+@limiter.limit("30/minute")
+def get_pass_list(request: Request, db: Session = Depends(get_db)) -> PassListOut:
+    """ФИО тех, кому нужен пропуск на текущую пропускную неделю.
+
+    Коммит здесь есть намеренно: settings_service может лениво создать строку
+    настроек, если базу чистили в обход миграции.
+    """
+    result = pass_list_service.build_pass_list(db)
+    db.commit()
+    return PassListOut(
+        week_start=result.week_start,
+        week_end=result.week_end,
+        rollover_weekday=result.rollover_weekday,
+        rollover_time=result.rollover_time,
+        entries=[
+            PassListEntryOut(
+                player_id=entry.player_id,
+                nickname=entry.nickname,
+                full_name=entry.full_name,
+                phone=entry.phone,
+                confirmation_status=entry.confirmation_status,
+                games=[
+                    PassListGameOut(
+                        game_id=game.game_id,
+                        starts_at=game.starts_at,
+                        game_type=game.game_type,
+                        location=game.location,
+                        role=game.role,
+                    )
+                    for game in entry.games
+                ],
+            )
+            for entry in result.entries
+        ],
+    )
+
+
+@router.get("/settings/pass-week", response_model=PassWeekSettingsOut)
+@limiter.limit("30/minute")
+def get_pass_week_settings(request: Request, db: Session = Depends(get_db)) -> models.ClubSettings:
+    settings = settings_service.get_settings(db)
+    db.commit()
+    return settings
+
+
+@router.put("/settings/pass-week", response_model=PassWeekSettingsOut)
+@limiter.limit("30/minute")
+def update_pass_week_settings(
+    request: Request, data: PassWeekSettingsIn, db: Session = Depends(get_db)
+) -> models.ClubSettings:
+    settings = settings_service.update_settings(
+        db,
+        pass_week_rollover_weekday=data.pass_week_rollover_weekday,
+        pass_week_rollover_time=data.pass_week_rollover_time,
+    )
+    db.commit()
+    db.refresh(settings)
+    return settings

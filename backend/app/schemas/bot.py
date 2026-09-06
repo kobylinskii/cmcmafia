@@ -5,6 +5,9 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AFFILIATIONS = {"vmk", "mgu_no_pass", "outside_need_pass"}
+# Те же значения, что и у анкеты игрока на сайте (app/schemas/player.ROLE_VALUES):
+# бот заполняет ровно то же поле players.favorite_role.
+FAVORITE_ROLES = {"mafia", "don", "sheriff", "citizen"}
 # Турнирные игры больше не создаются и не набираются через бота вообще:
 # у них теперь своя сетка этапов, управляемая целиком на сайте (см. раздел
 # «Турниры» в админке). Бот работает только с фанки/обучающими сессиями.
@@ -51,6 +54,20 @@ class BotPlayerProfileOut(BaseModel):
     can_play: bool
     can_staff: bool
     is_bot_admin: bool
+    # Анкетные поля с сайта -- бот показывает их в профиле и даёт заполнить
+    # всё, кроме фото.
+    age: int | None
+    favorite_role: str | None
+    experience: str | None
+    bio: str | None
+    # Модерация регистрации (models.ConfirmationStatus): бот показывает статус
+    # в профиле и предлагает отклонённому отправиться на повторную проверку.
+    confirmation_status: str
+    rejection_reason: str | None
+    # Правки, ждущие решения админа: {поле: новое значение}. Значение null --
+    # запрошенная очистка поля. В самом профиле поля остаются прежними, и
+    # бот показывает эту пару рядом («сейчас X, на проверке Y»).
+    pending_changes: dict[str, str | None] = {}
 
 
 class BotPlayerProfileUpdateIn(BaseModel):
@@ -60,12 +77,23 @@ class BotPlayerProfileUpdateIn(BaseModel):
     nickname: str | None = Field(default=None, min_length=2, max_length=100)
     can_play: bool | None = None
     can_staff: bool | None = None
+    age: int | None = Field(default=None, ge=5, le=100)
+    favorite_role: str | None = None
+    experience: str | None = Field(default=None, max_length=2000)
+    bio: str | None = Field(default=None, max_length=4000)
 
     @field_validator("affiliation")
     @classmethod
     def validate_affiliation(cls, v: str | None) -> str | None:
         if v is not None and v not in AFFILIATIONS:
             raise ValueError(f"affiliation должен быть одним из {AFFILIATIONS}")
+        return v
+
+    @field_validator("favorite_role")
+    @classmethod
+    def validate_favorite_role(cls, v: str | None) -> str | None:
+        if v is not None and v not in FAVORITE_ROLES:
+            raise ValueError(f"favorite_role должен быть одним из {FAVORITE_ROLES}")
         return v
 
 
@@ -123,6 +151,12 @@ class RegistrationOut(BaseModel):
     reason: str | None = None
     promoted_telegram_id: int | None = None
     promoted_nickname: str | None = None
+    # Чем закончилась запись: роль за столом либо 'reserve' с номером в
+    # очереди. Одиннадцатый игрок попадает в резерв тем же нажатием, что и
+    # первый десяток, и узнать об этом бот может только отсюда.
+    role: str | None = None
+    is_reserve: bool = False
+    reserve_position: int | None = None
 
 
 class MyRegistrationOut(BaseModel):
@@ -192,3 +226,33 @@ class AdminInfoOut(BaseModel):
     telegram_id: int | None
     nickname: str
     telegram_username: str | None
+
+
+class BroadcastPlayerOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    telegram_id: int
+    nickname: str
+
+
+class WeeklyBroadcastOut(BaseModel):
+    """Всё, что боту нужно для анонса игр на неделю: что рассылать и кому."""
+
+    days: int
+    games: list[SessionOut]
+    recipients: list[BroadcastPlayerOut]
+
+
+class BotPlayerStatsOut(BaseModel):
+    """Очень короткая выжимка для карточки профиля в боте.
+
+    Отдельная ручка, а не поля в /players/me: профиль читается почти на каждое
+    нажатие кнопки, а статистика -- это тяжёлый агрегат по всем играм.
+    """
+
+    total_games: int
+    wins: int
+    win_rate: float | None
+    rating: float | None
+    rating_games_count: int
+    rank: int | None

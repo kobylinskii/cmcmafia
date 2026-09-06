@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import func
@@ -19,6 +20,21 @@ class RegistrationError(Exception):
         self.message = message
         self.reason = reason
         super().__init__(message)
+
+
+@dataclass(frozen=True)
+class JoinResult:
+    """Чем закончилась попытка записаться.
+
+    Резерв перестал быть отдельным действием пользователя: первые десять
+    занимают места за столом, одиннадцатый тем же нажатием встаёт в очередь.
+    Вызывающему коду нужно знать, что именно произошло, -- отсюда этот
+    результат вместо голой Registration.
+    """
+
+    role: str
+    reserved: bool
+    position: int | None = None
 
 
 def _role_count(db: Session, game_id: int, role: str) -> int:
@@ -117,14 +133,44 @@ def register(
     return reg
 
 
-def register_for_kind(db: Session, *, game: models.Game, player: models.Player, role_kind: str) -> models.Registration:
+def register_for_kind(db: Session, *, game: models.Game, player: models.Player, role_kind: str) -> JoinResult:
+    """Записать игрока на игру в выбранном качестве.
+
+    Роль 'player' переполнением не отказывает: стол на max_players человек
+    собирается первым, а все следующие тем же нажатием уходят в резерв и
+    поднимаются автоматически при первой отмене. Раньше здесь возвращался
+    отказ role_full, бот показывал отдельный экран «мест нет», и попасть в
+    очередь можно было только вторым нажатием -- половина людей до него не
+    доходила.
+
+    Штаб (ведущий + двое судей) резерва не имеет: заменить ведущего некем,
+    очередь на эти три места была бы очередью в пустоту.
+    """
     if role_kind == "player":
-        return register(db, game=game, player=player, role="player")
+        try:
+            reg = register(db, game=game, player=player, role="player")
+        except RegistrationError as exc:
+            if exc.reason != "role_full":
+                raise
+            add_to_reserve(db, game_id=game.id, player_id=player.id)
+            return JoinResult(role="reserve", reserved=True, position=reserve_position(db, game_id=game.id))
+        return JoinResult(role=reg.role, reserved=False)
     if role_kind != "staff":
         raise RegistrationError("Неизвестный тип роли")
     if _role_count(db, game.id, "host") < HOST_LIMIT:
-        return register(db, game=game, player=player, role="host")
-    return register(db, game=game, player=player, role="judge")
+        reg = register(db, game=game, player=player, role="host")
+    else:
+        reg = register(db, game=game, player=player, role="judge")
+    return JoinResult(role=reg.role, reserved=False)
+
+
+def reserve_position(db: Session, *, game_id: int) -> int:
+    """Длина очереди резерва. Вызывается сразу после add_to_reserve, поэтому
+    равна номеру только что добавленного: created_at на неподтверждённой
+    строке ещё не заполнен сервером, и считать место по нему нельзя."""
+    return (
+        db.query(func.count(models.Reserve.id)).filter(models.Reserve.game_id == game_id).scalar() or 0
+    )
 
 
 def add_to_reserve(db: Session, *, game_id: int, player_id: int) -> models.Reserve:

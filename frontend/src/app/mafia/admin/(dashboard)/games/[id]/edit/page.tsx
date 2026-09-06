@@ -20,12 +20,19 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
 
   return (
     <div>
-      <Link href="/mafia/admin/games" className="inline-flex items-center gap-1.5 text-sm text-ink-400 hover:text-ink-100">
+      {/* Ссылка ведёт туда же, куда форма возвращает после сохранения:
+          турнирную игру админ открывает из карточки турнира, а не из общего
+          списка игр (турнирных там вообще нет). */}
+      <Link
+        href={game?.tournament ? `/mafia/admin/tournaments/${game.tournament.id}/edit` : "/mafia/admin/games"}
+        className="inline-flex items-center gap-1.5 text-sm text-ink-400 hover:text-ink-100"
+      >
         <ArrowLeft size={16} />
-        Игры
+        {game?.tournament ? game.tournament.name : "Игры"}
       </Link>
       <h1 className="mt-3 font-display text-2xl text-ink-50">
         {game ? `Игра №${game.id}` : "Загрузка…"}
+        {game?.stage && <span className="ml-3 text-base text-ink-400">{game.stage.name}</span>}
       </h1>
       {error && <p className="mt-4 text-sm text-brand-300">{error}</p>}
       {game && (

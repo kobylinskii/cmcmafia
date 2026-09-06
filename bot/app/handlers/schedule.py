@@ -1,191 +1,53 @@
+"""Запись на игры и свои регистрации.
+
+Оба раздела -- цепочки экранов, живущие в одном сообщении: формат -> роль ->
+день -> игра, и список регистраций -> состав игры. Каждый экран умеет
+вернуться назад, поэтому в чате не остаётся ни одной клавиатуры прошлого шага.
+Именно здесь старый бот плодил их больше всего: четыре шага записи -- четыре
+сообщения, и все с рабочими кнопками.
+"""
+
+from __future__ import annotations
+
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from datetime import datetime
 
-from app.api_client import ApiClient, format_day, format_day_time, format_time
+from app import texts
+from app.api_client import (
+    ApiClient,
+    ApiError,
+    format_day,
+    format_day_time,
+    format_time,
+    from_api_datetime,
+    now_local,
+)
+from app.handlers.common import require_profile
 from app.keyboards.inline import (
-    ALL_GAMES_TOKEN,
-    GAME_TYPE_LABELS,
     game_days_keyboard,
-    game_detail_keyboard,
     game_slots_keyboard,
     game_types_keyboard,
-    join_reserve_keyboard,
+    my_registration_keyboard,
+    my_registrations_keyboard,
     registration_role_keyboard,
-    user_registrations_keyboard,
 )
+from app.ui import consume_input, edit_screen, open_screen
 
 logger = logging.getLogger(__name__)
 
 router = Router(name="schedule")
 
+PICK_TYPE = "На какие игры записываемся?"
 
-def _restore_day(token: str) -> str | None:
+
+def _day_from_token(token: str) -> str | None:
     if len(token) != 8 or not token.isdigit():
         return None
     return f"{token[:2]}.{token[2:4]}.{token[4:]}"
-
-
-def _role_kind_label(role: str) -> str:
-    return "Игрок" if role == "player" else "Ведущий/судья"
-
-
-def _game_type_title(game_type: str) -> str:
-    if game_type == ALL_GAMES_TOKEN:
-        return "Все форматы"
-    return GAME_TYPE_LABELS[game_type]
-
-
-def _is_valid_game_type(game_type: str) -> bool:
-    return game_type == ALL_GAMES_TOKEN or game_type in GAME_TYPE_LABELS
-
-
-def _filter_registrations_by_stage(items: list[dict], stage: str) -> list[dict]:
-    now = datetime.now()
-    filtered: list[dict] = []
-    for item in items:
-        starts_at = datetime.strptime(format_day_time(item["starts_at"]), "%d.%m.%Y %H:%M")
-        is_completed = starts_at <= now
-        if stage == "completed" and is_completed:
-            filtered.append(item)
-        if stage == "active" and not is_completed:
-            filtered.append(item)
-    return filtered
-
-
-def _my_registrations_text(stage: str, visible_items: list[dict]) -> str:
-    stage_label = "действующие" if stage == "active" else "завершенные"
-    lines = [
-        "Ваши регистрации.",
-        "Нажмите на игру, чтобы увидеть подробности и при необходимости отменить запись.",
-        f"Сейчас показаны: {stage_label}.",
-    ]
-    if not visible_items:
-        lines.append("В этом разделе пока нет игр.")
-    return "\n".join(lines)
-
-
-def _game_participants_text(game: dict, roster: dict) -> str:
-    by_role: dict[str, list[dict]] = {"host": [], "judge": [], "player": []}
-    for row in roster["registrations"]:
-        by_role.setdefault(row["role"], []).append(row)
-    game_type = GAME_TYPE_LABELS.get(game.get("game_type", ""), game.get("game_type", "-"))
-    lines = [
-        f"Состав игры #{game['id']}",
-        f"Когда: {format_day_time(game['starts_at'])}",
-        f"Где: {game['location']}",
-        f"Тип: {game_type}",
-        "",
-    ]
-    role_titles = {"host": "Ведущий", "judge": "Судья", "player": "Игроки"}
-    for role in ("host", "judge", "player"):
-        items = by_role.get(role, [])
-        lines.append(f"{role_titles[role]}:")
-        if not items:
-            lines.append("• пока никого")
-            continue
-        for idx, item in enumerate(items, start=1):
-            if role == "player":
-                lines.append(f"{idx}. {item['nickname']}")
-            else:
-                lines.append(f"• {item['nickname']}")
-        lines.append("")
-    reserves = roster.get("reserves") or []
-    if reserves:
-        lines.append("Резерв:")
-        for idx, item in enumerate(reserves, start=1):
-            lines.append(f"{idx}. {item['nickname']}")
-    return "\n".join(lines).strip()
-
-
-@router.message(F.text.in_({"📝 Регистрация на игры", "🎭 Расписание игр", "Расписание игр"}))
-async def start_registration_menu(message: Message, api: ApiClient) -> None:
-    if not await api.get_profile(message.from_user.id):
-        await message.answer("Сначала пройдите регистрацию: /start")
-        return
-    await message.answer("Выберите формат игр:", reply_markup=game_types_keyboard())
-
-
-@router.callback_query(F.data.startswith("reg_type:"))
-async def pick_game_type(callback: CallbackQuery, api: ApiClient) -> None:
-    user = await api.get_profile(callback.from_user.id)
-    if not user:
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
-        return
-    _, game_type = callback.data.split(":")
-    if not _is_valid_game_type(game_type):
-        await callback.answer("Неизвестный формат игр.", show_alert=True)
-        return
-    can_play = bool(user.get("can_play"))
-    can_staff = bool(user.get("can_staff"))
-    if can_play and can_staff:
-        await callback.message.answer(
-            f"{_game_type_title(game_type)}: выберите роль для регистрации.",
-            reply_markup=registration_role_keyboard(can_play=True, can_staff=True, game_type=game_type),
-        )
-    elif can_play or can_staff:
-        days = await api.list_game_days(callback.from_user.id, game_type=game_type)
-        if not days:
-            await callback.message.answer(
-                f"Для формата «{_game_type_title(game_type)}» нет доступных дней для новой регистрации."
-            )
-        else:
-            role_kind = "player" if can_play else "staff"
-            await callback.message.answer(
-                f"{_game_type_title(game_type)}: выберите день.",
-                reply_markup=game_days_keyboard(game_type=game_type, role_kind=role_kind, days=days),
-            )
-    else:
-        await callback.message.answer(
-            "У вас не выбраны роли для регистрации. Обратитесь к администратору."
-        )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("reg_role:"))
-async def pick_registration_role(callback: CallbackQuery, api: ApiClient) -> None:
-    if not await api.get_profile(callback.from_user.id):
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
-        return
-    _, game_type, role_kind = callback.data.split(":")
-    if not _is_valid_game_type(game_type) or role_kind not in {"player", "staff"}:
-        await callback.answer("Некорректный выбор.", show_alert=True)
-        return
-    days = await api.list_game_days(callback.from_user.id, game_type=game_type)
-    if not days:
-        await callback.answer("Нет доступных дней для новой регистрации.", show_alert=True)
-        return
-    await callback.message.answer(
-        f"{_game_type_title(game_type)} ({_role_kind_label(role_kind)}): выберите день.",
-        reply_markup=game_days_keyboard(game_type=game_type, role_kind=role_kind, days=days),
-    )
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("reg_day:"))
-async def pick_registration_day(callback: CallbackQuery, api: ApiClient) -> None:
-    if not await api.get_profile(callback.from_user.id):
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
-        return
-    _, game_type, role_kind, day_token = callback.data.split(":")
-    day = _restore_day(day_token)
-    if not day:
-        await callback.answer("Некорректный день.", show_alert=True)
-        return
-    games = await api.list_open_sessions(callback.from_user.id, game_type=game_type, day=day)
-    games = [_with_time(g) for g in games]
-    if not games:
-        await callback.answer("На выбранный день нет доступных игр для новой регистрации.", show_alert=True)
-        return
-    await callback.message.answer(
-        f"{_game_type_title(game_type)}, {day}. Выберите игру:",
-        reply_markup=game_slots_keyboard(game_type=game_type, role_kind=role_kind, games=games),
-    )
-    await callback.answer()
 
 
 def _with_time(game: dict) -> dict:
@@ -194,234 +56,306 @@ def _with_time(game: dict) -> dict:
     return game
 
 
-@router.callback_query(F.data.startswith("reg_game:"))
-async def register_for_game(callback: CallbackQuery, api: ApiClient) -> None:
+async def _days_screen(api: ApiClient, tg_id: int, game_type: str, role_kind: str) -> tuple[str, object] | None:
+    days = await api.list_game_days(tg_id, game_type=game_type)
+    if not days:
+        return None
+    # Возврат со списка дней всегда ведёт к выбору формата, а не к выбору роли:
+    # у игрока с одной ролью экрана роли не было вовсе, и «Назад» на него
+    # просто перерисовывал бы список дней -- кнопка, которая ничего не делает.
+    back_to = "sg:types"
+    return (
+        f"{texts.game_type_title(game_type)} · {texts.REGISTRATION_ROLES.get(role_kind, '')}\n\n"
+        "Выберите день:",
+        game_days_keyboard(game_type=game_type, role_kind=role_kind, days=days, back_to=back_to),
+    )
+
+
+# ------------------------------------------------------------ запись на игры
+@router.message(Command("games"))
+async def start_registration(message: Message, state: FSMContext, api: ApiClient) -> None:
+    await consume_input(message)
+    if not await require_profile(message, state, api):
+        return
+    await state.set_state(None)
+    await open_screen(message, state, PICK_TYPE, game_types_keyboard())
+
+
+@router.callback_query(F.data == "sg:types")
+async def back_to_types(callback: CallbackQuery, state: FSMContext) -> None:
+    await edit_screen(callback, state, PICK_TYPE, game_types_keyboard())
+
+
+@router.callback_query(F.data.startswith("sg:type:"))
+async def pick_type(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_type = callback.data.split(":")[2]
+    if not texts.is_known_game_type(game_type):
+        await callback.answer("Неизвестный формат игр.", show_alert=True)
+        return
+
+    user = await api.get_profile(callback.from_user.id)
+    if user is None:
+        await callback.answer("Профиль не найден, начните с /start.", show_alert=True)
+        return
+
+    can_play, can_staff = bool(user.get("can_play")), bool(user.get("can_staff"))
+    if can_play and can_staff:
+        await edit_screen(
+            callback,
+            state,
+            f"{texts.game_type_title(game_type)}\n\nВ какой роли записываемся?",
+            registration_role_keyboard(game_type, can_play=True, can_staff=True),
+        )
+        return
+    if not (can_play or can_staff):
+        await callback.answer(
+            "В профиле не отмечено ни одной роли. Откройте «Профиль» и выберите, "
+            "за кого вы готовы играть.",
+            show_alert=True,
+        )
+        return
+
+    # Роль всего одна -- лишний экран выбора только мешает.
+    role_kind = "player" if can_play else "staff"
+    screen = await _days_screen(api, callback.from_user.id, game_type, role_kind)
+    if screen is None:
+        await edit_screen(
+            callback,
+            state,
+            f"{texts.game_type_title(game_type)}\n\nСвободных игр для записи сейчас нет.",
+            game_types_keyboard(),
+        )
+        return
+    await edit_screen(callback, state, screen[0], screen[1])
+
+
+@router.callback_query(F.data.startswith("sg:role:"))
+async def pick_role(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    _, _, game_type, role_kind = callback.data.split(":")
+    if not texts.is_known_game_type(game_type) or role_kind not in texts.REGISTRATION_ROLES:
+        await callback.answer("Некорректный выбор.", show_alert=True)
+        return
+    screen = await _days_screen(api, callback.from_user.id, game_type, role_kind)
+    if screen is None:
+        await edit_screen(
+            callback,
+            state,
+            f"{texts.game_type_title(game_type)}\n\nСвободных игр для записи сейчас нет.",
+            game_types_keyboard(),
+        )
+        return
+    await edit_screen(callback, state, screen[0], screen[1])
+
+
+@router.callback_query(F.data.startswith("sg:day:"))
+async def pick_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    _, _, game_type, role_kind, token = callback.data.split(":")
+    day = _day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+    await _show_slots(callback, state, api, game_type=game_type, role_kind=role_kind, day=day)
+
+
+async def _show_slots(
+    callback: CallbackQuery, state: FSMContext, api: ApiClient, *, game_type: str, role_kind: str, day: str
+) -> None:
+    games = [_with_time(g) for g in await api.list_open_sessions(callback.from_user.id, game_type=game_type, day=day)]
+    back_to = f"sg:role:{game_type}:{role_kind}"
+    if not games:
+        screen = await _days_screen(api, callback.from_user.id, game_type, role_kind)
+        if screen is None:
+            await edit_screen(
+                callback, state, "Свободных игр для записи не осталось.", game_types_keyboard(),
+                alert="На этот день свободных игр не осталось",
+            )
+            return
+        await edit_screen(callback, state, screen[0], screen[1], alert="На этот день свободных игр не осталось")
+        return
+
+    await edit_screen(
+        callback,
+        state,
+        f"{texts.game_type_title(game_type)} · {day}\n\n"
+        f"Игры на этот день ({texts.REGISTRATION_ROLES.get(role_kind, '')}):\n"
+        "Собранный стол помечен «в резерв» — запись на него ставит в очередь.",
+        game_slots_keyboard(game_type=game_type, role_kind=role_kind, games=games, back_to=back_to),
+    )
+
+
+@router.callback_query(F.data.startswith("sg:game:"))
+async def register_for_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    _, _, game_type, role_kind, raw_id = callback.data.split(":")
     tg_id = callback.from_user.id
-    user = await api.get_profile(tg_id)
-    if not user:
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
-        return
-    _, game_type, role_kind, game_id_raw = callback.data.split(":")
-    if not _is_valid_game_type(game_type):
-        await callback.answer("Некорректный формат игр.", show_alert=True)
-        return
-    game_id = int(game_id_raw)
-    game = await api.get_session(tg_id, game_id)
-    if not game or (game_type != ALL_GAMES_TOKEN and game.get("game_type") != game_type):
+    game = await api.get_session(tg_id, int(raw_id))
+    if game is None:
         await callback.answer("Игра не найдена.", show_alert=True)
         return
     if not game["is_open"]:
-        await callback.answer("Регистрация на эту игру закрыта.", show_alert=True)
-        return
-    if role_kind == "player" and not user.get("can_play"):
-        await callback.answer("У вас нет доступа к роли «Игрок».", show_alert=True)
-        return
-    if role_kind == "staff" and not user.get("can_staff"):
-        await callback.answer("У вас нет доступа к роли «Ведущий/судья».", show_alert=True)
+        await callback.answer("Запись на эту игру уже закрыта.", show_alert=True)
         return
 
-    result = await api.register_for_session(tg_id, game_id, role_kind)
-    if not result["ok"] and result.get("reason") == "role_full":
-        await callback.message.answer(
-            f"{result['message']}\nХотите встать в резерв? Если освободится место, "
-            "мы автоматически запишем вас игроком.",
-            reply_markup=join_reserve_keyboard(game_id),
-        )
-        await callback.answer()
+    try:
+        result = await api.register_for_session(tg_id, game["id"], role_kind)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
         return
 
     day = format_day(game["starts_at"])
-    games = [_with_time(g) for g in await api.list_open_sessions(tg_id, game_type=game_type, day=day)]
-    if not games:
-        try:
-            await callback.message.edit_text(
-                f"{_game_type_title(game_type)}, {day}. Все доступные игры на этот день уже выбраны ✅",
-            )
-        except TelegramBadRequest as exc:
-            if "message is not modified" not in str(exc).lower():
-                raise
-        await callback.answer(result["message"])
+    if not result["ok"]:
+        await callback.answer(result["message"], show_alert=True)
         return
-    try:
-        await callback.message.edit_text(
-            f"{_game_type_title(game_type)}, {day}. Выберите игру:",
-            reply_markup=game_slots_keyboard(game_type=game_type, role_kind=role_kind, games=games),
+
+    await _show_slots(callback, state, api, game_type=game_type, role_kind=role_kind, day=day)
+    if result.get("is_reserve"):
+        # Отдельного экрана «мест нет» больше нет: стол на десять человек
+        # собирается первым, одиннадцатый тем же нажатием встаёт в очередь
+        # и поднимается автоматически при первой отмене.
+        await callback.answer(
+            f"Стол на игру #{game['id']} уже собран — вы в резерве, №{result.get('reserve_position')}. "
+            "Освободится место — бот запишет вас и напишет.",
+            show_alert=True,
         )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc).lower():
-            raise
-    await callback.answer(result["message"])
-
-
-@router.callback_query(F.data.startswith("reg_reserve:"))
-async def join_reserve(callback: CallbackQuery, api: ApiClient) -> None:
-    tg_id = callback.from_user.id
-    if not await api.get_profile(tg_id):
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
         return
-    game_id = int(callback.data.split(":")[1])
-    if not await api.get_session(tg_id, game_id):
-        await callback.answer("Игра не найдена.", show_alert=True)
-        return
-    result = await api.reserve_for_session(tg_id, game_id)
-    if result["ok"]:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except TelegramBadRequest:
-            pass
-    await callback.answer(result["message"], show_alert=True)
+    role_label = texts.ROSTER_ROLES.get(result.get("role") or "", "").lower()
+    suffix = f" ({role_label})" if role_label else ""
+    await callback.answer(f"Записались на игру #{game['id']}{suffix} ✅")
 
 
-@router.message(F.text.in_({"📋 Ваши регистрации", "📋 Список игр"}))
+# --------------------------------------------------------- мои регистрации
+def _is_past(item: dict) -> bool:
+    """Игра уже началась. Сравнение обязано идти в клубной зоне: наивный
+    datetime.now() в контейнере с UTC уводил границу на три часа, и вечерняя
+    игра сразу после записи показывалась в «прошедших»."""
+    return from_api_datetime(item["starts_at"]) <= now_local()
+
+
+async def _my_items(api: ApiClient, tg_id: int, stage: str) -> list[dict]:
+    items = await api.my_registrations(tg_id)
+    visible = [item for item in items if _is_past(item) == (stage == "completed")]
+    for item in visible:
+        item["day_time"] = format_day_time(item["starts_at"])
+        if item.get("is_reserve"):
+            item["role"] = "reserve"
+    return sorted(visible, key=lambda item: item["starts_at"], reverse=(stage == "completed"))
+
+
+def _my_text(stage: str, items: list[dict]) -> str:
+    title = "📋 Предстоящие игры" if stage == "active" else "📋 Прошедшие игры"
+    if not items:
+        empty = (
+            "Вы пока никуда не записаны. Откройте «📝 Запись на игры» в меню, чтобы выбрать игру."
+            if stage == "active"
+            else "Сыгранных игр пока нет."
+        )
+        return f"{title}\n\n{empty}"
+    return f"{title}\n\nНажмите на игру, чтобы увидеть состав и отменить запись."
+
+
+@router.message(Command("my"))
 async def my_registrations(message: Message, state: FSMContext, api: ApiClient) -> None:
-    tg_id = message.from_user.id
-    if not await api.get_profile(tg_id):
-        await message.answer("Сначала пройдите регистрацию: /start")
+    await consume_input(message)
+    if not await require_profile(message, state, api):
         return
-    stage = "active"
-    items = await api.my_registrations(tg_id)
-    visible_items = _filter_registrations_by_stage(items, stage)
-    sent = await message.answer(
-        _my_registrations_text(stage, visible_items),
-        reply_markup=user_registrations_keyboard(visible_items, stage),
-    )
-    await state.update_data(
-        my_registrations_message_id=sent.message_id,
-        my_registrations_stage=stage,
-        my_registrations_view_message_id=None,
-    )
+    await state.set_state(None)
+    items = await _my_items(api, message.from_user.id, "active")
+    await open_screen(message, state, _my_text("active", items), my_registrations_keyboard(items, "active"))
 
 
-@router.callback_query(F.data.startswith("myreg_stage:"))
-async def switch_my_registrations_stage(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    tg_id = callback.from_user.id
-    if not await api.get_profile(tg_id):
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
-        return
-    stage = callback.data.split(":")[1]
+@router.callback_query(F.data.startswith("mr:list:"))
+async def switch_stage(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    stage = callback.data.split(":")[2]
     if stage not in {"active", "completed"}:
-        await callback.answer("Некорректный этап.", show_alert=True)
+        await callback.answer()
         return
-    items = await api.my_registrations(tg_id)
-    visible_items = _filter_registrations_by_stage(items, stage)
-    try:
-        await callback.message.edit_text(
-            _my_registrations_text(stage, visible_items),
-            reply_markup=user_registrations_keyboard(visible_items, stage),
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc).lower():
-            raise
-    await state.update_data(my_registrations_stage=stage)
-    await callback.answer()
+    items = await _my_items(api, callback.from_user.id, stage)
+    await edit_screen(callback, state, _my_text(stage, items), my_registrations_keyboard(items, stage))
 
 
-@router.callback_query(F.data.startswith("myreg_view:"))
-async def show_my_registration_game_participants(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+@router.callback_query(F.data.startswith("mr:view:"))
+async def view_registration(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
     tg_id = callback.from_user.id
-    if not await api.get_profile(tg_id):
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
-        return
-    game_id = int(callback.data.split(":")[1])
 
     mine = await api.my_registrations(tg_id)
     own = next((item for item in mine if item["game_id"] == game_id), None)
     if own is None:
-        await callback.answer("Вы не зарегистрированы на эту игру.", show_alert=True)
+        await callback.answer("Вы не записаны на эту игру.", show_alert=True)
         return
-    is_reserve = own["is_reserve"]
 
     game = await api.get_session(tg_id, game_id)
-    if not game:
+    if game is None:
         await callback.answer("Игра не найдена.", show_alert=True)
         return
     roster = await api.session_roster(tg_id, game_id)
-    text = _game_participants_text(game, roster)
-    keyboard = game_detail_keyboard(game_id, is_reserve)
-    data = await state.get_data()
-    previous_view_message_id = data.get("my_registrations_view_message_id")
-    if previous_view_message_id:
-        try:
-            await callback.bot.edit_message_text(
-                chat_id=callback.message.chat.id,
-                message_id=int(previous_view_message_id),
-                text=text,
-                reply_markup=keyboard,
-            )
-            await callback.answer()
-            return
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                await callback.answer()
-                return
-    sent = await callback.message.answer(text, reply_markup=keyboard)
-    await state.update_data(my_registrations_view_message_id=sent.message_id)
-    await callback.answer()
+    await edit_screen(
+        callback,
+        state,
+        _roster_text(game, roster),
+        my_registration_keyboard(
+            game_id,
+            is_reserve=bool(own.get("is_reserve")),
+            # Прошедшую игру отменять нечего: запись уже стала историей.
+            can_cancel=not _is_past(own),
+        ),
+    )
 
 
-@router.callback_query(F.data.startswith("myreg_cancel:"))
-async def cancel_my_registration(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    tg_id = callback.from_user.id
-    if not await api.get_profile(tg_id):
-        await callback.answer("Сначала пройдите регистрацию: /start", show_alert=True)
+def _roster_text(game: dict, roster: dict) -> str:
+    by_role: dict[str, list[dict]] = {"host": [], "judge": [], "player": []}
+    for row in roster["registrations"]:
+        by_role.setdefault(row["role"], []).append(row)
+
+    lines = [
+        f"Игра #{game['id']} · {texts.GAME_TYPES.get(game.get('game_type', ''), '')}",
+        f"Когда: {format_day_time(game['starts_at'])}",
+        f"Где: {game.get('location') or '—'}",
+        "",
+    ]
+    for role in ("host", "judge", "player"):
+        members = by_role.get(role, [])
+        lines.append(f"{texts.ROSTER_ROLES[role]}:")
+        if not members:
+            lines.append("• пока никого")
+        else:
+            for index, member in enumerate(members, start=1):
+                prefix = f"{index}." if role == "player" else "•"
+                lines.append(f"{prefix} {member['nickname']}")
+        lines.append("")
+
+    reserves = roster.get("reserves") or []
+    if reserves:
+        lines.append("Резерв:")
+        lines += [f"{index}. {item['nickname']}" for index, item in enumerate(reserves, start=1)]
+    return "\n".join(lines).strip()
+
+
+@router.callback_query(F.data.startswith("mr:cancel:"))
+async def cancel_registration(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    try:
+        result = await api.cancel_registration(callback.from_user.id, game_id)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
         return
-    parts = callback.data.split(":")
-    game_id = int(parts[1])
-    is_reserve = len(parts) > 2 and parts[2] == "reserve"
-
-    result = await api.cancel_registration(tg_id, game_id)
     if not result["ok"]:
-        await callback.answer("Вы не зарегистрированы на эту игру.", show_alert=True)
+        await callback.answer("Вы не записаны на эту игру.", show_alert=True)
         return
 
-    if result.get("promoted_telegram_id"):
+    promoted = result.get("promoted_telegram_id")
+    if promoted:
         try:
             await callback.bot.send_message(
-                result["promoted_telegram_id"],
-                f"🎉 Освободилось место игрока в игре #{game_id} — вы переведены из резерва в основной состав!",
+                promoted,
+                f"🎉 В игре #{game_id} освободилось место — вы переведены из резерва в основной состав!",
             )
         except Exception:
-            logger.warning(
-                "Не удалось уведомить пользователя %s о продвижении из резерва", result["promoted_telegram_id"]
-            )
+            # Человек мог заблокировать бота: своё место он всё равно получил,
+            # ронять из-за этого отмену чужой записи нельзя.
+            logger.warning("Не удалось уведомить %s о переводе из резерва", promoted)
 
-    await callback.answer("Вы удалены из резерва." if is_reserve else "Регистрация отменена.")
-    try:
-        await callback.message.edit_text(
-            "Вы вышли из резерва на эту игру." if is_reserve else "Регистрация на эту игру отменена."
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc).lower():
-            raise
-    try:
-        await callback.message.edit_reply_markup(reply_markup=None)
-    except TelegramBadRequest:
-        pass
-
-    data = await state.get_data()
-    list_message_id = data.get("my_registrations_message_id")
-    if not list_message_id:
-        return
-    current_stage = data.get("my_registrations_stage", "active")
-    if current_stage not in {"active", "completed"}:
-        current_stage = "active"
-    items = await api.my_registrations(tg_id)
-    visible_items = _filter_registrations_by_stage(items, current_stage)
-    try:
-        await callback.bot.edit_message_text(
-            chat_id=callback.message.chat.id,
-            message_id=int(list_message_id),
-            text=_my_registrations_text(current_stage, visible_items),
-            reply_markup=user_registrations_keyboard(visible_items, current_stage),
-        )
-    except TelegramBadRequest as exc:
-        if "message is not modified" not in str(exc).lower():
-            raise
-
-
-@router.message(F.text.in_({"Статистика", "📊 Статистика"}))
-async def statistics_stub_handler(message: Message) -> None:
-    await message.answer(
-        "📊 Статистика\n"
-        "Полная статистика и рейтинг доступны на сайте клуба — раздел /mafia."
+    items = await _my_items(api, callback.from_user.id, "active")
+    await edit_screen(
+        callback, state, _my_text("active", items), my_registrations_keyboard(items, "active"),
+        alert="Запись отменена",
     )

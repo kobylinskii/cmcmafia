@@ -111,6 +111,8 @@ class PlayerAdminOut(BaseModel):
     bio: str | None
     photo_url: str | None
     is_active: bool
+    confirmation_status: str
+    rejection_reason: str | None
     is_bot_admin: bool
     is_site_admin: bool
     site_username: str | None

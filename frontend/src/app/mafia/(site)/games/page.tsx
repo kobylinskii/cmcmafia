@@ -8,7 +8,13 @@ import { GameCard } from "@/components/games/game-card";
 import { firstParam, intParam } from "@/lib/search-params";
 
 export const metadata: Metadata = { title: "Игры" };
-export const revalidate = 300;
+// Рендер на каждый запрос, а не пререндер при сборке. Кеширование живёт
+// уровнем ниже -- в serverGet, где у каждого запроса к API стоит
+// next: { revalidate, tags } (см. lib/api-server.ts), и сбрасывается по тегу
+// после правки в админке. Страничного revalidate здесь быть не должно: Next
+// тогда пытается собрать страницу статически в момент `docker compose build`,
+// где бэкенда ещё нет, и сборка падает на getaddrinfo ENOTFOUND api.
+export const dynamic = "force-dynamic";
 
 export default async function GamesPage({
   searchParams,

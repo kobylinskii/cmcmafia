@@ -14,6 +14,12 @@ const variants: Record<Variant, string> = {
   ghost: "text-ink-100 hover:text-ink-50 hover:bg-ink-850",
 };
 
+/** Классы кнопки для случаев, когда нужен обычный <a>, а не next/link --
+ * например, ссылка с якорем на другую страницу (см. rating-teaser). */
+export function buttonClasses(variant: Variant = "primary", className?: string) {
+  return clsx(base, variants[variant], className);
+}
+
 export function Button({
   variant = "primary",
   className,

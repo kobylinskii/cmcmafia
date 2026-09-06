@@ -6,6 +6,9 @@ import { ListChecks, UsersThree, Warning } from "@phosphor-icons/react/dist/ssr"
 import { clientFetch } from "@/lib/api";
 import type { GameListItem } from "@/types/api";
 import { formatDateTime } from "@/lib/format";
+import { PendingPlayers } from "@/components/admin/pending-players";
+import { ProfileChanges } from "@/components/admin/profile-changes";
+import { PassList } from "@/components/admin/pass-list";
 
 export default function AdminOverviewPage() {
   const [pending, setPending] = useState<GameListItem[] | null>(null);
@@ -71,6 +74,11 @@ export default function AdminOverviewPage() {
           ))}
         </div>
       </div>
+
+      <PendingPlayers />
+      <ProfileChanges />
+
+      <PassList />
     </div>
   );
 }

@@ -125,14 +125,17 @@ def test_removals_and_ppk_are_penalised_and_summed(admin):
     ids = make_players(client, headers, 10)
     tid = make_tournament(client, headers)
 
+    # player1 -- дон, то есть чёрный: по правилу ППК победа уходит городу, а
+    # сам нарушитель остаётся без баллов за победу, без судейских и без ЛХ.
+    # Из плюсов ему доступен только Ci (компенсация, а не заработанный балл).
     make_tournament_game(
         client, headers, tournament_id=tid, starts_at="2026-04-01T18:00:00Z",
+        result="city_win",
         participants=_participants(
             ids,
             extras={
                 ids[0]: {
-                    "points_win": 2.5, "points_judge": 1.0, "ci": 0.5,
-                    "info": "first_killed", "lh": 1.5,
+                    "ci": 0.5,
                     "removals": 2, "ppk": True, "zk": 0.5, "sk": 0.0,
                 },
             },
@@ -141,8 +144,8 @@ def test_removals_and_ppk_are_penalised_and_summed(admin):
 
     standings = {row["slug"]: row for row in _standings(client, "kubok-vmk")}
     row = standings["player1"]
-    # баллы: 2.5 + 1.0 + 1.0(3/3 ЛХ) + 0.5 = 5.0; штрафы: 0.5 + 0 + 2*0.5 + 1.0 = 2.5
-    assert row["total_score"] == 2.5
+    # баллы: 0.5 (только Ci); штрафы: 0.5 ЖК + 0 СК + 2*0.5 удаления + 2.5 ППК = 4.0
+    assert row["total_score"] == -3.5
     assert row["ppk_count"] == 1
     assert row["removals"] == 2
     assert row["zk"] == 0.5
