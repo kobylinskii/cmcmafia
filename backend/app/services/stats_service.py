@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -7,7 +8,8 @@ from sqlalchemy import and_, case, func, nullslast, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
-from app.services import visibility
+from app.services import rating_service, visibility
+from app.textmatch import ci_contains
 from app.timeutil import CLUB_TZ
 
 # ЛХ хранится в game_participants.lh как ПОПАДАНИЯ («сколько из трёх названных
@@ -26,10 +28,11 @@ _LH_POINTS_SQL = case(
 # как счётчик и флаг, поэтому им нужны ставки. Это не то же самое, что штрафы
 # в очках Эло (rating_service._penalty_rates, там 3..15 очков рейтинга).
 #
-# ЗНАЧЕНИЯ НИЖЕ -- ДОПУЩЕНИЕ, регламентом клуба они не подтверждены. Если у вас
-# другие -- меняются здесь, в одном месте, и пересчёта БД не требуют.
+# Ставка за ППК -- 2.5 балла, по регламенту клуба. Ставка за удаление
+# регламентом не подтверждена и остаётся допущением. Меняются здесь, в одном
+# месте, и пересчёта БД не требуют.
 SCORE_PENALTY_PER_REMOVAL = 0.5
-SCORE_PENALTY_PPK = 1.0
+SCORE_PENALTY_PPK = 2.5
 
 _PENALTY_SQL = (
     func.coalesce(models.GameParticipant.zk, 0)
@@ -51,6 +54,19 @@ _SCORE_SQL = (
 # это компенсация, а не заработанный игроком дополнительный балл.
 _BONUS_SQL = models.GameParticipant.points_judge + _LH_POINTS_SQL
 
+def _score(value) -> float:
+    """Numeric из БД -> float для JSON, округлённый до сотых.
+
+    _SCORE_SQL складывает NUMERIC-колонки с питоновскими литералами штрафов
+    (0.5, 2.5, 1.0 в _LH_POINTS_SQL) -- Postgres приводит такое выражение к
+    double precision, и сумма по турниру приезжает как 2.7999999999999998.
+    Шкала баллов -- четверти балла, дальше сотых значащих цифр нет, так что
+    округление здесь ничего не теряет и убирает мусорный хвост сразу во всех
+    клиентах (сайт, админка, бот), а не в одной вёрстке.
+    """
+    return round(float(value), 2)
+
+
 BLACK_ROLES = ("mafia", "don")
 RED_ROLES = ("citizen", "sheriff")
 
@@ -63,6 +79,7 @@ def list_rated_games(
     date_from: date | None = None,
     date_to: date | None = None,
     game_type: str | None = None,
+    exclude_game_type: str | None = None,
     player_slug: str | None = None,
     tournament_slug: str | None = None,
 ) -> tuple[list[models.Game], int]:
@@ -78,6 +95,11 @@ def list_rated_games(
         query = query.filter(models.Game.starts_at < day_after)
     if game_type:
         query = query.filter(models.Game.game_type == game_type)
+    if exclude_game_type:
+        # Нужно вкладке «Игры» в админке: турнирные игры там больше не
+        # показываются, у них своя очередь оценки внутри этапа (см. вкладку
+        # «Турниры» и app.services.tournament_service).
+        query = query.filter(models.Game.game_type != exclude_game_type)
     if tournament_slug:
         query = query.filter(
             models.Game.tournament_id.in_(
@@ -114,7 +136,7 @@ def site_counters(db: Session) -> dict[str, int]:
     players = (
         db.query(func.count())
         .select_from(models.Player)
-        .filter(models.Player.is_active.is_(True))
+        .filter(*visibility.public_player_criteria())
         .scalar()
     )
     tournaments = db.query(func.count()).select_from(models.Tournament).scalar()
@@ -133,6 +155,7 @@ def get_rated_game(db: Session, game_id: int) -> models.Game | None:
         .options(
             selectinload(models.Game.participants).selectinload(models.GameParticipant.player),
             selectinload(models.Game.tournament),
+            selectinload(models.Game.stage),
         )
         .filter(models.Game.id == game_id, models.Game.status == "rated")
         .one_or_none()
@@ -142,7 +165,9 @@ def get_rated_game(db: Session, game_id: int) -> models.Game | None:
 @dataclass
 class RatingRow:
     player: models.Player
-    rank: int
+    # None у найденного поиском игрока, который ещё не сыграл ни одной игры:
+    # места в рейтинге у него нет.
+    rank: int | None
     rating: float
     games_count: int
     win_rate: float | None
@@ -150,55 +175,255 @@ class RatingRow:
 
 
 def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[RatingRow], int]:
+    # Обучающие игры исключены ровно там же, где их исключает реплей рейтинга
+    # (rating_service.UNRATED_GAME_TYPES). Без этого средний доп. балл считался
+    # по большему числу игр, чем показывает соседняя колонка «Игр»: она берётся
+    # из PlayerRating, куда обучающие игры не попадают вовсе.
     avg_bonus_subq = (
         db.query(
             models.GameParticipant.player_id.label("player_id"),
             func.avg(_BONUS_SQL).label("avg_bonus"),
         )
         .join(models.Game, models.Game.id == models.GameParticipant.game_id)
-        .filter(models.Game.status == "rated")
+        .filter(
+            models.Game.status == "rated",
+            models.Game.game_type.notin_(rating_service.UNRATED_GAME_TYPES),
+        )
         .group_by(models.GameParticipant.player_id)
         .subquery()
     )
 
-    query = (
-        db.query(models.Player, models.PlayerRating, avg_bonus_subq.c.avg_bonus)
-        .outerjoin(models.PlayerRating, models.PlayerRating.player_id == models.Player.id)
-        .outerjoin(avg_bonus_subq, avg_bonus_subq.c.player_id == models.Player.id)
-        # Тот же критерий видимости, что и у остальной публичной части: без
-        # него поиск показывал бы новичка, которого админ ещё не подтвердил, --
-        # причём со ссылкой на страницу, отдающую 404.
-        .filter(*visibility.public_player_criteria())
+    # Ранг считает БД оконной функцией, а не enumerate() по странице выдачи.
+    # Два следствия, оба нужны:
+    #  * при равных рейтингах место общее (rank(), а не row_number()) -- ровно
+    #    так же, как его считает compute_player_stats для страницы игрока;
+    #    раньше таблица давала девяти игрокам с одинаковым рейтингом места
+    #    2..10, а каждая их личная страница -- «#2»;
+    #  * ранг не зависит от фильтра поиска и от смещения: найденный по нику
+    #    игрок показывает своё место в клубе, а не номер строки в выдаче.
+    rank_subq = (
+        db.query(
+            models.PlayerRating.player_id.label("player_id"),
+            func.rank().over(order_by=models.PlayerRating.rating.desc()).label("rank"),
+        )
+        .join(models.Player, models.Player.id == models.PlayerRating.player_id)
+        .filter(*visibility.public_player_criteria(), models.PlayerRating.games_count > 0)
+        .subquery()
+    )
+
+    columns = db.query(
+        models.Player, models.PlayerRating, avg_bonus_subq.c.avg_bonus, rank_subq.c.rank
     )
     if q:
         # Поиск -- это «найди человека», а не «покажи таблицу»: новичок без
         # единой сыгранной игры обязан находиться по нику, иначе его страницу
-        # на сайте не открыть ниоткуда. В самой таблице (без запроса) он
-        # по-прежнему не показывается -- рейтинга у него ещё нет.
-        query = query.filter(models.Player.nickname.ilike(f"%{q.strip()}%"))
+        # на сайте не открыть ниоткуда. Рейтинга и места у него нет -- отсюда
+        # внешние соединения и NULL в обеих колонках.
+        query = (
+            columns.outerjoin(models.PlayerRating, models.PlayerRating.player_id == models.Player.id)
+            .outerjoin(rank_subq, rank_subq.c.player_id == models.Player.id)
+            .outerjoin(avg_bonus_subq, avg_bonus_subq.c.player_id == models.Player.id)
+            .filter(*visibility.public_player_criteria())
+            .filter(ci_contains(models.Player.nickname, q.strip()))
+        )
     else:
-        query = query.filter(models.PlayerRating.games_count > 0)
+        # Сама таблица -- только те, кто уже играл: у остальных рейтинга нет.
+        query = (
+            columns.join(models.PlayerRating, models.PlayerRating.player_id == models.Player.id)
+            .join(rank_subq, rank_subq.c.player_id == models.Player.id)
+            .outerjoin(avg_bonus_subq, avg_bonus_subq.c.player_id == models.Player.id)
+            .filter(*visibility.public_player_criteria(), models.PlayerRating.games_count > 0)
+        )
 
     total = query.count()
-    # nullslast: у ненайденных в рейтинге его просто нет, и место им -- в конце.
-    query = query.order_by(nullslast(models.PlayerRating.rating.desc()))
-    rows = query.offset(offset).limit(limit).all()
+    # Player.id -- уникальный тай-брейкер. Без него порядок строк с одинаковым
+    # рейтингом не определён, и OFFSET/LIMIT резал набор в разных порядках:
+    # одни игроки попадали на две страницы сразу, другие не попадали никуда.
+    # nullslast: ненумерованным (ещё не игравшим) место в конце выдачи.
+    rows = (
+        query.order_by(nullslast(rank_subq.c.rank.asc()), models.Player.id.asc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
 
     result: list[RatingRow] = []
-    for idx, (player, rating, avg_bonus) in enumerate(rows, start=offset + 1):
+    for player, rating, avg_bonus, rank in rows:
         games_count = rating.games_count if rating else 0
         win_rate = (rating.wins / games_count) if games_count else None
         result.append(
             RatingRow(
                 player=player,
-                rank=idx,
+                # None -- «места нет», а не «место нулевое»: так найденный
+                # поиском новичок и приезжает на сайт (там он рисуется прочерком).
+                rank=int(rank) if rank is not None else None,
                 rating=float(rating.rating) if rating else 0.0,
                 games_count=games_count,
                 win_rate=win_rate,
-                avg_bonus=float(avg_bonus) if avg_bonus is not None else None,
+                avg_bonus=_score(avg_bonus) if avg_bonus is not None else None,
             )
         )
     return result, total
+
+
+@dataclass
+class TournamentStandingRow:
+    player: models.Player
+    rank: int
+    games_count: int
+    points_win: float
+    points_judge: float
+    lh_points: float
+    ci: float
+    removals: int
+    ppk_count: int
+    zk: float
+    sk: float
+    total_score: float
+
+
+def tournament_standings(
+    db: Session, *, tournament_id: int, stage_id: int | None = None
+) -> list[TournamentStandingRow]:
+    """Турнирная таблица: суммы игровых колонок по оценённым играм турнира,
+    один игрок -- одна строка, отсортировано по total_score.
+
+    stage_id фильтрует по конкретному этапу. stage_id=None -- НЕ "без
+    фильтра", а "игры без этапа" (Game.stage_id IS NULL): для турнира без
+    сеток это ровно все его игры (game_service принудительно держит там
+    stage_id=NULL), так что вызывающему коду не нужно различать "турнир с
+    сетками" и "турнир без сеток" -- обычный турнир просто эквивалентен
+    турниру с сетками, но без единого зарегистрированного этапа.
+
+    total_score считается суммой той же _SCORE_SQL, что и колонка «Итог» в
+    карточке отдельной игры (stats_service.get_rated_game) -- сумма итогов по
+    играм турнира равна итогу от суммы колонок, формула линейна по каждому
+    слагаемому, так что переносить её сюда отдельной строкой не нужно.
+    """
+    rows = (
+        db.query(
+            models.GameParticipant.player_id,
+            func.count().label("games_count"),
+            func.sum(models.GameParticipant.points_win).label("points_win"),
+            func.sum(models.GameParticipant.points_judge).label("points_judge"),
+            func.sum(_LH_POINTS_SQL).label("lh_points"),
+            func.sum(func.coalesce(models.GameParticipant.ci, 0)).label("ci"),
+            func.sum(func.coalesce(models.GameParticipant.removals, 0)).label("removals"),
+            func.count().filter(models.GameParticipant.ppk.is_(True)).label("ppk_count"),
+            func.sum(func.coalesce(models.GameParticipant.zk, 0)).label("zk"),
+            func.sum(func.coalesce(models.GameParticipant.sk, 0)).label("sk"),
+            func.sum(_SCORE_SQL).label("total_score"),
+        )
+        .join(models.Game, models.Game.id == models.GameParticipant.game_id)
+        .filter(
+            models.Game.tournament_id == tournament_id,
+            models.Game.stage_id == stage_id,
+            models.Game.status == "rated",
+        )
+        .group_by(models.GameParticipant.player_id)
+        .order_by(func.sum(_SCORE_SQL).desc())
+        .all()
+    )
+    if not rows:
+        return []
+
+    players = {
+        p.id: p
+        for p in db.query(models.Player).filter(models.Player.id.in_([r.player_id for r in rows])).all()
+    }
+
+    return [
+        TournamentStandingRow(
+            player=players[r.player_id],
+            rank=idx,
+            games_count=r.games_count,
+            points_win=_score(r.points_win),
+            points_judge=_score(r.points_judge),
+            lh_points=_score(r.lh_points),
+            ci=_score(r.ci),
+            removals=int(r.removals),
+            ppk_count=int(r.ppk_count),
+            zk=_score(r.zk),
+            sk=_score(r.sk),
+            total_score=_score(r.total_score),
+        )
+        for idx, r in enumerate(rows, start=1)
+    ]
+
+
+def tournament_standings_all(
+    db: Session, *, tournament_id: int
+) -> dict[int | None, list[TournamentStandingRow]]:
+    """Сводные таблицы СРАЗУ по всем этапам турнира: {stage_id -> строки}, где
+    ключ None -- игры без этапа.
+
+    Страница турнира показывает таблицу каждого этапа плюс таблицу игр без
+    этапа. Вызов tournament_standings() в цикле по этапам давал по два запроса
+    на этап (агрегация + добор игроков) и рос линейно: на восьми этапах вся
+    ручка стоила 36 запросов. Здесь агрегация одна на весь турнир с
+    группировкой по (stage_id, player_id), игроки добираются одним IN.
+    """
+    rows = (
+        db.query(
+            models.Game.stage_id.label("stage_id"),
+            models.GameParticipant.player_id,
+            func.count().label("games_count"),
+            func.sum(models.GameParticipant.points_win).label("points_win"),
+            func.sum(models.GameParticipant.points_judge).label("points_judge"),
+            func.sum(_LH_POINTS_SQL).label("lh_points"),
+            func.sum(func.coalesce(models.GameParticipant.ci, 0)).label("ci"),
+            func.sum(func.coalesce(models.GameParticipant.removals, 0)).label("removals"),
+            func.count().filter(models.GameParticipant.ppk.is_(True)).label("ppk_count"),
+            func.sum(func.coalesce(models.GameParticipant.zk, 0)).label("zk"),
+            func.sum(func.coalesce(models.GameParticipant.sk, 0)).label("sk"),
+            func.sum(_SCORE_SQL).label("total_score"),
+        )
+        .join(models.Game, models.Game.id == models.GameParticipant.game_id)
+        .filter(
+            models.Game.tournament_id == tournament_id,
+            models.Game.status == "rated",
+        )
+        .group_by(models.Game.stage_id, models.GameParticipant.player_id)
+        .all()
+    )
+    if not rows:
+        return {}
+
+    players = {
+        p.id: p
+        for p in db.query(models.Player)
+        .filter(models.Player.id.in_({r.player_id for r in rows}))
+        .all()
+    }
+
+    by_stage: dict[int | None, list] = defaultdict(list)
+    for r in rows:
+        by_stage[r.stage_id].append(r)
+
+    result: dict[int | None, list[TournamentStandingRow]] = {}
+    for stage_id, stage_rows in by_stage.items():
+        # Сортировка в Python, а не в SQL: одним запросом на весь турнир
+        # ORDER BY дал бы общий порядок, а таблицы этапов нумеруются каждая
+        # со своей единицы. Строк тут десятки, не тысячи.
+        stage_rows.sort(key=lambda r: _score(r.total_score), reverse=True)
+        result[stage_id] = [
+            TournamentStandingRow(
+                player=players[r.player_id],
+                rank=idx,
+                games_count=r.games_count,
+                points_win=_score(r.points_win),
+                points_judge=_score(r.points_judge),
+                lh_points=_score(r.lh_points),
+                ci=_score(r.ci),
+                removals=int(r.removals),
+                ppk_count=int(r.ppk_count),
+                zk=_score(r.zk),
+                sk=_score(r.sk),
+                total_score=_score(r.total_score),
+            )
+            for idx, r in enumerate(stage_rows, start=1)
+        ]
+    return result
 
 
 @dataclass
@@ -306,8 +531,8 @@ def compute_player_stats(db: Session, player_id: int) -> PlayerStats:
     stats = PlayerStats(
         **{k: (v or 0) for k, v in row._mapping.items() if k not in ("avg_score", "avg_bonus")}
     )
-    stats.avg_score = float(row.avg_score) if row.avg_score is not None else None
-    stats.avg_bonus = float(row.avg_bonus) if row.avg_bonus is not None else None
+    stats.avg_score = _score(row.avg_score) if row.avg_score is not None else None
+    stats.avg_bonus = _score(row.avg_bonus) if row.avg_bonus is not None else None
 
     rating = db.get(models.PlayerRating, player_id)
     if rating and rating.games_count > 0:
@@ -318,7 +543,7 @@ def compute_player_stats(db: Session, player_id: int) -> PlayerStats:
             .select_from(models.PlayerRating)
             .join(models.Player, models.Player.id == models.PlayerRating.player_id)
             .filter(
-                models.Player.is_active.is_(True),
+                *visibility.public_player_criteria(),
                 models.PlayerRating.games_count > 0,
                 models.PlayerRating.rating > rating.rating,
             )

@@ -36,7 +36,9 @@ class RatingFormulaOut(BaseModel):
 
 
 class RatingRowOut(BaseModel):
-    rank: int
+    # null у найденного поиском игрока без единой сыгранной игры: места в
+    # рейтинге у него ещё нет (stats_service.rating_table).
+    rank: int | None
     slug: str
     nickname: str
     photo_url: str | None

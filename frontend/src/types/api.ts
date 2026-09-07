@@ -145,7 +145,9 @@ export interface SchedulePlanPreviewOut {
 }
 
 export interface RatingRowOut {
-  rank: number;
+  /** null у найденного поиском игрока без единой сыгранной игры: места в
+   * рейтинге у него ещё нет. В таблице рисуется прочерком. */
+  rank: number | null;
   slug: string;
   nickname: string;
   photo_url: string | null;
