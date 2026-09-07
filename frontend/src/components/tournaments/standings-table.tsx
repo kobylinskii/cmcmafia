@@ -23,7 +23,7 @@ export function TournamentStandingsTable({
   if (rows.length === 0) {
     return (
       <p className="border-l-2 border-ink-700 py-4 pl-6 text-base text-ink-400">
-        Пока нет оценённых партий — таблица появится после первой.
+        Пока нет оценённых игр — таблица появится после первой.
       </p>
     );
   }

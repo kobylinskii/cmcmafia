@@ -8,7 +8,7 @@ const cards = [
     href: "/mafia/rating",
     icon: ChartLineUp,
     title: "Рейтинг",
-    body: "Таблица клуба по системе Эло. Разбор формулы и поиск игрока.",
+    body: "Таблица клуба по системе Эло. Разбор формулы и поиск игроков.",
     tone: "large" as const,
   },
   {

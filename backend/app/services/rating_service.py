@@ -121,14 +121,14 @@ def describe_formula():
                 text=f"ожидаемый результат команды игрока против команды соперников (по среднему "
                 f"рейтингу команд, в диапазоне {E_MIN:.1f}–{E_MAX:.1f})",
             ),
-            RatingLegendItem(symbol="M", text=f"число игроков в команде ({int(M)})"),
-            RatingLegendItem(symbol="K", text="коэффициент по опыту игрока — см. таблицу ниже"),
-            RatingLegendItem(symbol="O", text="штраф за удаления и ППК — см. таблицу ниже"),
+            RatingLegendItem(symbol="M", text="Специальный коэффициент"),
+            RatingLegendItem(symbol="K", text="коэффициент по опыту игрока"),
+            RatingLegendItem(symbol="O", text="Штрафы"),
         ],
         expected_score_min=E_MIN,
         expected_score_max=E_MAX,
         k_tiers=k_tiers,
-        note="Победа над сильным столом и высокие баллы за игру растят рейтинг быстрее, "
+        note="Победа над сильным столом и высокие баллы за игру увеличивают рейтинг быстрее, "
         "чем победа над слабыми.",
         game_type_weights=game_type_weights,
         training_note="Обучающие игры не влияют на рейтинг и не идут в счётчик рейтинговых игр, "

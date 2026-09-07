@@ -1,26 +1,10 @@
-# Драйвер логов по умолчанию -- json-file без ограничений: файл растёт, пока не
-# кончится диск, и на хостинге это вопрос времени, а не «если». Три файла по
-# 10 МБ на сервис -- потолок ~150 МБ на весь стек.
-x-logging: &default-logging
-  driver: json-file
-  options:
-    max-size: "10m"
-    max-file: "3"
-
 services:
   postgres:
     image: postgres:16
     restart: unless-stopped
-    logging: *default-logging
     environment:
       POSTGRES_USER: postgres
-      # Пароль берётся из окружения хоста; дефолт оставлен, чтобы локальный
-      # `docker compose up` работал из коробки. ПЕРЕД ХОСТИНГОМ задать свой:
-      #   echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)" >> .env
-      # Порт наружу не проброшен, база видна только внутри compose-сети, но
-      # дефолтный пароль в публичном репозитории -- всё равно плохая отправная
-      # точка, и менять его после первого запуска дороже (том уже создан с ним).
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: postgres
       POSTGRES_DB: mafia
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -33,12 +17,10 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
-    logging: *default-logging
 
   api:
     build: ./backend
     restart: unless-stopped
-    logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,7 +33,7 @@ services:
       # uvicorn прямо на хосте (там postgres/redis доступны как localhost),
       # а внутри compose-сети адреса -- это имена сервисов. env_file читается
       # первым, environment побеждает.
-      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/mafia
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/mafia
       REDIS_URL: redis://redis:6379/0
       # Единственный, кто ходит в API -- nginx из этой же сети, поэтому его
       # X-Forwarded-For можно доверять. Без этого uvicorn доверяет заголовку
@@ -67,15 +49,6 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
     volumes:
       - media_players:/app/media/players
-    # /health отдаёт сам FastAPI (app/main.py). Проверка нужна не ради
-    # красоты: контейнер поднимается командой `alembic upgrade head &&
-    # uvicorn`, и пока миграции идут, api уже "Up", но ещё не отвечает.
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
     # Порт наружу НЕ пробрасывается: API доступен только через nginx
     # (ARCHITECTURE.md, раздел 10). С проброшенным портом FORWARDED_ALLOW_IPS=*
     # позволил бы кому угодно подделать X-Forwarded-For и обойти rate limit,
@@ -85,21 +58,15 @@ services:
   bot:
     build: ./bot
     restart: unless-stopped
-    logging: *default-logging
     depends_on:
       - api
-      - redis
     env_file:
       # Создать перед первым запуском, иначе compose не стартует вообще:
-      # cp bot/.env.example bot/.env
       - ./bot/.env
     environment:
       # То же, что у api: внутри compose-сети бэкенд -- это имя сервиса,
       # а не localhost, на который рассчитан .env для запуска бота с хоста.
       API_BASE_URL: http://api:8000
-      # FSM бота: без внешнего хранилища незавершённая регистрация терялась
-      # при каждом рестарте контейнера (см. bot/bot.py, build_storage).
-      REDIS_URL: redis://redis:6379/0
 
   frontend:
     build:
@@ -115,10 +82,8 @@ services:
         # NEXT_PUBLIC_SITE_URL=https://example.ru docker compose build frontend
         NEXT_PUBLIC_SITE_URL: "${NEXT_PUBLIC_SITE_URL:-http://localhost}"
     restart: unless-stopped
-    logging: *default-logging
     depends_on:
-      api:
-        condition: service_healthy
+      - api
     environment:
       # Сервер Next.js (не браузер) ходит к бэкенду напрямую по имени сервиса.
       API_INTERNAL_URL: http://api:8000
@@ -126,7 +91,6 @@ services:
   nginx:
     image: nginx:alpine
     restart: unless-stopped
-    logging: *default-logging
     depends_on:
       - frontend
       - api

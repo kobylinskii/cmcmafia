@@ -75,7 +75,7 @@ export default async function TournamentPage({ params }: PageProps<"/mafia/tourn
           <span className="font-mono text-ink-300">
             {games_count}
             <span className="ml-1.5 font-sans text-ink-500">
-              {plural(data.games_count, ["сыгранная партия", "сыгранные партии", "сыгранных партий"])}
+              {plural(data.games_count, ["Проведённая игра", "проведённые игры", "проведённых игр"])}
             </span>
           </span>
         </div>
@@ -128,7 +128,7 @@ export default async function TournamentPage({ params }: PageProps<"/mafia/tourn
         <div className="mt-4 flex flex-col gap-3">
           {games.items.length === 0 ? (
             <p className="border-l-2 border-ink-700 py-4 pl-6 text-base text-ink-400">
-              В этом турнире ещё нет оценённых партий.
+              В этом турнире ещё нет оценённых игр.
             </p>
           ) : (
             games.items.map((game) => <GameCard key={game.id} game={game} />)
