@@ -115,7 +115,7 @@ export default function AdminTournamentsPage() {
         description={
           toDelete && toDelete.games_count > 0 ? (
             <>
-              В турнире {withCount(toDelete.games_count, ["сыгранная партия", "сыгранные партии", "сыгранных партий"])}. Пока они к нему привязаны,
+              В турнире {withCount(toDelete.games_count, ["Проведённая игра", "проведённые игры", "проведённых игр"])}. Пока они к нему привязаны,
               удалить его нельзя — сначала перенесите игры в другой турнир.
             </>
           ) : (

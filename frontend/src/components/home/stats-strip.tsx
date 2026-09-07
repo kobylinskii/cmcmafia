@@ -14,7 +14,7 @@ export async function StatsStrip() {
   const { games_count, players_count, tournaments_count } = await getStats();
 
   const stats = [
-    { value: games_count, label: `${plural(games_count, ["игра", "игры", "игр"])} в архиве` },
+    { value: games_count, label: `${plural(games_count, ["игра проведена", "игры проведено", "игр проведено"])}` },
     { value: tournaments_count, label: plural(tournaments_count, ["турнир", "турнира", "турниров"]) },
     { value: players_count, label: `${plural(players_count, ["игрок", "игрока", "игроков"])} в клубе` },
   ];

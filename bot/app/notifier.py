@@ -66,7 +66,7 @@ def profile_change_text(item: dict) -> str:
     return (
         f"⛔ Изменение отклонено: {field} → {shown}.\n\n"
         f"Причина: {item.get('rejection_reason') or 'не указана'}\n\n"
-        "Прежнее значение осталось в силе. Можно поправить и отправить снова."
+        "Попробуйте еще раз."
     )
 
 
@@ -81,7 +81,7 @@ def admin_registration_text(item: dict) -> str:
         lines.append(f"Проход: {affiliation}")
     if item.get("telegram_username"):
         lines.append(f"Telegram: @{item['telegram_username']}")
-    lines.append("\nПроверить — раздел «Обзор» в админке сайта.")
+    lines.append("\nПроверить можно в админке сайта.")
     return "\n".join(lines)
 
 
@@ -95,7 +95,7 @@ def admin_profile_change_text(item: dict) -> str:
         f"✏️ {nickname} просит поправить профиль — {field}\n"
         f"сейчас: {current}\n"
         f"станет: {new_value}\n\n"
-        "Проверить — раздел «Обзор» в админке сайта."
+        "Проверить можно в админке сайта."
     )
 
 
