@@ -140,6 +140,11 @@ class Player(Base):
     # confirmation_decided_at -- это очередь на отправку, которую бот
     # разгребает опросом (см. /api/bot/players/confirmation-notifications).
     confirmation_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Когда бот уже написал админам сайта о том, что появилась новая заявка на
+    # проверку. NULL у pending-строки -- это очередь оповещения админов, которую
+    # бот забирает опросом (см. /api/bot/admin-notifications). resubmit снимает
+    # метку: повторная подача -- новое событие для админа.
+    confirmation_admin_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -180,6 +185,13 @@ class Player(Base):
             "confirmation_decided_at",
             postgresql_where=text(
                 "confirmation_decided_at IS NOT NULL AND confirmation_notified_at IS NULL"
+            ),
+        ),
+        Index(
+            "idx_players_pending_admin_unnotified",
+            "created_at",
+            postgresql_where=text(
+                "confirmation_status = 'pending' AND confirmation_admin_notified_at IS NULL"
             ),
         ),
     )
@@ -443,6 +455,10 @@ class PlayerProfileChange(Base):
     # Та же пара «решено / доставлено», что и у модерации регистраций: решение
     # принимает сайт, а сообщение в Telegram шлёт бот, забирая очередь опросом.
     notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Когда бот написал админам сайта, что появилась новая правка на проверку.
+    # NULL у pending-строки -- очередь оповещения админов (см.
+    # /api/bot/admin-notifications). Ставит бот ack'ом после рассылки.
+    admin_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     player: Mapped[Player] = relationship()
 
@@ -469,6 +485,11 @@ class PlayerProfileChange(Base):
             postgresql_where=text("status = 'pending'"),
         ),
         Index("idx_profile_changes_status", "status"),
+        Index(
+            "idx_profile_changes_admin_unnotified",
+            "created_at",
+            postgresql_where=text("status = 'pending' AND admin_notified_at IS NULL"),
+        ),
     )
 
 

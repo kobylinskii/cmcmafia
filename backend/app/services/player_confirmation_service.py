@@ -77,6 +77,9 @@ def resubmit(db: Session, *, player: models.Player) -> models.Player:
     player.rejection_reason = None
     player.confirmation_decided_at = None
     player.confirmation_notified_at = None
+    # Повторная подача -- новое событие для админа: снимаем метку, чтобы бот
+    # снова написал о заявке в очереди оповещения (admin_notification_service).
+    player.confirmation_admin_notified_at = None
     db.flush()
     return player
 

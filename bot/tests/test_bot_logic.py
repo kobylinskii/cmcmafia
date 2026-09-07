@@ -19,7 +19,12 @@ from app.api_client import LOCAL_TZ, now_local
 from app.handlers.admin import MAX_BROADCAST_LENGTH, _announcement_text
 from app.handlers.profile import _parse, _stats_line
 from app.handlers.schedule import _is_past
-from app.notifier import deliver_once
+from app.notifier import (
+    admin_profile_change_text,
+    admin_registration_text,
+    deliver_admin_notifications_once,
+    deliver_once,
+)
 
 
 class FakeBot:
@@ -198,6 +203,114 @@ async def test_unexpected_bad_request_keeps_the_decision_in_the_queue():
 
     assert await deliver_once(bot, api) == 0
     assert api.acked == []
+
+
+# ------------------------------------------------ оповещение админов сайта
+class FakeAdminApi:
+    def __init__(self, payload: dict):
+        self.payload = payload
+        self.acked: list[dict] = []
+
+    async def admin_notifications(self) -> dict:
+        return self.payload
+
+    async def ack_admin_notifications(
+        self, *, registration_player_ids: list[int], profile_change_ids: list[int]
+    ) -> dict:
+        self.acked.append(
+            {"registrations": registration_player_ids, "changes": profile_change_ids}
+        )
+        return {"marked_registrations": len(registration_player_ids)}
+
+
+def _registration(player_id: int) -> dict:
+    return {
+        "player_id": player_id,
+        "nickname": f"Новичок{player_id}",
+        "full_name": "Иванов Иван Иванович",
+        "affiliation": "vmk",
+        "telegram_username": "ivan",
+        "created_at": "2026-09-07T12:00:00Z",
+    }
+
+
+def _profile_change(change_id: int) -> dict:
+    return {
+        "change_id": change_id,
+        "player_nickname": "Шериф",
+        "telegram_username": "sheriff",
+        "field_label": "ФИО",
+        "current_value": None,
+        "new_value": "Петров Пётр Петрович",
+        "created_at": "2026-09-07T12:00:00Z",
+    }
+
+
+@pytest.mark.asyncio
+async def test_admin_notifications_go_to_every_recipient_and_are_acked():
+    api = FakeAdminApi(
+        {
+            "recipients": [100, 200],
+            "registrations": [_registration(1)],
+            "profile_changes": [_profile_change(9)],
+        }
+    )
+    bot = FakeBot()
+
+    assert await deliver_admin_notifications_once(bot, api) == 2
+    assert {chat_id for chat_id, _ in bot.sent} == {100, 200}
+    assert len(bot.sent) == 4, "две записи в очереди × два админа"
+    assert api.acked == [{"registrations": [1], "changes": [9]}]
+
+
+@pytest.mark.asyncio
+async def test_admin_event_stays_unacked_if_one_recipient_fails_temporarily():
+    api = FakeAdminApi(
+        {"recipients": [100, 200], "registrations": [_registration(1)], "profile_changes": []}
+    )
+    bot = FakeBot(fail_for={200})
+
+    assert await deliver_admin_notifications_once(bot, api) == 0
+    assert api.acked == []
+
+
+@pytest.mark.asyncio
+async def test_admin_notifications_do_nothing_without_recipients():
+    """Админ сайта без привязанного Telegram -- писать некуда: очередь не
+    трогаем, адресат может появиться позже."""
+    api = FakeAdminApi(
+        {"recipients": [], "registrations": [_registration(1)], "profile_changes": []}
+    )
+    bot = FakeBot()
+
+    assert await deliver_admin_notifications_once(bot, api) == 0
+    assert bot.sent == []
+    assert api.acked == []
+
+
+@pytest.mark.asyncio
+async def test_blocked_admin_does_not_hold_up_the_event():
+    api = FakeAdminApi(
+        {"recipients": [100], "registrations": [_registration(1)], "profile_changes": []}
+    )
+    bot = FakeBot(forbidden_for={100})
+
+    assert await deliver_admin_notifications_once(bot, api) == 1
+    assert api.acked == [{"registrations": [1], "changes": []}]
+
+
+def test_admin_notification_texts_are_readable():
+    reg = admin_registration_text(_registration(1))
+    assert "Новая заявка" in reg
+    assert "Иванов Иван Иванович" in reg
+    assert "с ВМК" in reg
+    assert "@ivan" in reg
+
+    change = admin_profile_change_text(_profile_change(9))
+    assert "Шериф" in change
+    assert "ФИО" in change
+    assert "Петров Пётр Петрович" in change
+    assert "пусто" in change
 
 
 # -------------------------------------------------------------------- тексты

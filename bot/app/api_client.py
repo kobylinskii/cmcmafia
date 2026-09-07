@@ -199,6 +199,29 @@ class ApiClient:
         )
         return int(resp.json().get("marked", 0))
 
+    # ------------------------------------------- оповещение админов сайта
+    async def admin_notifications(self) -> dict:
+        """Что появилось на проверку и кому из админов сайта об этом написать.
+
+        Ручка сервисная: действующего пользователя у неё нет, авторизует её
+        один BOT_SERVICE_TOKEN -- рассылает бот целиком.
+        """
+        resp = await self._request("GET", "/api/bot/admin-notifications")
+        return resp.json()
+
+    async def ack_admin_notifications(
+        self, *, registration_player_ids: list[int], profile_change_ids: list[int]
+    ) -> dict:
+        resp = await self._request(
+            "POST",
+            "/api/bot/admin-notifications/ack",
+            json={
+                "registration_player_ids": registration_player_ids,
+                "profile_change_ids": profile_change_ids,
+            },
+        )
+        return resp.json()
+
     # ------------------------------------------------------------- sessions (user)
     async def list_game_days(self, tg_id: int, game_type: str | None = None) -> list[str]:
         params = {"telegram_id": tg_id}

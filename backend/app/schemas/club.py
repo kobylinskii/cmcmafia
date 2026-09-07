@@ -153,3 +153,44 @@ class BotConfirmationNotificationOut(BaseModel):
 
 class BotConfirmationAckIn(BaseModel):
     player_ids: list[int] = Field(min_length=1, max_length=100)
+
+
+class AdminRegistrationNoticeOut(BaseModel):
+    """Новая заявка на вступление -- то, что боту нужно, чтобы написать админам."""
+
+    player_id: int
+    nickname: str
+    full_name: str | None
+    affiliation: str | None
+    telegram_username: str | None
+    created_at: datetime
+
+
+class AdminProfileChangeNoticeOut(BaseModel):
+    """Новая правка профиля, ждущая проверки."""
+
+    change_id: int
+    player_nickname: str
+    telegram_username: str | None
+    field_label: str
+    current_value: str | None
+    new_value: str | None
+    created_at: datetime
+
+
+class BotAdminNotificationsOut(BaseModel):
+    """Очередь оповещения админов сайта: что появилось на проверку и кому писать.
+
+    `recipients` -- telegram_id админов сайта с привязанным Telegram. Пустой
+    список означает «писать некому»: бот тогда ничего не делает и не
+    подтверждает очередь, строки дождутся админа с привязанным Telegram.
+    """
+
+    recipients: list[int]
+    registrations: list[AdminRegistrationNoticeOut]
+    profile_changes: list[AdminProfileChangeNoticeOut]
+
+
+class BotAdminNotificationsAckIn(BaseModel):
+    registration_player_ids: list[int] = Field(default_factory=list, max_length=100)
+    profile_change_ids: list[int] = Field(default_factory=list, max_length=100)

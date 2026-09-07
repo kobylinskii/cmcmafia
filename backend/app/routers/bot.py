@@ -21,6 +21,10 @@ from app.schemas.bot import (
     SessionOut,
 )
 from app.schemas.club import (
+    AdminProfileChangeNoticeOut,
+    AdminRegistrationNoticeOut,
+    BotAdminNotificationsAckIn,
+    BotAdminNotificationsOut,
     BotConfirmationAckIn,
     BotConfirmationNotificationOut,
     BotProfileChangeAckIn,
@@ -28,6 +32,7 @@ from app.schemas.club import (
 )
 from app.services import (
     admin_grant,
+    admin_notification_service,
     bootstrap_admin_service,
     player_confirmation_service,
     profile_change_service,
@@ -274,6 +279,66 @@ def ack_profile_change_notifications(
     marked = profile_change_service.mark_notified(db, change_ids=data.change_ids)
     db.commit()
     return {"marked": marked}
+
+
+@router.get("/admin-notifications", response_model=BotAdminNotificationsOut)
+@limiter.limit("60/minute")
+def list_admin_notifications(
+    request: Request, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
+) -> BotAdminNotificationsOut:
+    """Что появилось на проверку и кому из админов сайта об этом написать.
+
+    Зеркало очередей решений выше: там сайт копит решения, бот разносит их
+    игрокам; здесь бот копит новые pending-строки и разносит их админам.
+    Бэкенд в Telegram не пишет -- токен бота живёт только в боте.
+    """
+    return BotAdminNotificationsOut(
+        recipients=[p.telegram_id for p in admin_notification_service.admin_recipients(db)],
+        registrations=[
+            AdminRegistrationNoticeOut(
+                player_id=player.id,
+                nickname=player.nickname,
+                full_name=player.full_name,
+                affiliation=player.affiliation,
+                telegram_username=player.telegram_username,
+                created_at=player.created_at,
+            )
+            for player in admin_notification_service.pending_registrations(db)
+        ],
+        profile_changes=[
+            AdminProfileChangeNoticeOut(
+                change_id=change.id,
+                player_nickname=change.player.nickname,
+                telegram_username=change.player.telegram_username,
+                field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
+                current_value=profile_change_service.current_value(change.player, change.field),
+                new_value=change.new_value,
+                created_at=change.created_at,
+            )
+            for change in admin_notification_service.pending_profile_changes(db)
+        ],
+    )
+
+
+@router.post("/admin-notifications/ack")
+@limiter.limit("60/minute")
+def ack_admin_notifications(
+    request: Request,
+    data: BotAdminNotificationsAckIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bot_service),
+) -> dict:
+    marked_registrations = admin_notification_service.mark_registrations_notified(
+        db, player_ids=data.registration_player_ids
+    )
+    marked_profile_changes = admin_notification_service.mark_profile_changes_notified(
+        db, change_ids=data.profile_change_ids
+    )
+    db.commit()
+    return {
+        "marked_registrations": marked_registrations,
+        "marked_profile_changes": marked_profile_changes,
+    }
 
 
 @router.get("/game-days")
