@@ -6,8 +6,6 @@ import { CalendarPlus, ListChecks, UsersThree, Warning } from "@phosphor-icons/r
 import { clientFetch } from "@/lib/api";
 import type { GameListItem, SessionOut } from "@/types/api";
 import { formatDateTime } from "@/lib/format";
-import { PendingPlayers } from "@/components/admin/pending-players";
-import { ProfileChanges } from "@/components/admin/profile-changes";
 import { PassList } from "@/components/admin/pass-list";
 
 export default function AdminOverviewPage() {
@@ -117,9 +115,11 @@ export default function AdminOverviewPage() {
         </div>
       </div>
 
-      <PendingPlayers />
-      <ProfileChanges />
-
+      {/* Заявок на вступление и правок профиля здесь больше нет: и то, и
+          другое разбирается в Telegram, кнопками под уведомлением бота
+          (ARCHITECTURE.md, раздел 3.8). Держать вторую копию тех же двух
+          очередей значило бы разводить два места, где «уже рассмотрено»
+          выясняется только по нажатию. */}
       <PassList />
     </div>
   );

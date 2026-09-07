@@ -270,57 +270,6 @@ export interface PlayerAdminOut {
  * рейтинге, ни в списке игроков, ни на своей странице. */
 export type ConfirmationStatus = "pending" | "confirmed" | "rejected";
 
-export type Affiliation = "vmk" | "mgu_no_pass" | "outside_need_pass";
-
-export const AFFILIATION_LABELS: Record<Affiliation, string> = {
-  vmk: "С ВМК",
-  mgu_no_pass: "Из МГУ, пропуск не нужен",
-  outside_need_pass: "Вне МГУ, нужен пропуск",
-};
-
-export const CONFIRMATION_STATUS_LABELS: Record<ConfirmationStatus, string> = {
-  pending: "На проверке",
-  confirmed: "Подтверждён",
-  rejected: "Отклонён",
-};
-
-export interface PendingPlayerOut {
-  id: number;
-  nickname: string;
-  slug: string;
-  full_name: string | null;
-  salutation: string | null;
-  affiliation: Affiliation | null;
-  phone: string | null;
-  telegram_id: number | null;
-  telegram_username: string | null;
-  can_play: boolean;
-  can_staff: boolean;
-  age: number | null;
-  favorite_role: InGameRole | null;
-  experience: string | null;
-  bio: string | null;
-  created_at: string;
-}
-
-/** Правка профиля из бота, ждущая решения админа.
- *
- * `current_value` считается на момент чтения, а не хранится: пока правка
- * ждала, поле мог поменять и сам админ.
- */
-export interface ProfileChangeOut {
-  id: number;
-  player_id: number;
-  player_nickname: string;
-  player_slug: string;
-  telegram_username: string | null;
-  field: string;
-  field_label: string;
-  current_value: string | null;
-  new_value: string | null;
-  created_at: string;
-}
-
 /** Роль в конкретной игре недели: три роли записи плюс резерв. */
 export type PassListRole = RegistrationRole | "reserve";
 

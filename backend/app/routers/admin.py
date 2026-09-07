@@ -515,7 +515,13 @@ def suggest_slug(request: Request, nickname: str, db: Session = Depends(get_db))
 @router.get("/players/pending", response_model=list[PendingPlayerOut])
 @limiter.limit("30/minute")
 def list_pending_players(request: Request, db: Session = Depends(get_db)) -> list[models.Player]:
-    """Заявки из бота, ждущие решения админа (вкладка «Обзор»)."""
+    """Заявки из бота, ждущие решения админа.
+
+    Экрана под это на сайте больше нет: решение принимается в Telegram,
+    кнопками под уведомлением бота (раздел 3.8). Ручка осталась аварийным
+    доступом к очереди -- уведомление можно удалить из чата, и другого способа
+    увидеть незакрытые заявки тогда не остаётся.
+    """
     return player_confirmation_service.list_pending(db)
 
 
@@ -571,7 +577,10 @@ def _profile_change_out(change: models.PlayerProfileChange) -> ProfileChangeOut:
 @router.get("/players/profile-changes", response_model=list[ProfileChangeOut])
 @limiter.limit("30/minute")
 def list_profile_changes(request: Request, db: Session = Depends(get_db)) -> list[ProfileChangeOut]:
-    """Правки профилей из бота, ждущие решения (вкладка «Обзор»)."""
+    """Правки профилей из бота, ждущие решения.
+
+    Как и очередь заявок выше -- без экрана на сайте, аварийным доступом.
+    """
     return [_profile_change_out(change) for change in profile_change_service.list_pending(db)]
 
 
