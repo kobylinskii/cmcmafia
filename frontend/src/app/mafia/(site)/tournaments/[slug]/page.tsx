@@ -115,7 +115,7 @@ export default async function TournamentPage({ params }: PageProps<"/mafia/tourn
         <section className="mt-10">
           <h2 className="font-display text-xl text-ink-50">Турнирная таблица</h2>
           <p className="mt-1 text-sm text-ink-500">
-            Сумма баллов и штрафов по всем оценённым играм турнира, от большего к меньшему.
+            Сумма баллов и штрафов по оценённым играм турнира.
           </p>
           <div className="mt-4">
             <TournamentStandingsTable rows={standings} />

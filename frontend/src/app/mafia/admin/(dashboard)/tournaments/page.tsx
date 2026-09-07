@@ -50,8 +50,7 @@ export default function AdminTournamentsPage() {
       </div>
 
       <p className="mt-2 max-w-2xl text-sm text-ink-400">
-        Каждая турнирная игра принадлежит турниру. Пока не заведён хотя бы один,
-        внести турнирный результат не получится.
+        Без турнира турнирный результат внести не получится.
       </p>
 
       {error && <p className="mt-4 text-sm text-brand-300">{error}</p>}

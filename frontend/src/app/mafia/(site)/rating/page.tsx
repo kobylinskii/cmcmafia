@@ -48,8 +48,7 @@ export default async function RatingPage({ searchParams }: PageProps<"/mafia/rat
       <div className="max-w-2xl">
         <h1 className="font-display text-3xl font-medium text-ink-50 md:text-4xl">Рейтинг клуба</h1>
         <p className="mt-4 text-base leading-relaxed text-ink-300">
-          Таблица клуба по системе Эло. Разбор формулы, коэффициентов и штрафов — ниже, под
-          таблицей.
+          Таблица клуба по системе Эло. Формула, коэффициенты и штрафы — под таблицей.
         </p>
       </div>
 

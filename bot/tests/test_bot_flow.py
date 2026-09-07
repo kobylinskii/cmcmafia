@@ -329,7 +329,7 @@ async def test_registration_walks_all_six_steps(stack):
     dp, bot, api = stack
 
     await dp.feed_update(bot, _message("/start"))
-    assert "Добро пожаловать" in bot.last_text
+    assert "поделитесь номером телефона" in bot.last_text
     assert bot.last_reply_buttons() == ["📱 Поделиться номером телефона"]
 
     await dp.feed_update(bot, _message(contact=Contact(phone_number="+79000000000", first_name="Тест", user_id=USER_ID)))

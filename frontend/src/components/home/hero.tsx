@@ -11,11 +11,10 @@ export function Hero() {
       <div className="mx-auto grid w-full max-w-7xl grid-cols-1 items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-8 lg:px-8">
         <div className="relative z-10 flex flex-col items-start gap-6">
           <h1 className="font-display text-4xl leading-[1.08] font-medium text-ink-50 md:text-6xl">
-            Статистика <span className="text-brand-400">без прикрас</span>.
+            Вся статистика <span className="text-brand-400">клуба</span>.
           </h1>
           <p className="max-w-md text-base leading-relaxed text-ink-300 md:text-lg">
-            Результаты каждой сыгранной партии, рейтинг по системе Эло и профиль
-            каждого игрока клуба.
+            Результаты сыгранных партий, рейтинг Эло, профили игроков.
           </p>
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <LinkButton href="/mafia/games">Смотреть игры</LinkButton>

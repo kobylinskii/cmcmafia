@@ -32,8 +32,7 @@ export default async function TournamentsPage() {
             Турниры
           </h1>
           <p className="mt-4 text-base leading-relaxed text-ink-300">
-            Каждая турнирная партия клуба принадлежит турниру — со своей площадкой,
-            регламентом и таблицей сыгранного.
+            Турниры клуба со своими площадками, составами и таблицами.
           </p>
         </div>
         {tournaments.length > 0 && (
@@ -55,8 +54,7 @@ export default async function TournamentsPage() {
           <Trophy size={30} weight="duotone" className="text-brand-400" />
           <p className="font-display text-xl text-ink-100">Турниров пока нет</p>
           <p className="prose-measure text-base leading-relaxed text-ink-400">
-            Когда администратор заведёт первый турнир и внесёт в него результаты,
-            он появится здесь вместе со всеми сыгранными партиями.
+            Первый турнир появится здесь, когда его заведёт администратор.
           </p>
         </div>
       ) : (

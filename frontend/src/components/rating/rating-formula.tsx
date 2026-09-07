@@ -21,8 +21,8 @@ export function RatingFormula({ formula }: { formula: RatingFormulaOut }) {
         Как считается рейтинг
       </h2>
       <p className="prose-measure mt-3 text-base leading-relaxed text-ink-300">
-        {formula.intro} Старт: {formula.start_rating} очков. За каждую сыгранную
-        рейтинговую игру рейтинг меняется по формуле:
+        {formula.intro} Старт — {formula.start_rating} очков. Каждая рейтинговая
+        игра меняет его по формуле:
       </p>
 
       {/* Формула -- главный визуальный акцент блока: крупно, моноширинным

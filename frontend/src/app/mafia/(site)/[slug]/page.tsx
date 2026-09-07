@@ -184,7 +184,7 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
         <div className="mt-4 flex flex-col gap-3">
           {games.items.length === 0 && (
             <p className="rounded-card border border-ink-800 bg-ink-900 p-8 text-center text-ink-400">
-              Этот игрок ещё не сыграл ни одной оценённой игры.
+              Пока нет сыгранных игр.
             </p>
           )}
           {games.items.map((game) => (
