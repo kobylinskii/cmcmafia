@@ -42,13 +42,13 @@ export const metadata: Metadata = {
     title: "Мафия ВМК",
     description: DESCRIPTION,
     url: SITE_URL,
-    images: [{ url: "/logo/logo-badge.png", width: 1200, height: 1200, alt: "Мафия ВМК" }],
+    images: [{ url: "/logo/logo-badge-og.png", width: 1200, height: 1200, alt: "Мафия ВМК" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Мафия ВМК",
     description: DESCRIPTION,
-    images: ["/logo/logo-badge.png"],
+    images: ["/logo/logo-badge-og.png"],
   },
 };
 
