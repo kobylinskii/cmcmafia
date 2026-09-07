@@ -180,6 +180,18 @@ class AdminProfileChangeNoticeOut(BaseModel):
     created_at: datetime
 
 
+class BotModerationQueueOut(BaseModel):
+    """Всё, что сейчас ждёт решения, -- раздел «На проверке» в админ-меню бота.
+
+    Отличается от BotAdminNotificationsOut ровно одним, но важным: это полная
+    очередь, а не «о чём ещё не писали». Уведомление можно удалить из чата, и
+    без такого списка незакрытая заявка после ack'а не всплыла бы больше нигде.
+    """
+
+    registrations: list[AdminRegistrationNoticeOut]
+    profile_changes: list[AdminProfileChangeNoticeOut]
+
+
 class BotAdminNotificationsOut(BaseModel):
     """Очередь оповещения админов сайта: что появилось на проверку и кому писать.
 

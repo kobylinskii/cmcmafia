@@ -25,6 +25,7 @@ from app.schemas.club import (
     AdminRegistrationNoticeOut,
     BotAdminNotificationsAckIn,
     BotAdminNotificationsOut,
+    BotModerationQueueOut,
     BotConfirmationAckIn,
     BotConfirmationNotificationOut,
     BotProfileChangeAckIn,
@@ -287,6 +288,29 @@ def ack_profile_change_notifications(
     return {"marked": marked}
 
 
+def _registration_notice(player: models.Player) -> AdminRegistrationNoticeOut:
+    return AdminRegistrationNoticeOut(
+        player_id=player.id,
+        nickname=player.nickname,
+        full_name=player.full_name,
+        affiliation=player.affiliation,
+        telegram_username=player.telegram_username,
+        created_at=player.created_at,
+    )
+
+
+def _profile_change_notice(change: models.PlayerProfileChange) -> AdminProfileChangeNoticeOut:
+    return AdminProfileChangeNoticeOut(
+        change_id=change.id,
+        player_nickname=change.player.nickname,
+        telegram_username=change.player.telegram_username,
+        field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
+        current_value=profile_change_service.current_value(change.player, change.field),
+        new_value=change.new_value,
+        created_at=change.created_at,
+    )
+
+
 @router.get("/admin-notifications", response_model=BotAdminNotificationsOut)
 @limiter.limit("60/minute")
 def list_admin_notifications(
@@ -301,26 +325,11 @@ def list_admin_notifications(
     return BotAdminNotificationsOut(
         recipients=[p.telegram_id for p in admin_notification_service.admin_recipients(db)],
         registrations=[
-            AdminRegistrationNoticeOut(
-                player_id=player.id,
-                nickname=player.nickname,
-                full_name=player.full_name,
-                affiliation=player.affiliation,
-                telegram_username=player.telegram_username,
-                created_at=player.created_at,
-            )
+            _registration_notice(player)
             for player in admin_notification_service.pending_registrations(db)
         ],
         profile_changes=[
-            AdminProfileChangeNoticeOut(
-                change_id=change.id,
-                player_nickname=change.player.nickname,
-                telegram_username=change.player.telegram_username,
-                field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
-                current_value=profile_change_service.current_value(change.player, change.field),
-                new_value=change.new_value,
-                created_at=change.created_at,
-            )
+            _profile_change_notice(change)
             for change in admin_notification_service.pending_profile_changes(db)
         ],
     )
@@ -397,6 +406,30 @@ def ack_day_reminders(
 # Права шире, чем у остальной /api/bot/admin: уведомление уходит любому админу
 # с привязанным Telegram, в том числе админу сайта без прав в боте (см.
 # deps.require_club_admin_actor).
+
+
+@router.get("/moderation/pending", response_model=BotModerationQueueOut)
+@limiter.limit("30/minute")
+def list_moderation_queue(
+    request: Request,
+    telegram_id: int,
+    db: Session = Depends(get_db),
+    _: models.Player = Depends(require_club_admin_actor),
+) -> BotModerationQueueOut:
+    """Всё, что ждёт решения, -- раздел «На проверке» в админ-меню бота.
+
+    Не то же, что /admin-notifications: та очередь пустеет после ack'а, а
+    уведомление можно удалить из чата. Без этого списка заявка тогда не
+    всплыла бы больше нигде -- экрана модерации на сайте больше нет.
+    """
+    return BotModerationQueueOut(
+        registrations=[
+            _registration_notice(player) for player in player_confirmation_service.list_pending(db)
+        ],
+        profile_changes=[
+            _profile_change_notice(change) for change in profile_change_service.list_pending(db)
+        ],
+    )
 
 
 @router.post("/moderation/registrations/{player_id}/confirm")

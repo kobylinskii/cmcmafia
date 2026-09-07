@@ -227,6 +227,17 @@ class ApiClient:
     # админ клуба живёт в боте, и лишний вход в админку сайта откладывал
     # проверку на сутки. Ручки требуют прав админа (telegram_id действующего),
     # а не только сервисного токена.
+    async def moderation_queue(self, tg_id: int) -> dict:
+        """Всё, что ждёт решения, -- раздел «На проверке» в админ-меню.
+
+        Не то же, что admin_notifications: та очередь пустеет после ack'а, а
+        уведомление можно удалить из чата.
+        """
+        resp = await self._request(
+            "GET", "/api/bot/moderation/pending", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
     async def moderate_registration(
         self, tg_id: int, player_id: int, *, reason: str | None = None
     ) -> dict:

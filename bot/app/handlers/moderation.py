@@ -1,14 +1,24 @@
-"""Решения админа по заявкам и правкам профиля -- прямо в сообщении бота.
+"""Решения админа по заявкам и правкам профиля -- целиком в Telegram.
 
 Раньше уведомление заканчивалось словами «проверить можно в админке сайта», и
 проверка откладывалась до ближайшего компьютера: админ клуба живёт в
 Telegram. Теперь под сообщением две кнопки, а отказ спрашивает причину тем же
 диалогом -- причина обязательна, её игрок увидит вместо решения.
 
-Экран раздела (`app/ui.py`) здесь ни при чём: уведомление -- отдельное
-сообщение, приходящее само по себе, и правится оно на месте. Итог решения
-дописывается в это же сообщение, а кнопки снимаются -- иначе в чате остаётся
-рабочая кнопка на уже принятое решение.
+Мест, откуда принимается решение, два, и оба нужны:
+
+* **уведомление** -- то, что бот прислал сам, как только заявка появилась.
+  Отдельное сообщение, живущее само по себе: итог дописывается в него, а
+  кнопки снимаются, иначе в чате остаётся рабочая кнопка на уже принятое
+  решение. Экран раздела (`app/ui.py`) тут ни при чём.
+* **раздел «🕓 На проверке»** в админ-меню -- полный список того, что ещё ждёт
+  решения. Уведомление можно удалить из чата, и без списка заявка после этого
+  не всплыла бы больше нигде (экрана модерации на сайте больше нет). Это
+  обычный экран бота и живёт по правилам `ui.py`: список -> карточка ->
+  список.
+
+Различает их хвост `:q` в callback_data (`keyboards.inline.FROM_QUEUE`):
+решение одно и то же, а возвращаться после него надо в разные места.
 
 Уведомление уходит каждому админу своей копией. Решает кто-то один: у
 остальных нажатие получает от бэкенда 409 «уже рассмотрено», и их копия
@@ -23,12 +33,19 @@ from contextlib import suppress
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app.api_client import ApiClient, ApiError
-from app.keyboards.inline import moderation_cancel_keyboard, moderation_keyboard
+from app.keyboards.inline import (
+    FROM_QUEUE,
+    KIND_REGISTRATION,
+    moderation_cancel_keyboard,
+    moderation_keyboard,
+    moderation_queue_keyboard,
+)
+from app.notifier import admin_profile_change_text, admin_registration_text
 from app.states import ModerationStates
-from app.ui import consume_input, screen_message
+from app.ui import consume_input, edit_screen, screen_message
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +55,14 @@ ASK_REASON = (
     "Напишите причину отклонения одним сообщением — её увидит игрок.\n"
     "Без причины отказ выглядит как поломка."
 )
+QUEUE_EMPTY = "🕓 На проверке\n\nНичего не ждёт решения."
+QUEUE_TITLE = "🕓 На проверке\n\nНажмите на строку, чтобы посмотреть и решить."
 
-KIND_REGISTRATION = "r"
-KIND_CHANGE = "c"
+
+def _parse(data: str) -> tuple[str, int, bool]:
+    """`md:<действие>:<вид>:<id>[:q]` -> (вид, id, пришли ли из списка)."""
+    parts = data.split(":")
+    return parts[2], int(parts[3]), parts[4:] == [FROM_QUEUE]
 
 
 async def _decide(api: ApiClient, tg_id: int, kind: str, item_id: int, reason: str | None) -> dict:
@@ -73,41 +95,104 @@ async def _finish(message: Message, text: str) -> None:
         await message.edit_text(f"{_strip_tail(message.text or '')}\n\n{text}")
 
 
-@router.callback_query(F.data.startswith("md:ok:"))
-async def approve(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    _, _, kind, raw_id = callback.data.split(":")
-    message = screen_message(callback)
-    if message is None:
-        await callback.answer("Это сообщение слишком старое, решите на сайте.", show_alert=True)
-        return
+# ------------------------------------------------------------ «На проверке»
+async def _queue_screen(api: ApiClient, tg_id: int) -> tuple[str, InlineKeyboardMarkup]:
+    data = await api.moderation_queue(tg_id)
+    registrations = data.get("registrations") or []
+    changes = data.get("profile_changes") or []
+    text = QUEUE_TITLE if (registrations or changes) else QUEUE_EMPTY
+    return text, moderation_queue_keyboard(registrations, changes)
+
+
+@router.callback_query(F.data == "md:queue")
+async def show_queue(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await state.set_state(None)
     try:
-        result = await _decide(api, callback.from_user.id, kind, int(raw_id), None)
+        text, keyboard = await _queue_screen(api, callback.from_user.id)
     except ApiError as exc:
         await callback.answer(exc.message, show_alert=True)
+        return
+    await edit_screen(callback, state, text, keyboard)
+
+
+@router.callback_query(F.data.startswith("md:card:"))
+async def show_card(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    """Карточка одной заявки или правки -- тот же текст, что и в уведомлении."""
+    kind, item_id, _ = _parse(callback.data)
+    try:
+        data = await api.moderation_queue(callback.from_user.id)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+
+    if kind == KIND_REGISTRATION:
+        item = next(
+            (i for i in data.get("registrations") or [] if i["player_id"] == item_id), None
+        )
+        text = admin_registration_text(item) if item else None
+    else:
+        item = next(
+            (i for i in data.get("profile_changes") or [] if i["change_id"] == item_id), None
+        )
+        text = admin_profile_change_text(item) if item else None
+
+    if text is None:
+        # Решил другой админ, пока экран висел: возвращаем к обновлённому списку.
+        await show_queue(callback, state, api)
+        await callback.answer("Это уже рассмотрели.", show_alert=True)
+        return
+    await edit_screen(callback, state, text, moderation_keyboard(kind, item_id, from_queue=True))
+
+
+# ------------------------------------------------------------------ решение
+@router.callback_query(F.data.startswith("md:ok:"))
+async def approve(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    kind, item_id, from_queue = _parse(callback.data)
+    message = screen_message(callback)
+    if message is None:
+        await callback.answer("Это сообщение слишком старое, откройте /admin.", show_alert=True)
+        return
+    try:
+        result = await _decide(api, callback.from_user.id, kind, item_id, None)
+    except ApiError as exc:
         # 409 -- «уже рассмотрено» (решил другой админ) или «ник занят».
-        # Кнопки в этом сообщении больше ничего не сделают, и оставлять их
+        if from_queue:
+            await show_queue(callback, state, api)
+            await callback.answer(exc.message, show_alert=True)
+            return
+        await callback.answer(exc.message, show_alert=True)
+        # Кнопки в этом уведомлении больше ничего не сделают, и оставлять их
         # рабочими значит звать на второе такое же нажатие.
         if exc.status_code in (404, 409):
             await _finish(message, f"ℹ️ {exc.message}")
         return
+
     await state.set_state(None)
-    await _finish(message, _verdict(kind, result, None))
+    verdict = _verdict(kind, result, None)
+    if from_queue:
+        # Из списка возвращаемся в список: карточки этой заявки в нём больше
+        # нет, и оставлять админа на мёртвом экране незачем.
+        text, keyboard = await _queue_screen(api, callback.from_user.id)
+        await edit_screen(callback, state, text, keyboard, alert=verdict)
+        return
+    await _finish(message, verdict)
     await callback.answer("Готово ✅")
 
 
 @router.callback_query(F.data.startswith("md:no:"))
 async def ask_reason(callback: CallbackQuery, state: FSMContext) -> None:
-    _, _, kind, raw_id = callback.data.split(":")
+    kind, item_id, from_queue = _parse(callback.data)
     message = screen_message(callback)
     if message is None:
-        await callback.answer("Это сообщение слишком старое, решите на сайте.", show_alert=True)
+        await callback.answer("Это сообщение слишком старое, откройте /admin.", show_alert=True)
         return
     await state.set_state(ModerationStates.waiting_for_rejection_reason)
     # Куда потом дописать итог: причина приходит отдельным сообщением, и связи
-    # с этим уведомлением у него нет никакой, кроме этой записи.
+    # с этим экраном у него нет никакой, кроме этой записи.
     await state.update_data(
         md_kind=kind,
-        md_id=int(raw_id),
+        md_id=item_id,
+        md_from_queue=from_queue,
         md_chat_id=message.chat.id,
         md_message_id=message.message_id,
         md_text=_strip_tail(message.text or ""),
@@ -115,21 +200,21 @@ async def ask_reason(callback: CallbackQuery, state: FSMContext) -> None:
     with suppress(TelegramBadRequest):
         await message.edit_text(
             f"{_strip_tail(message.text or '')}\n\n{ASK_REASON}",
-            reply_markup=moderation_cancel_keyboard(kind, int(raw_id)),
+            reply_markup=moderation_cancel_keyboard(kind, item_id, from_queue=from_queue),
         )
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("md:back:"))
 async def cancel_reason(callback: CallbackQuery, state: FSMContext) -> None:
-    _, _, kind, raw_id = callback.data.split(":")
+    kind, item_id, from_queue = _parse(callback.data)
     await state.set_state(None)
     message = screen_message(callback)
     if message is not None:
         with suppress(TelegramBadRequest):
             await message.edit_text(
                 _strip_tail(message.text or ""),
-                reply_markup=moderation_keyboard(kind, int(raw_id)),
+                reply_markup=moderation_keyboard(kind, item_id, from_queue=from_queue),
             )
     await callback.answer()
 
@@ -157,21 +242,32 @@ async def reason_received(message: Message, state: FSMContext, api: ApiClient) -
 
     await state.set_state(None)
     await state.update_data(
-        md_kind=None, md_id=None, md_chat_id=None, md_message_id=None, md_text=None
+        md_kind=None, md_id=None, md_from_queue=None, md_chat_id=None, md_message_id=None,
+        md_text=None,
     )
 
     chat_id, message_id = data.get("md_chat_id"), data.get("md_message_id")
     if not chat_id or not message_id:
         await message.answer(verdict)
         return
-    try:
-        # Итог дописывается в то же уведомление, а кнопки снимаются: решать
+
+    if data.get("md_from_queue"):
+        # Экран раздела возвращаем к списку -- как и после подтверждения.
+        try:
+            text, keyboard = await _queue_screen(api, message.from_user.id)
+        except ApiError:
+            text, keyboard = verdict, None
+        else:
+            text = f"{verdict}\n\n{text}"
+    else:
+        # Итог дописывается в само уведомление, кнопки снимаются: решать
         # второй раз нечем, и в чате не появляется отдельного сообщения.
+        text, keyboard = f"{data.get('md_text') or ''}\n\n{verdict}".strip(), None
+
+    try:
         await message.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=f"{data.get('md_text') or ''}\n\n{verdict}".strip(),
+            chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard
         )
     except TelegramBadRequest:
-        logger.info("Не удалось дописать итог в уведомление %s", message_id)
+        logger.info("Не удалось дописать итог в сообщение %s", message_id)
         await message.answer(verdict)

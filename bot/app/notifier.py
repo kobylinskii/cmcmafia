@@ -26,8 +26,7 @@ from aiogram.types import InlineKeyboardMarkup
 
 from app import texts
 from app.api_client import ApiClient, format_time
-from app.handlers.moderation import KIND_CHANGE, KIND_REGISTRATION
-from app.keyboards.inline import moderation_keyboard
+from app.keyboards.inline import KIND_CHANGE, KIND_REGISTRATION, moderation_keyboard
 
 logger = logging.getLogger(__name__)
 

@@ -176,3 +176,69 @@ def test_admin_notifications_reach_bot_admins_too(admin):
 
     queue = client.get("/api/bot/admin-notifications", headers=BOT_HEADERS).json()
     assert ADMIN_TG in queue["recipients"]
+
+
+def test_pending_queue_lists_everything_awaiting_a_decision(admin):
+    """Раздел «На проверке» в админ-меню бота.
+
+    Не то же, что /admin-notifications: та очередь пустеет после ack'а, а
+    уведомление админ может удалить из чата. Без этого списка заявка тогда не
+    всплыла бы больше нигде -- экрана модерации на сайте больше нет.
+    """
+    client, headers = admin
+    _admin(client)
+    register_bot_player(client, PLAYER_TG, "Новичок")
+    player_id = _player_id(PLAYER_TG)
+
+    editor_tg = 710005
+    register_bot_player(client, editor_tg, "Шериф")
+    client.post(f"/api/admin/players/{_player_id(editor_tg)}/confirm", headers=headers)
+    client.put(
+        f"/api/bot/players/me?telegram_id={editor_tg}",
+        headers=BOT_HEADERS,
+        json={"bio": "Играю с 2015 года"},
+    )
+
+    def queue() -> dict:
+        resp = client.get(
+            "/api/bot/moderation/pending",
+            headers=BOT_HEADERS,
+            params={"telegram_id": ADMIN_TG},
+        )
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    data = queue()
+    assert player_id in [r["player_id"] for r in data["registrations"]]
+    assert [c["field_label"] for c in data["profile_changes"]] == ["о себе"]
+
+    # Уведомления разошлись и подтверждены -- очередь оповещения пуста, а этот
+    # список по-прежнему показывает незакрытое.
+    notifications = client.get("/api/bot/admin-notifications", headers=BOT_HEADERS).json()
+    client.post(
+        "/api/bot/admin-notifications/ack",
+        headers=BOT_HEADERS,
+        json={
+            "registration_player_ids": [r["player_id"] for r in notifications["registrations"]],
+            "profile_change_ids": [c["change_id"] for c in notifications["profile_changes"]],
+        },
+    )
+    drained = client.get("/api/bot/admin-notifications", headers=BOT_HEADERS).json()
+    assert drained["registrations"] == [] and drained["profile_changes"] == []
+    assert player_id in [r["player_id"] for r in queue()["registrations"]]
+
+    # Решённое из списка уходит.
+    client.post(
+        f"/api/bot/moderation/registrations/{player_id}/confirm?telegram_id={ADMIN_TG}",
+        headers=BOT_HEADERS,
+    )
+    assert player_id not in [r["player_id"] for r in queue()["registrations"]]
+
+
+def test_pending_queue_is_closed_to_ordinary_players(admin):
+    client, _ = admin
+    register_bot_player(client, 710006, "Обычный")
+    resp = client.get(
+        "/api/bot/moderation/pending", headers=BOT_HEADERS, params={"telegram_id": 710006}
+    )
+    assert resp.status_code == 403

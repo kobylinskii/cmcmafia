@@ -270,13 +270,16 @@ def my_registration_keyboard(game_id: int, *, is_reserve: bool, can_cancel: bool
 
 # ------------------------------------------------------------------- админка
 def admin_menu_keyboard() -> InlineKeyboardMarkup:
-    """Всё, что осталось от админки бота.
+    """Админка бота.
 
     Игровые дни, карточки игр и подтверждение проведения отсюда убраны:
-    расписание ведут на сайте, во вкладке «Игры → Расписание». Здесь -- только
-    то, для чего нужен именно Telegram (см. handlers/admin.py).
+    расписание ведут на сайте, во вкладке «Игры → Расписание». Осталось то,
+    для чего нужен именно Telegram (см. handlers/admin.py), и модерация заявок
+    и правок профиля, которая, наоборот, приехала сюда с сайта
+    (handlers/moderation.py).
     """
     kb = InlineKeyboardBuilder()
+    kb.button(text="🕓 На проверке", callback_data="md:queue")
     kb.button(text="👮 Администраторы", callback_data="am:admins")
     kb.button(text="📢 Анонс игр на неделю", callback_data="am:cast")
     kb.button(text="✉️ Написать всем", callback_data="am:say")
@@ -320,22 +323,59 @@ def announcement_keyboard() -> InlineKeyboardMarkup:
 # которым бот сообщил о новом событии. Уведомление приходит каждому админу
 # своей копией: решивший увидит итог в своей, остальные -- «уже рассмотрено»
 # при нажатии (бэкенд отвечает 409).
-def moderation_keyboard(kind: str, item_id: int) -> InlineKeyboardMarkup:
+KIND_REGISTRATION = "r"
+KIND_CHANGE = "c"
+
+# Хвост ":q" в callback_data значит «нажато из раздела «На проверке», а не из
+# уведомления»: решение там одно и то же, а вот куда возвращаться после него --
+# разное (к списку, а не к дописанному уведомлению).
+FROM_QUEUE = "q"
+
+
+def _suffix(from_queue: bool) -> str:
+    return f":{FROM_QUEUE}" if from_queue else ""
+
+
+def moderation_keyboard(kind: str, item_id: int, *, from_queue: bool = False) -> InlineKeyboardMarkup:
     """kind: 'r' -- заявка на вступление, 'c' -- правка профиля."""
     kb = InlineKeyboardBuilder()
+    tail = _suffix(from_queue)
     kb.button(
-        text="✅ Подтвердить" if kind == "r" else "✅ Применить",
-        callback_data=f"md:ok:{kind}:{item_id}",
+        text="✅ Подтвердить" if kind == KIND_REGISTRATION else "✅ Применить",
+        callback_data=f"md:ok:{kind}:{item_id}{tail}",
     )
-    kb.button(text="⛔ Отклонить", callback_data=f"md:no:{kind}:{item_id}")
+    kb.button(text="⛔ Отклонить", callback_data=f"md:no:{kind}:{item_id}{tail}")
     kb.adjust(2)
+    if from_queue:
+        kb.row(InlineKeyboardButton(text=BACK, callback_data="md:queue"))
     return kb.as_markup()
 
 
-def moderation_cancel_keyboard(kind: str, item_id: int) -> InlineKeyboardMarkup:
+def moderation_cancel_keyboard(
+    kind: str, item_id: int, *, from_queue: bool = False
+) -> InlineKeyboardMarkup:
     """Отмена ввода причины -- возвращает сообщение к двум кнопкам решения."""
     kb = InlineKeyboardBuilder()
-    kb.button(text=CANCEL, callback_data=f"md:back:{kind}:{item_id}")
+    kb.button(text=CANCEL, callback_data=f"md:back:{kind}:{item_id}{_suffix(from_queue)}")
+    return kb.as_markup()
+
+
+def moderation_queue_keyboard(registrations: list[dict], changes: list[dict]) -> InlineKeyboardMarkup:
+    """Список всего, что ждёт решения. Строка открывает карточку: две кнопки
+    решения на каждую из строк превратили бы экран в стену кнопок."""
+    kb = InlineKeyboardBuilder()
+    for item in registrations:
+        kb.button(
+            text=f"🆕 {item.get('nickname') or 'без ника'}",
+            callback_data=f"md:card:{KIND_REGISTRATION}:{item['player_id']}",
+        )
+    for item in changes:
+        kb.button(
+            text=f"✏️ {item.get('player_nickname') or 'игрок'} — {item.get('field_label') or 'поле'}",
+            callback_data=f"md:card:{KIND_CHANGE}:{item['change_id']}",
+        )
+    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text=BACK, callback_data="am:menu"))
     return kb.as_markup()
 
 

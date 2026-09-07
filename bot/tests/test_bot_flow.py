@@ -139,6 +139,8 @@ class FakeApi:
         # Решения админа по заявкам и правкам: что вызвали и чем ответить.
         self.moderated: list[tuple[str, int, str | None]] = []
         self.moderation_error: Exception | None = None
+        self.pending_registrations: list[dict] = []
+        self.pending_changes: list[dict] = []
         soon = datetime.now(LOCAL_TZ) + timedelta(days=1)
         self.session = _session(7, soon.replace(hour=18, minute=0, second=0, microsecond=0))
         # Ещё игры того же дня -- ими проверяется экран выбора формата, который
@@ -252,17 +254,27 @@ class FakeApi:
             "promoted_telegram_id": self.promote_on_cancel,
         }
 
-    # ---- модерация из сообщения
+    # ---- модерация из сообщения и из раздела «На проверке»
+    async def moderation_queue(self, tg_id: int) -> dict:
+        return {
+            "registrations": self.pending_registrations,
+            "profile_changes": self.pending_changes,
+        }
+
     async def moderate_registration(self, tg_id: int, player_id: int, *, reason=None) -> dict:
         if self.moderation_error:
             raise self.moderation_error
         self.moderated.append(("registration", player_id, reason))
+        self.pending_registrations = [
+            i for i in self.pending_registrations if i["player_id"] != player_id
+        ]
         return {"nickname": "Новичок"}
 
     async def moderate_profile_change(self, tg_id: int, change_id: int, *, reason=None) -> dict:
         if self.moderation_error:
             raise self.moderation_error
         self.moderated.append(("change", change_id, reason))
+        self.pending_changes = [i for i in self.pending_changes if i["change_id"] != change_id]
         return {"nickname": "Шериф", "field_label": "никнейм", "new_value": "Комиссар"}
 
     # ---- админские ручки
@@ -583,7 +595,7 @@ async def test_admin_menu_is_hidden_from_ordinary_players(stack):
     await dp.feed_update(bot, _message("/admin"))
     assert "Админ-меню" in bot.last_text
     # Планировщик уехал на сайт: в боте остались только права и две рассылки.
-    assert set(bot.last_inline()) == {"am:admins", "am:cast", "am:say", "mn:menu"}
+    assert set(bot.last_inline()) == {"md:queue", "am:admins", "am:cast", "am:say", "mn:menu"}
 
 
 @pytest.mark.asyncio
@@ -598,7 +610,7 @@ async def test_old_scheduler_buttons_say_where_the_planner_went(stack):
     for stale in ("am:create", "am:days", "am:toconfirm", "am:date:26082026", "am:played:8"):
         await dp.feed_update(bot, _callback(stale))
         assert "Расписание игр теперь ведётся на сайте" in bot.last_text
-        assert set(bot.last_inline()) == {"am:admins", "am:cast", "am:say", "mn:menu"}
+        assert set(bot.last_inline()) == {"md:queue", "am:admins", "am:cast", "am:say", "mn:menu"}
 
 
 @pytest.mark.asyncio
@@ -885,3 +897,91 @@ async def test_single_type_day_goes_straight_to_the_games(stack):
         f"sg:game:{day_token}:training:player:8",
         "sg:days",
     ]
+
+
+def _pending_registration(player_id: int) -> dict:
+    return {
+        "player_id": player_id,
+        "nickname": "Новичок",
+        "full_name": "Иванов Иван Иванович",
+        "affiliation": "vmk",
+        "telegram_username": "ivan",
+        "created_at": "2026-09-07T12:00:00Z",
+    }
+
+
+def _pending_change(change_id: int) -> dict:
+    return {
+        "change_id": change_id,
+        "player_nickname": "Шериф",
+        "telegram_username": None,
+        "field_label": "никнейм",
+        "current_value": "Шериф",
+        "new_value": "Комиссар",
+        "created_at": "2026-09-07T12:00:00Z",
+    }
+
+
+async def _open_admin(dp: Dispatcher, bot: MockedBot, api: FakeApi) -> None:
+    await _register(dp, bot)
+    api.profile["is_bot_admin"] = True
+    await dp.feed_update(bot, _message("/admin"))
+
+
+@pytest.mark.asyncio
+async def test_pending_section_lists_everything_awaiting_a_decision(stack):
+    """Уведомление можно удалить из чата, а экрана модерации на сайте больше
+    нет: без этого списка заявка не всплыла бы больше нигде."""
+    dp, bot, api = stack
+    api.pending_registrations = [_pending_registration(42)]
+    api.pending_changes = [_pending_change(9)]
+    await _open_admin(dp, bot, api)
+
+    await dp.feed_update(bot, _callback("md:queue"))
+    assert "На проверке" in bot.last_text
+    assert bot.last_inline() == ["md:card:r:42", "md:card:c:9", "am:menu"]
+
+    await dp.feed_update(bot, _callback("md:card:r:42"))
+    assert "Иванов Иван Иванович" in bot.last_text
+    assert bot.last_inline() == ["md:ok:r:42:q", "md:no:r:42:q", "md:queue"]
+
+
+@pytest.mark.asyncio
+async def test_deciding_from_the_section_returns_to_the_list(stack):
+    """Из списка -- в список: карточки решённой заявки в нём уже нет, и
+    оставлять админа на мёртвом экране незачем."""
+    dp, bot, api = stack
+    api.pending_registrations = [_pending_registration(42)]
+    api.pending_changes = [_pending_change(9)]
+    await _open_admin(dp, bot, api)
+
+    await dp.feed_update(bot, _callback("md:queue"))
+    await dp.feed_update(bot, _callback("md:ok:r:42:q"))
+    assert api.moderated == [("registration", 42, None)]
+    assert bot.last_inline() == ["md:card:c:9", "am:menu"]
+
+    # Отказ спрашивает причину и тоже возвращает к списку -- уже пустому.
+    await dp.feed_update(bot, _callback("md:no:c:9:q"))
+    assert "причину отклонения" in bot.last_text
+    assert bot.last_inline() == ["md:back:c:9:q"]
+
+    await dp.feed_update(bot, _message("Ник уже занят"))
+    assert api.moderated[-1] == ("change", 9, "Ник уже занят")
+    assert "Отклонено" in bot.last_text
+    assert "Ничего не ждёт решения" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_card_of_an_already_decided_item_falls_back_to_the_list(stack):
+    """Пока список висел на экране, заявку мог закрыть другой админ."""
+    dp, bot, api = stack
+    api.pending_registrations = [_pending_registration(42)]
+    await _open_admin(dp, bot, api)
+    await dp.feed_update(bot, _callback("md:queue"))
+
+    api.pending_registrations = []
+    bot.reset()
+    await dp.feed_update(bot, _callback("md:card:r:42"))
+    alerts = [c.text for c in bot.calls if isinstance(c, AnswerCallbackQuery) and c.show_alert]
+    assert alerts and "уже рассмотрели" in alerts[0]
+    assert "Ничего не ждёт решения" in bot.last_text
