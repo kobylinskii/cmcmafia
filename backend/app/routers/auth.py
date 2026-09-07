@@ -28,7 +28,12 @@ def _set_auth_cookies(response: Response, player_id: int) -> None:
     # попадал на форму логина, хотя сессия жива. От CSRF нас защищает не этот
     # флаг, а double-submit токен (см. app/deps.py: require_csrf), который Lax
     # никак не ослабляет: он по-прежнему не пускает межсайтовые POST/PUT/DELETE.
-    common = dict(httponly=True, secure=settings.cookie_secure, samesite="lax", domain=settings.cookie_domain)
+    common = dict(
+        httponly=True,
+        secure=settings.cookie_secure,
+        samesite=settings.cookie_samesite,
+        domain=settings.cookie_domain,
+    )
     response.set_cookie(ACCESS_COOKIE, access, max_age=settings.jwt_access_ttl_seconds, **common)
     response.set_cookie(REFRESH_COOKIE, refresh, max_age=settings.jwt_refresh_ttl_seconds, **common)
     response.set_cookie(
@@ -37,7 +42,7 @@ def _set_auth_cookies(response: Response, player_id: int) -> None:
         max_age=settings.jwt_refresh_ttl_seconds,
         httponly=False,
         secure=settings.cookie_secure,
-        samesite="lax",
+        samesite=settings.cookie_samesite,
         domain=settings.cookie_domain,
     )
 

@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -7,6 +8,25 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/mafia"
+
+    # Railway (и Heroku, и Render) выдают DATABASE_URL со схемой `postgresql://`
+    # или даже устаревшей `postgres://`. SQLAlchemy с драйвером psycopg3 требует
+    # явного `postgresql+psycopg://`, иначе подхватывает несуществующий psycopg2
+    # и падает на старте. Нормализуем схему здесь, чтобы переменную из плагина
+    # БД можно было прокинуть в сервис как есть.
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def _normalize_db_scheme(cls, value: str) -> str:
+        if not isinstance(value, str):
+            return value
+        for prefix in ("postgresql+psycopg://", "postgresql+psycopg2://", "sqlite"):
+            if value.startswith(prefix):
+                return value
+        if value.startswith("postgres://"):
+            return "postgresql+psycopg://" + value[len("postgres://") :]
+        if value.startswith("postgresql://"):
+            return "postgresql+psycopg://" + value[len("postgresql://") :]
+        return value
 
     jwt_secret: str
     jwt_algorithm: str = "HS256"
@@ -24,6 +44,11 @@ class Settings(BaseSettings):
 
     cookie_secure: bool = True
     cookie_domain: str | None = None
+    # "lax" достаточно, когда сайт и API на одном registrable-домене
+    # (site.ru + api.site.ru). Если фронт и бэкенд разнесены на разные домены
+    # (например, два разных *.up.railway.app), браузер в межсайтовом запросе
+    # отдаёт куку сессии только при samesite="none" (и обязательно secure=true).
+    cookie_samesite: str = "lax"
 
     login_max_attempts: int = 5
     login_lockout_minutes: int = 15
