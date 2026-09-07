@@ -58,12 +58,13 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="ru"
       className={`${unbounded.variable} ${golos.variable} ${jetbrainsMono.variable} h-full`}
     >
-      {/* Без JS IntersectionObserver не отработает и блоки с .reveal остались
-          бы невидимыми навсегда -- показываем их сразу. */}
-      <noscript>
-        <style>{`.reveal { opacity: 1; transform: none; }`}</style>
-      </noscript>
       <body className="min-h-full antialiased">
+        {/* Без JS IntersectionObserver не отработает и блоки с .reveal остались
+            бы невидимыми навсегда -- показываем их сразу. Тег живёт внутри
+            <body>: прямым потомком <html> он ронял гидрацию. */}
+        <noscript>
+          <style>{`.reveal { opacity: 1; transform: none; }`}</style>
+        </noscript>
         <div className="grain-overlay" aria-hidden="true" />
         {children}
       </body>
