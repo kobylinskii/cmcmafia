@@ -11,9 +11,14 @@ __pycache__/
 .venv/
 *.egg-info/
 
-# Env files (per-service, never commit secrets)
+# Env files (per-service, never commit secrets).
+# Паттерн со звёздочкой -- потому что .env и .env.local его не покрывали:
+# bot/.env.bak-1788635621 спокойно уехал в историю репозитория.
+# .env.example -- единственное исключение, он и должен лежать в git.
 .env
-.env.local
+.env.*
+!.env.example
+*.bak
 
 # Backend
 backend/media/
