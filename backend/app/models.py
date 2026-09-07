@@ -251,7 +251,7 @@ class Tournament(Base):
     game_type='tournament'.
 
     Турнирные игры больше не создаются через бота (ни регистрации, ни
-    создания сессий для game_type='tournament' -- см. GAME_TYPES в
+    создания сессий для game_type='tournament' -- см. GameTypeLiteral в
     app/schemas/bot.py) -- вся турнирная сетка целиком заводится и
     редактируется на сайте, поэтому связь games.tournament_id обязательна для
     оценённых турнирных игр (см. ck_games_rated_tournament_has_tournament) без

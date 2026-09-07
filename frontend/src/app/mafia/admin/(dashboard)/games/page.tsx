@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { Suspense, useCallback } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus, PencilSimple, Trash } from "@phosphor-icons/react/dist/ssr";
 import clsx from "clsx";
-import { clientFetch, ApiError } from "@/lib/api";
+import { clientFetch } from "@/lib/api";
+import { useResource } from "@/lib/use-resource";
+import { useConfirmable } from "@/lib/use-confirmable";
 import type { GameListItem, GameListOut } from "@/types/api";
 import { GAME_TYPE_LABELS } from "@/types/api";
 import { LinkButton } from "@/components/ui/button";
@@ -108,33 +110,13 @@ function GamesTabs() {
 }
 
 function PendingReview() {
-  const [games, setGames] = useState<GameListItem[] | null>(null);
-  const [toDrop, setToDrop] = useState<GameListItem | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    clientFetch<GameListItem[]>("/api/admin/games/pending-review")
-      .then(setGames)
-      .catch(() => setGames([]));
-  }, []);
-
-  useEffect(load, [load]);
-
-  async function drop() {
-    if (!toDrop) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await clientFetch(`/api/admin/games/${toDrop.id}`, { method: "DELETE" });
-      setToDrop(null);
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось удалить");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { data: games, error, reload } = useResource<GameListItem[]>(
+    "/api/admin/games/pending-review"
+  );
+  const drop = useConfirmable<GameListItem>(async (game) => {
+    await clientFetch(`/api/admin/games/${game.id}`, { method: "DELETE" });
+    reload();
+  });
 
   return (
     <div>
@@ -142,6 +124,7 @@ function PendingReview() {
         Игры, проведение которых подтвердили в расписании. Оцените через карандаш или оставьте без
         оценки корзиной — запись просто исчезнет из этого списка.
       </p>
+      {error && <p className="mt-3 text-sm text-brand-300">{error}</p>}
       <div className="mt-3 flex flex-col gap-2">
         {games === null && <p className="text-sm text-ink-500">Загрузка…</p>}
         {games?.length === 0 && (
@@ -150,63 +133,39 @@ function PendingReview() {
           </p>
         )}
         {games?.map((game) => (
-          <GameRow key={game.id} game={game} onDelete={setToDrop} pending />
+          <GameRow key={game.id} game={game} onDelete={drop.ask} pending />
         ))}
       </div>
 
       <ConfirmDialog
-        open={toDrop !== null}
-        title={`Оставить игру №${toDrop?.id} без оценки?`}
+        open={drop.target !== null}
+        title={`Оставить игру №${drop.target?.id} без оценки?`}
         description="Игра исчезнет из списка ожидания вместе с составом, который в ней записан. Восстановить её можно будет только вручную."
         confirmLabel="Оставить без оценки"
-        busy={busy}
-        error={error}
-        onConfirm={drop}
-        onCancel={() => {
-          setToDrop(null);
-          setError(null);
-        }}
+        busy={drop.busy}
+        error={drop.error}
+        onConfirm={drop.run}
+        onCancel={drop.close}
       />
     </div>
   );
 }
 
 function RatedGames() {
-  const [rated, setRated] = useState<GameListOut | null>(null);
-  const [toDelete, setToDelete] = useState<GameListItem | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
-
-  const load = useCallback(() => {
-    clientFetch<GameListOut>("/api/admin/games?limit=50")
-      .then(setRated)
-      .catch((err) => setLoadError(err instanceof ApiError ? err.message : "Не удалось загрузить"));
-  }, []);
-
-  useEffect(load, [load]);
-
-  async function remove() {
-    if (!toDelete) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await clientFetch(`/api/admin/games/${toDelete.id}`, { method: "DELETE" });
-      setToDelete(null);
-      load();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось удалить");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const { data: rated, error: loadError, reload } = useResource<GameListOut>(
+    "/api/admin/games?limit=50"
+  );
+  const del = useConfirmable<GameListItem>(async (game) => {
+    await clientFetch(`/api/admin/games/${game.id}`, { method: "DELETE" });
+    reload();
+  });
 
   return (
     <div>
       {loadError && <p className="text-sm text-brand-300">{loadError}</p>}
       <div className="flex flex-col gap-2">
         {rated?.items.map((game) => (
-          <GameRow key={game.id} game={game} onDelete={setToDelete} />
+          <GameRow key={game.id} game={game} onDelete={del.ask} />
         ))}
         {rated?.items.length === 0 && (
           <p className="rounded-card border border-ink-800 bg-ink-900 p-6 text-center text-sm text-ink-500">
@@ -216,17 +175,14 @@ function RatedGames() {
       </div>
 
       <ConfirmDialog
-        open={toDelete !== null}
-        title={`Удалить игру №${toDelete?.id}?`}
+        open={del.target !== null}
+        title={`Удалить игру №${del.target?.id}?`}
         description="Игра и её результат удалятся безвозвратно, рейтинг всех участников будет пересчитан заново."
         confirmLabel="Удалить игру"
-        busy={busy}
-        error={error}
-        onConfirm={remove}
-        onCancel={() => {
-          setToDelete(null);
-          setError(null);
-        }}
+        busy={del.busy}
+        error={del.error}
+        onConfirm={del.run}
+        onCancel={del.close}
       />
     </div>
   );

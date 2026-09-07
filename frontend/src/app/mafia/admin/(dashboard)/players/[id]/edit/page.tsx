@@ -2,22 +2,18 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { use, useEffect, useRef, useState } from "react";
+import { use, useRef, useState } from "react";
 import { ArrowLeft, UploadSimple } from "@phosphor-icons/react/dist/ssr";
 import { clientFetch, ApiError, mediaUrl } from "@/lib/api";
+import { useResource } from "@/lib/use-resource";
 import type { PlayerAdminOut } from "@/types/api";
 import { PlayerForm } from "@/components/admin/player-form";
 
 export default function EditPlayerPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
-  const [player, setPlayer] = useState<PlayerAdminOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    clientFetch<PlayerAdminOut>(`/api/admin/players/${id}`)
-      .then(setPlayer)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить"));
-  }, [id]);
+  const { data: player, error, setData: setPlayer } = useResource<PlayerAdminOut>(
+    `/api/admin/players/${id}`
+  );
 
   return (
     <div>

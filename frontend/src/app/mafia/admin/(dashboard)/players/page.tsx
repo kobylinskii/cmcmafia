@@ -1,44 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Plus, PencilSimple, Trash, Key } from "@phosphor-icons/react/dist/ssr";
 import { clientFetch, ApiError } from "@/lib/api";
+import { useResource } from "@/lib/use-resource";
+import { useConfirmable } from "@/lib/use-confirmable";
 import type { PlayerAdminOut } from "@/types/api";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AdminPlayersPage() {
-  const [players, setPlayers] = useState<PlayerAdminOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: players, error, reload } = useResource<PlayerAdminOut[]>("/api/admin/players");
   const [grantFor, setGrantFor] = useState<PlayerAdminOut | null>(null);
-  const [toDelete, setToDelete] = useState<PlayerAdminOut | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  function load() {
-    clientFetch<PlayerAdminOut[]>("/api/admin/players")
-      .then(setPlayers)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить"));
-  }
-
-  useEffect(load, []);
-
-  async function confirmDelete() {
-    if (!toDelete) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await clientFetch(`/api/admin/players/${toDelete.id}`, { method: "DELETE" });
-      setToDelete(null);
-      load();
-    } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.message : "Не удалось удалить");
-    } finally {
-      setDeleting(false);
-    }
-  }
+  const del = useConfirmable<PlayerAdminOut>(async (player) => {
+    await clientFetch(`/api/admin/players/${player.id}`, { method: "DELETE" });
+    reload();
+  }, "Не удалось удалить");
 
   return (
     <div>
@@ -99,7 +79,7 @@ export default function AdminPlayersPage() {
                       <PencilSimple size={16} />
                     </Link>
                     <button
-                      onClick={() => setToDelete(p)}
+                      onClick={() => del.ask(p)}
                       className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
                     >
                       <Trash size={16} />
@@ -116,8 +96,8 @@ export default function AdminPlayersPage() {
       {grantFor && <GrantAccessModal player={grantFor} onClose={() => setGrantFor(null)} />}
 
       <ConfirmDialog
-        open={toDelete !== null}
-        title={`Удалить игрока «${toDelete?.nickname}»?`}
+        open={del.target !== null}
+        title={`Удалить игрока «${del.target?.nickname}»?`}
         description={
           <>
             Если за игроком числятся сыгранные партии, он будет скрыт с сайта, но останется
@@ -125,13 +105,10 @@ export default function AdminPlayersPage() {
           </>
         }
         confirmLabel="Удалить игрока"
-        busy={deleting}
-        error={deleteError}
-        onConfirm={confirmDelete}
-        onCancel={() => {
-          setToDelete(null);
-          setDeleteError(null);
-        }}
+        busy={del.busy}
+        error={del.error}
+        onConfirm={del.run}
+        onCancel={del.close}
       />
     </div>
   );

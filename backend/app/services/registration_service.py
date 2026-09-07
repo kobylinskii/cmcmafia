@@ -10,14 +10,14 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app import models, serializers
+from app.errors import ServiceError
 
 HOST_LIMIT = 1
 JUDGE_LIMIT = 2
 
 
-class RegistrationError(Exception):
+class RegistrationError(ServiceError):
     def __init__(self, message: str, reason: str | None = None):
-        self.message = message
         self.reason = reason
         super().__init__(message)
 

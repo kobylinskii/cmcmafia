@@ -15,14 +15,13 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models
+from app.errors import ServiceError
 from app.services import slug_service
 from app.textmatch import ci_equals
 
 
-class TournamentValidationError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(message)
+class TournamentValidationError(ServiceError):
+    pass
 
 
 def _validate_slug(slug: str) -> None:

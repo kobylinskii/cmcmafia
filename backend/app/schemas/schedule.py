@@ -10,9 +10,9 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field
 
-from app.schemas.bot import GAME_TYPES, RosterOut, SessionOut
+from app.schemas.bot import GameTypeLiteral, RosterOut, SessionOut
 
 # Шаг между слотами. Минимум -- полчаса (короче игра не заканчивается),
 # максимум -- полсуток: больше означает, что админ перепутал поле.
@@ -27,18 +27,11 @@ class SchedulePlanIn(BaseModel):
     count: int = Field(ge=1, le=48)
     step_minutes: int = Field(default=60, ge=MIN_STEP_MINUTES, le=MAX_STEP_MINUTES)
     location: str = Field(min_length=1, max_length=200)
-    game_type: str
+    game_type: GameTypeLiteral
     # По умолчанию игра оценивается: так работал единственный существовавший
     # до этого флоу, и «забыл поставить галочку» не должно тихо выкидывать
     # игру из рейтинга.
     needs_rating: bool = True
-
-    @field_validator("game_type")
-    @classmethod
-    def validate_game_type(cls, v: str) -> str:
-        if v not in GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {GAME_TYPES}")
-        return v
 
 
 class SchedulePlanPreviewOut(BaseModel):
@@ -55,15 +48,8 @@ class SchedulePlanPreviewOut(BaseModel):
 class ScheduleSessionUpdateIn(BaseModel):
     starts_at: datetime | None = None
     location: str | None = Field(default=None, min_length=1, max_length=200)
-    game_type: str | None = None
+    game_type: GameTypeLiteral | None = None
     needs_rating: bool | None = None
-
-    @field_validator("game_type")
-    @classmethod
-    def validate_game_type(cls, v: str | None) -> str | None:
-        if v is not None and v not in GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {GAME_TYPES}")
-        return v
 
 
 class ScheduleDayOut(BaseModel):

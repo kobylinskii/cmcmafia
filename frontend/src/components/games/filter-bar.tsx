@@ -1,30 +1,15 @@
 "use client";
 
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
-import clsx from "clsx";
+import { useSearchParams } from "next/navigation";
+import { useUpdateParams } from "@/lib/nav";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { GAME_TYPE_LABELS, type TournamentListItem } from "@/types/api";
 
-const PAGE_SIZES = [10, 25, 50, 100];
+const PAGE_SIZES = ["10", "25", "50", "100"].map((n) => ({ value: n, label: n }));
 
 const control =
   "rounded-lg border border-ink-700 bg-ink-850 px-3 py-2 text-base text-ink-100 focus:border-brand-500 focus:outline-none";
 const fieldLabel = "flex flex-col gap-1.5 text-sm text-ink-400";
-
-function useUpdateParams() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-
-  return (patch: Record<string, string>) => {
-    const params = new URLSearchParams(searchParams.toString());
-    for (const [key, value] of Object.entries(patch)) {
-      if (value) params.set(key, value);
-      else params.delete(key);
-    }
-    params.delete("offset");
-    router.push(`${pathname}?${params.toString()}`);
-  };
-}
 
 // Список турниров приходит пропом от серверного компонента страницы, а не
 // догружается из браузера: иначе это лишний запрос на каждый заход, мигание
@@ -99,24 +84,11 @@ export function GamesFilterBar({ tournaments }: { tournaments: TournamentListIte
       <div className="flex flex-wrap items-end justify-between gap-4 border-t border-ink-800 pt-5">
         <div className={fieldLabel}>
           Показывать последние
-          {/* Сегментированный переключатель, а не range: тот слал навигацию на
-              каждый тик перетаскивания и упирался в rate limit публичного API. */}
-          <div className="inline-flex rounded-pill border border-ink-700 bg-ink-850 p-1">
-            {PAGE_SIZES.map((size) => (
-              <button
-                key={size}
-                type="button"
-                onClick={() => update({ limit: String(size) })}
-                aria-pressed={limit === String(size)}
-                className={clsx(
-                  "rounded-pill px-3.5 py-1.5 text-base font-medium transition-colors active:translate-y-px",
-                  limit === String(size) ? "bg-brand-600 text-ink-50" : "text-ink-300 hover:text-ink-50"
-                )}
-              >
-                {size}
-              </button>
-            ))}
-          </div>
+          <SegmentedControl
+            options={PAGE_SIZES}
+            value={limit}
+            onChange={(limit) => update({ limit })}
+          />
         </div>
 
         {hasFilters && (

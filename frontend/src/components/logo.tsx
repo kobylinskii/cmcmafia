@@ -46,18 +46,6 @@ export function LogoMark({
   );
 }
 
-export function LogoHorizontal({ className }: { className?: string }) {
-  return (
-    <Image
-      src="/logo/logo-horizontal.png"
-      alt="Мафия ВМК"
-      width={652}
-      height={340}
-      className={className}
-    />
-  );
-}
-
 /** Full emblem in a circular badge (hat, MSU tower silhouette, wordmark and
  * "ВМК" signature) -- the red AND white artwork are both real, kept as-is,
  * used large e.g. the homepage hero visual. */

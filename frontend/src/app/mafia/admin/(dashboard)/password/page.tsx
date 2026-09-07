@@ -5,12 +5,9 @@ import { CheckCircle } from "@phosphor-icons/react/dist/ssr";
 import { ApiError } from "@/lib/api";
 import { adminChangePassword } from "@/lib/admin-auth";
 import { Button } from "@/components/ui/button";
+import { fieldLarge as field, fieldLabelLg as label } from "@/lib/ui";
 
 const MIN_LENGTH = 10;
-
-const field =
-  "rounded-lg border border-ink-700 bg-ink-900 px-3.5 py-2.5 text-base text-ink-50 focus:border-brand-500 focus:outline-none";
-const label = "flex flex-col gap-1.5 text-sm font-medium text-ink-400";
 
 export default function ChangePasswordPage() {
   const [current, setCurrent] = useState("");

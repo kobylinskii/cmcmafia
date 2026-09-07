@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from app import models
+from app.errors import ServiceError
 from app.textmatch import ci_equals
 
 STATUS_PENDING = models.ProfileChangeStatus.pending.value
@@ -42,10 +43,8 @@ FIELD_LABELS: dict[str, str] = {
 }
 
 
-class ProfileChangeError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(message)
+class ProfileChangeError(ServiceError):
+    pass
 
 
 def requires_moderation(player: models.Player, field: str) -> bool:

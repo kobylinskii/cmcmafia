@@ -5,11 +5,10 @@ import { useState } from "react";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { toDateValue, fromClubDateValue } from "@/lib/format";
+import { fieldLarge as field, fieldLabelLg as label } from "@/lib/ui";
+import { useSlugSuggestion } from "@/lib/use-slug-suggestion";
+import { SlugSuggestion } from "@/components/admin/slug-suggestion";
 import type { TournamentAdminOut } from "@/types/api";
-
-const field =
-  "rounded-lg border border-ink-700 bg-ink-900 px-3.5 py-2.5 text-base text-ink-50 focus:border-brand-500 focus:outline-none";
-const label = "flex flex-col gap-1.5 text-sm font-medium text-ink-400";
 
 export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut }) {
   const router = useRouter();
@@ -17,8 +16,6 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
 
   const [name, setName] = useState(tournament?.name ?? "");
   const [slug, setSlug] = useState(tournament?.slug ?? "");
-  const [slugTouched, setSlugTouched] = useState(false);
-  const [slugSuggestion, setSlugSuggestion] = useState<string | null>(null);
   const [description, setDescription] = useState(tournament?.description ?? "");
   const [location, setLocation] = useState(tournament?.location ?? "");
   const [startsAt, setStartsAt] = useState(tournament ? toDateValue(tournament.starts_at) : "");
@@ -27,25 +24,14 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
   const [loading, setLoading] = useState(false);
   const [saved, setSaved] = useState(false);
 
-  const originalName = tournament?.name ?? "";
-
-  async function handleNameBlur() {
-    setSlugSuggestion(null);
-    if (slugTouched || !name.trim()) return;
-    if (isEdit && name.trim() === originalName) return;
-    try {
-      const res = await clientFetch<{ slug: string }>(
-        `/api/admin/tournaments/slug-suggestion?name=${encodeURIComponent(name)}`
-      );
-      if (res.slug === slug) return;
-      // У существующего турнира slug -- публичный адрес страницы, молча его
-      // менять нельзя; у нового просто подставляем.
-      if (isEdit) setSlugSuggestion(res.slug);
-      else setSlug(res.slug);
-    } catch {
-      // не критично -- slug можно ввести руками
-    }
-  }
+  const slugSuggest = useSlugSuggestion({
+    endpoint: "/api/admin/tournaments/slug-suggestion",
+    param: "name",
+    isEdit,
+    original: tournament?.name ?? "",
+    slug,
+    setSlug,
+  });
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -99,7 +85,7 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
           className={field}
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onBlur={handleNameBlur}
+          onBlur={() => slugSuggest.onSourceBlur(name)}
           required
           minLength={2}
           maxLength={150}
@@ -113,31 +99,19 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
           value={slug}
           onChange={(e) => {
             setSlug(e.target.value);
-            setSlugTouched(true);
+            slugSuggest.markTouched();
           }}
           pattern="[a-z0-9][a-z0-9-]{1,48}[a-z0-9]"
           placeholder="kubok-vmk"
           required
         />
-        {slugSuggestion && (
-          <span className="flex flex-wrap items-center gap-2 rounded-lg border border-brand-800 bg-brand-900/25 px-3 py-2 font-normal text-ink-200">
-            Название изменилось. Предложение:{" "}
-            <code className="font-mono text-ink-50">{slugSuggestion}</code>
-            <button
-              type="button"
-              onClick={() => {
-                setSlug(slugSuggestion);
-                setSlugTouched(true);
-                setSlugSuggestion(null);
-              }}
-              className="rounded-pill bg-brand-600 px-3 py-1 text-xs font-medium text-ink-50 hover:bg-brand-500 active:translate-y-px"
-            >
-              Подставить
-            </button>
-            <span className="w-full text-ink-500">
-              Меняя slug, вы меняете адрес страницы турнира — старые ссылки перестанут работать.
-            </span>
-          </span>
+        {slugSuggest.suggestion && (
+          <SlugSuggestion
+            intro="Название изменилось. Предложение:"
+            suggestion={slugSuggest.suggestion}
+            onApply={slugSuggest.apply}
+            onDismiss={slugSuggest.dismiss}
+          />
         )}
         <span className="font-normal text-ink-500">Только латиница, цифры и дефис.</span>
       </label>

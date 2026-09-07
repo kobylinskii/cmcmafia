@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { fromClubDatetimeLocal, toDatetimeLocalValue } from "@/lib/format";
+import { fieldDense as field, fieldLabel as label } from "@/lib/ui";
 import type {
   GameOut,
   GameType,
@@ -14,19 +15,17 @@ import type {
   ParticipantInfo,
   ParticipantOut,
 } from "@/types/api";
-import { RESULT_LABELS, ROLE_LABELS, INFO_LABELS, LH_SCALE } from "@/types/api";
+import {
+  GAME_TYPE_LABELS,
+  RESULT_LABELS,
+  ROLE_LABELS,
+  INFO_LABELS,
+  LH_SCALE,
+  SCHEDULE_GAME_TYPES,
+} from "@/types/api";
 import { PlayerCombobox } from "@/components/admin/player-combobox";
 import { ScoreInput } from "@/components/admin/score-input";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-
-/** Тут создаются и правятся только бот-форматы -- турнирные игры заводятся
- * целиком во вкладке «Турниры» (см. TournamentStagesManager), а привязку к
- * турниру/этапу уже существующего слота эта форма не меняет (см. пояснение
- * в game_service.update_rated_game на бэкенде). */
-const CREATABLE_GAME_TYPE_LABELS: Record<Exclude<GameType, "tournament">, string> = {
-  funky: "Фанки",
-  training: "Обучающая",
-};
 
 type Row = {
   seat_number: number;
@@ -123,10 +122,6 @@ const ROSTER_ROLE_LABELS: Record<GameRosterEntry["role"], string> = {
   judge: "Судья",
   player: "Игрок",
 };
-
-const field =
-  "rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2 text-sm text-ink-50 focus:border-brand-500 focus:outline-none w-full";
-const label = "flex flex-col gap-1.5 text-xs font-medium text-ink-400";
 
 export function GameForm({ game }: { game?: GameOut & { id: number } }) {
   const router = useRouter();
@@ -421,9 +416,9 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
               value={gameType}
               onChange={(e) => setGameType(e.target.value as Exclude<GameType, "tournament">)}
             >
-              {Object.entries(CREATABLE_GAME_TYPE_LABELS).map(([v, l]) => (
+              {SCHEDULE_GAME_TYPES.map((v) => (
                 <option key={v} value={v}>
-                  {l}
+                  {GAME_TYPE_LABELS[v]}
                 </option>
               ))}
             </select>

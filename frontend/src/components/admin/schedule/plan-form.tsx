@@ -3,32 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { fromClubDatetimeLocal, plural } from "@/lib/format";
+import { fromClubDatetimeLocal, formatTime, plural } from "@/lib/format";
+import { fieldDense as field, fieldLabel as label } from "@/lib/ui";
 import type { ScheduleGameType, SchedulePlanPreviewOut, SessionOut } from "@/types/api";
-
-/** Тот же набор, что и в боте: турнирные слоты в расписании не заводятся. */
-const GAME_TYPES: Record<ScheduleGameType, string> = {
-  funky: "Фанки",
-  training: "Обучающая",
-};
+import { GAME_TYPE_LABELS, SCHEDULE_GAME_TYPES } from "@/types/api";
 
 // Границы шага повторяют backend/app/schemas/schedule.py: короче получаса игра
 // не заканчивается, а полсуток -- это уже опечатка в поле.
 const MIN_STEP = 30;
 const MAX_STEP = 720;
 const MAX_COUNT = 48;
-
-const field =
-  "rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2 text-sm text-ink-50 focus:border-brand-500 focus:outline-none w-full";
-const label = "flex flex-col gap-1.5 text-xs font-medium text-ink-400";
-
-function timeOfDay(iso: string): string {
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Europe/Moscow",
-  }).format(new Date(iso));
-}
 
 /**
  * Планирование игрового дня: одна форма вместо шести экранов бота.
@@ -156,9 +140,9 @@ export function PlanForm({
             value={gameType}
             onChange={(e) => setGameType(e.target.value as ScheduleGameType)}
           >
-            {Object.entries(GAME_TYPES).map(([value, title]) => (
+            {SCHEDULE_GAME_TYPES.map((value) => (
               <option key={value} value={value}>
-                {title}
+                {GAME_TYPE_LABELS[value]}
               </option>
             ))}
           </select>
@@ -265,7 +249,7 @@ export function PlanForm({
                       : "rounded-pill border border-ink-700 bg-ink-850 px-3 py-1 text-xs text-ink-200"
                   }
                 >
-                  {timeOfDay(iso)}
+                  {formatTime(iso)}
                   {busy && " · занято"}
                 </li>
               );

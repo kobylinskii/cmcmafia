@@ -1,9 +1,8 @@
 import Link from "next/link";
-import Image from "next/image";
 import { CheckCircle } from "@phosphor-icons/react/dist/ssr";
 import type { TournamentStandingOut } from "@/types/api";
 import { formatDash } from "@/lib/format";
-import { mediaUrl } from "@/lib/api";
+import { PlayerAvatar } from "@/components/ui/player-avatar";
 
 /**
  * Турнирная таблица: суммы игровых колонок по всем оценённым играм турнира
@@ -81,21 +80,7 @@ export function TournamentStandingsTable({
                   href={`/mafia/${row.slug}`}
                   className="flex items-center gap-3 font-medium text-ink-50 hover:text-brand-400"
                 >
-                  <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-ink-800">
-                    {mediaUrl(row.photo_url) ? (
-                      <Image
-                      src={mediaUrl(row.photo_url)!}
-                      alt={row.nickname}
-                      fill
-                      sizes="32px"
-                      className="object-cover"
-                    />
-                    ) : (
-                      <span className="flex h-full w-full items-center justify-center text-xs text-ink-300">
-                        {row.nickname.slice(0, 1).toUpperCase()}
-                      </span>
-                    )}
-                  </span>
+                  <PlayerAvatar photoUrl={row.photo_url} nickname={row.nickname} />
                   {row.nickname}
                 </Link>
               </td>

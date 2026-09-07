@@ -6,11 +6,11 @@ import { CaretDown, CaretUp, Flag, PencilSimple, Plus, Trash } from "@phosphor-i
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useResource } from "@/lib/use-resource";
+import { useConfirmable } from "@/lib/use-confirmable";
+import { field } from "@/lib/ui";
 import { formatDash, formatDateTime } from "@/lib/format";
 import type { TournamentStageGameOut, TournamentStageOut, TournamentStandingOut } from "@/types/api";
-
-const field =
-  "rounded-lg border border-ink-700 bg-ink-900 px-3.5 py-2.5 text-sm text-ink-50 focus:border-brand-500 focus:outline-none";
 
 /**
  * Игры турнира: слоты добавляются заранее (по числу игр), а их содержимое
@@ -41,26 +41,10 @@ function GameSlotList({
   // не сквозной идентификатор из базы, который ни о чём ему не говорит и
   // прыгает через десятки при удалении слотов. Ключ, ссылки и удаление
   // по-прежнему идут по настоящему id.
-  const [toDelete, setToDelete] = useState<{ game: TournamentStageGameOut; number: number } | null>(
-    null
-  );
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
-
-  async function confirmDelete() {
-    if (!toDelete) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await clientFetch(`/api/admin/games/${toDelete.game.id}`, { method: "DELETE" });
-      onChanged();
-      setToDelete(null);
-    } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.message : "Не удалось удалить");
-    } finally {
-      setDeleting(false);
-    }
-  }
+  const del = useConfirmable<{ game: TournamentStageGameOut; number: number }>(async ({ game }) => {
+    await clientFetch(`/api/admin/games/${game.id}`, { method: "DELETE" });
+    onChanged();
+  });
 
   if (games.length === 0) {
     return <p className="text-sm text-ink-500">Игр пока нет.</p>;
@@ -106,7 +90,7 @@ function GameSlotList({
                 <PencilSimple size={16} />
               </Link>
               <button
-                onClick={() => setToDelete({ game, number: index + 1 })}
+                onClick={() => del.ask({ game, number: index + 1 })}
                 title="Удалить"
                 className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
               >
@@ -119,21 +103,18 @@ function GameSlotList({
       </div>
 
       <ConfirmDialog
-        open={toDelete !== null}
-        title={toDelete ? `Удалить игру ${toDelete.number}?` : ""}
+        open={del.target !== null}
+        title={del.target ? `Удалить игру ${del.target.number}?` : ""}
         description={
-          toDelete?.game.status === "rated"
+          del.target?.game.status === "rated"
             ? "Игра уже оценена — результат удалится безвозвратно, рейтинг всех участников будет пересчитан заново."
             : "Пустой слот будет удалён безвозвратно."
         }
         confirmLabel="Удалить"
-        busy={deleting}
-        error={deleteError}
-        onConfirm={confirmDelete}
-        onCancel={() => {
-          setToDelete(null);
-          setDeleteError(null);
-        }}
+        busy={del.busy}
+        error={del.error}
+        onConfirm={del.run}
+        onCancel={del.close}
       />
     </>
   );
@@ -186,16 +167,10 @@ function AddGamesForm({ addUrl, onAdded }: { addUrl: string; onAdded: () => void
 /** Игры турнира без этапа -- для простого турнира (≤10 участников), которому
  * никакой сетки не нужно, просто играется серия из N игр. */
 function FlatGamesPanel({ tournamentId }: { tournamentId: number }) {
-  const [games, setGames] = useState<TournamentStageGameOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    clientFetch<TournamentStageGameOut[]>(`/api/admin/tournaments/${tournamentId}/games`)
-      .then(setGames)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить игры"));
-  }
-
-  useEffect(load, [tournamentId]);
+  const { data: games, error, reload } = useResource<TournamentStageGameOut[]>(
+    `/api/admin/tournaments/${tournamentId}/games`,
+    "Не удалось загрузить игры"
+  );
 
   return (
     <div className="rounded-card border border-ink-800 bg-ink-900/60 p-5">
@@ -208,14 +183,14 @@ function FlatGamesPanel({ tournamentId }: { tournamentId: number }) {
       {error && <p className="mt-3 text-sm text-brand-300">{error}</p>}
 
       <div className="mt-4">
-        <AddGamesForm addUrl={`/api/admin/tournaments/${tournamentId}/games`} onAdded={load} />
+        <AddGamesForm addUrl={`/api/admin/tournaments/${tournamentId}/games`} onAdded={reload} />
       </div>
 
       <div className="mt-4">
         {games === null ? (
           <p className="text-sm text-ink-500">Загрузка…</p>
         ) : (
-          <GameSlotList games={games} onChanged={load} />
+          <GameSlotList games={games} onChanged={reload} />
         )}
       </div>
     </div>
@@ -223,25 +198,21 @@ function FlatGamesPanel({ tournamentId }: { tournamentId: number }) {
 }
 
 function StagesPanel({ tournamentId }: { tournamentId: number }) {
-  const [stages, setStages] = useState<TournamentStageOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: stages, error, reload } = useResource<TournamentStageOut[]>(
+    `/api/admin/tournaments/${tournamentId}/stages`,
+    "Не удалось загрузить этапы"
+  );
   const [newName, setNewName] = useState("");
   const [newGamesCount, setNewGamesCount] = useState("1");
   const [newIsFinal, setNewIsFinal] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
-  const [toDelete, setToDelete] = useState<TournamentStageOut | null>(null);
-  const [deleting, setDeleting] = useState(false);
-  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [openStageId, setOpenStageId] = useState<number | null>(null);
 
-  function load() {
-    clientFetch<TournamentStageOut[]>(`/api/admin/tournaments/${tournamentId}/stages`)
-      .then(setStages)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить этапы"));
-  }
-
-  useEffect(load, [tournamentId]);
+  const del = useConfirmable<TournamentStageOut>(async (stage) => {
+    await clientFetch(`/api/admin/tournaments/${tournamentId}/stages/${stage.id}`, { method: "DELETE" });
+    reload();
+  }, "Не удалось удалить этап");
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -257,29 +228,12 @@ function StagesPanel({ tournamentId }: { tournamentId: number }) {
       setNewName("");
       setNewGamesCount("1");
       setNewIsFinal(false);
-      load();
+      reload();
       setOpenStageId(stage.id);
     } catch (err) {
       setCreateError(err instanceof ApiError ? err.message : "Не удалось создать этап");
     } finally {
       setCreating(false);
-    }
-  }
-
-  async function confirmDelete() {
-    if (!toDelete) return;
-    setDeleting(true);
-    setDeleteError(null);
-    try {
-      await clientFetch(`/api/admin/tournaments/${tournamentId}/stages/${toDelete.id}`, {
-        method: "DELETE",
-      });
-      setToDelete(null);
-      load();
-    } catch (err) {
-      setDeleteError(err instanceof ApiError ? err.message : "Не удалось удалить этап");
-    } finally {
-      setDeleting(false);
     }
   }
 
@@ -290,7 +244,7 @@ function StagesPanel({ tournamentId }: { tournamentId: number }) {
       method: "PUT",
       body: JSON.stringify({ is_final: true }),
     });
-    load();
+    reload();
   }
 
   return (
@@ -387,7 +341,7 @@ function StagesPanel({ tournamentId }: { tournamentId: number }) {
                   </button>
                 )}
                 <button
-                  onClick={() => setToDelete(stage)}
+                  onClick={() => del.ask(stage)}
                   title="Удалить этап"
                   className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
                 >
@@ -396,7 +350,7 @@ function StagesPanel({ tournamentId }: { tournamentId: number }) {
               </div>
               {openStageId === stage.id && (
                 <div className="flex flex-col gap-6 border-t border-ink-800 p-4">
-                  <StageGamesPanel tournamentId={tournamentId} stageId={stage.id} onGamesChanged={load} />
+                  <StageGamesPanel tournamentId={tournamentId} stageId={stage.id} onGamesChanged={reload} />
                   <StageAdvancesPanel tournamentId={tournamentId} stage={stage} />
                 </div>
               )}
@@ -406,17 +360,14 @@ function StagesPanel({ tournamentId }: { tournamentId: number }) {
       )}
 
       <ConfirmDialog
-        open={toDelete !== null}
-        title={`Удалить этап «${toDelete?.name}»?`}
+        open={del.target !== null}
+        title={`Удалить этап «${del.target?.name}»?`}
         description="Пустые (неоценённые) слоты этапа удалятся вместе с ним. Если на этапе уже есть оценённые игры, удаление отклонится — сначала перенесите их на другой этап."
         confirmLabel="Удалить этап"
-        busy={deleting}
-        error={deleteError}
-        onConfirm={confirmDelete}
-        onCancel={() => {
-          setToDelete(null);
-          setDeleteError(null);
-        }}
+        busy={del.busy}
+        error={del.error}
+        onConfirm={del.run}
+        onCancel={del.close}
       />
     </div>
   );
@@ -433,26 +384,20 @@ function StageGamesPanel({
   stageId: number;
   onGamesChanged: () => void;
 }) {
-  const [games, setGames] = useState<TournamentStageGameOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  function load() {
-    clientFetch<TournamentStageGameOut[]>(`/api/admin/tournaments/${tournamentId}/stages/${stageId}/games`)
-      .then(setGames)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить игры"));
-  }
-
-  useEffect(load, [tournamentId, stageId]);
+  const games = useResource<TournamentStageGameOut[]>(
+    `/api/admin/tournaments/${tournamentId}/stages/${stageId}/games`,
+    "Не удалось загрузить игры"
+  );
 
   function reload() {
-    load();
+    games.reload();
     onGamesChanged();
   }
 
   return (
     <div>
       <p className="text-xs font-medium text-ink-400">Игры этапа</p>
-      {error && <p className="mt-2 text-sm text-brand-300">{error}</p>}
+      {games.error && <p className="mt-2 text-sm text-brand-300">{games.error}</p>}
       <div className="mt-2">
         <AddGamesForm
           addUrl={`/api/admin/tournaments/${tournamentId}/stages/${stageId}/games`}
@@ -460,10 +405,10 @@ function StageGamesPanel({
         />
       </div>
       <div className="mt-3">
-        {games === null ? (
+        {games.data === null ? (
           <p className="text-sm text-ink-500">Загрузка…</p>
         ) : (
-          <GameSlotList games={games} onChanged={reload} />
+          <GameSlotList games={games.data} onChanged={reload} />
         )}
       </div>
     </div>

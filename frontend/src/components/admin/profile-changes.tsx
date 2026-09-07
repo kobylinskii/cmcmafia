@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, PencilSimple, X } from "@phosphor-icons/react/dist/ssr";
 import { ApiError, clientFetch } from "@/lib/api";
+import { useResource } from "@/lib/use-resource";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { RejectReasonBox } from "@/components/admin/reject-reason-box";
 import type { ProfileChangeOut } from "@/types/api";
 
 /** Правки профилей, отправленные игроками из бота.
@@ -19,23 +21,18 @@ import type { ProfileChangeOut } from "@/types/api";
  * очередь, в которую надо заглядывать, а не страница, куда специально ходят.
  */
 export function ProfileChanges() {
-  const [items, setItems] = useState<ProfileChangeOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items, error, reload } = useResource<ProfileChangeOut[]>(
+    "/api/admin/players/profile-changes",
+    "Не удалось загрузить правки"
+  );
   const [rejecting, setRejecting] = useState<number | null>(null);
   const [reason, setReason] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
-
-  function load() {
-    clientFetch<ProfileChangeOut[]>("/api/admin/players/profile-changes")
-      .then(setItems)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить правки"));
-  }
-
-  useEffect(load, []);
+  const [decideError, setDecideError] = useState<string | null>(null);
 
   async function decide(change: ProfileChangeOut, decision: "apply" | "reject") {
     setBusyId(change.id);
-    setError(null);
+    setDecideError(null);
     try {
       await clientFetch(`/api/admin/players/profile-changes/${change.id}/${decision}`, {
         method: "POST",
@@ -43,9 +40,9 @@ export function ProfileChanges() {
       });
       setRejecting(null);
       setReason("");
-      load();
+      reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось сохранить решение");
+      setDecideError(err instanceof ApiError ? err.message : "Не удалось сохранить решение");
     } finally {
       setBusyId(null);
     }
@@ -63,7 +60,9 @@ export function ProfileChanges() {
         значение — на сайте и в списках на пропуск ничего не меняется.
       </p>
 
-      {error && <p className="mt-3 text-sm text-brand-300">{error}</p>}
+      {(error || decideError) && (
+        <p className="mt-3 text-sm text-brand-300">{error || decideError}</p>
+      )}
 
       <div className="mt-4 flex flex-col gap-3">
         {items === null && <p className="text-sm text-ink-500">Загрузка…</p>}
@@ -116,31 +115,14 @@ export function ProfileChanges() {
             </div>
 
             {rejecting === change.id && (
-              <div className="mt-4 rounded-lg border border-ink-700 bg-ink-950 p-4">
-                <label className="flex flex-col gap-1.5 text-xs text-ink-400">
-                  Причина отклонения — её увидит игрок в боте
-                  <textarea
-                    autoFocus
-                    rows={2}
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    placeholder="Например: ФИО не совпадает с указанным в заявке на пропуск"
-                    className="rounded-lg border border-ink-700 bg-ink-950 px-3.5 py-2.5 text-sm text-ink-50 focus:border-brand-500 focus:outline-none"
-                  />
-                </label>
-                <div className="mt-3 flex justify-end gap-2">
-                  <Button variant="ghost" className="!px-4 !py-2" onClick={() => setRejecting(null)}>
-                    Отмена
-                  </Button>
-                  <Button
-                    className="!px-4 !py-2"
-                    disabled={!reason.trim() || busyId === change.id}
-                    onClick={() => decide(change, "reject")}
-                  >
-                    Отклонить правку
-                  </Button>
-                </div>
-              </div>
+              <RejectReasonBox
+                reason={reason}
+                onReason={setReason}
+                onCancel={() => setRejecting(null)}
+                onConfirm={() => decide(change, "reject")}
+                confirmLabel="Отклонить правку"
+                busy={busyId === change.id}
+              />
             )}
           </article>
         ))}

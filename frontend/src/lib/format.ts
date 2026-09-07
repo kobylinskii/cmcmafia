@@ -29,6 +29,15 @@ export function formatDateTime(iso: string): string {
   }).format(new Date(iso));
 }
 
+/** «ЧЧ:ММ» по клубному времени. */
+export function formatTime(iso: string): string {
+  return new Intl.DateTimeFormat("ru-RU", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: CLUB_TZ,
+  }).format(new Date(iso));
+}
+
 /** Local "YYYY-MM-DDTHH:mm" for <input type="datetime-local">, in club time. */
 export function toDatetimeLocalValue(iso: string): string {
   const parts = new Intl.DateTimeFormat("sv-SE", {

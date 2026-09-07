@@ -99,13 +99,12 @@ def describe_formula():
         GameTypeWeight(
             game_type=game_type,
             label=GAME_TYPE_LABELS.get(game_type, game_type),
-            weight=weight,
+            weight=GAME_TYPE_WEIGHT[game_type],
             rated=game_type not in UNRATED_GAME_TYPES,
         )
         # Порядок явный (не .items()), чтобы турнирная всегда шла первой --
         # это основной формат клуба, ей и открывать список.
         for game_type in ("tournament", "funky", "training")
-        for weight in [GAME_TYPE_WEIGHT[game_type]]
     ]
 
     return RatingFormulaOut(

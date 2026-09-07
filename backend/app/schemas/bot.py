@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-AFFILIATIONS = {"vmk", "mgu_no_pass", "outside_need_pass"}
-# Те же значения, что и у анкеты игрока на сайте (app/schemas/player.ROLE_VALUES):
+AffiliationT = Literal["vmk", "mgu_no_pass", "outside_need_pass"]
+# Те же значения, что и у анкеты игрока на сайте (app/schemas/player.FavoriteRoleT):
 # бот заполняет ровно то же поле players.favorite_role.
-FAVORITE_ROLES = {"mafia", "don", "sheriff", "citizen"}
+FavoriteRoleT = Literal["mafia", "don", "sheriff", "citizen"]
 # Турнирные игры больше не создаются и не набираются через бота вообще:
 # у них теперь своя сетка этапов, управляемая целиком на сайте (см. раздел
 # «Турниры» в админке). Бот работает только с фанки/обучающими сессиями.
-GAME_TYPES = {"funky", "training"}
+GameTypeLiteral = Literal["funky", "training"]
 
 
 class BotPlayerRegisterIn(BaseModel):
@@ -21,16 +22,9 @@ class BotPlayerRegisterIn(BaseModel):
     nickname: str = Field(min_length=2, max_length=100)
     salutation: str = Field(min_length=1, max_length=20)
     full_name: str | None = Field(default=None, max_length=150)
-    affiliation: str
+    affiliation: AffiliationT
     can_play: bool = True
     can_staff: bool = True
-
-    @field_validator("affiliation")
-    @classmethod
-    def validate_affiliation(cls, v: str) -> str:
-        if v not in AFFILIATIONS:
-            raise ValueError(f"affiliation должен быть одним из {AFFILIATIONS}")
-        return v
 
     @field_validator("phone")
     @classmethod
@@ -73,28 +67,14 @@ class BotPlayerProfileOut(BaseModel):
 class BotPlayerProfileUpdateIn(BaseModel):
     salutation: str | None = Field(default=None, max_length=20)
     full_name: str | None = Field(default=None, max_length=150)
-    affiliation: str | None = None
+    affiliation: AffiliationT | None = None
     nickname: str | None = Field(default=None, min_length=2, max_length=100)
     can_play: bool | None = None
     can_staff: bool | None = None
     age: int | None = Field(default=None, ge=5, le=100)
-    favorite_role: str | None = None
+    favorite_role: FavoriteRoleT | None = None
     experience: str | None = Field(default=None, max_length=2000)
     bio: str | None = Field(default=None, max_length=4000)
-
-    @field_validator("affiliation")
-    @classmethod
-    def validate_affiliation(cls, v: str | None) -> str | None:
-        if v is not None and v not in AFFILIATIONS:
-            raise ValueError(f"affiliation должен быть одним из {AFFILIATIONS}")
-        return v
-
-    @field_validator("favorite_role")
-    @classmethod
-    def validate_favorite_role(cls, v: str | None) -> str | None:
-        if v is not None and v not in FAVORITE_ROLES:
-            raise ValueError(f"favorite_role должен быть одним из {FAVORITE_ROLES}")
-        return v
 
 
 class SessionOut(BaseModel):

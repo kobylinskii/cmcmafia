@@ -1,90 +1,58 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.schemas.tournament import TournamentRef, TournamentStageRef
 
-IN_GAME_ROLES = {"mafia", "don", "sheriff", "citizen"}
-GAME_RESULTS = {"city_win", "mafia_win", "draw"}
-INFO_VALUES = {"first_killed", "killed", "voted_out"}
-GAME_TYPES = {"tournament", "funky", "training"}
+InGameRoleT = Literal["mafia", "don", "sheriff", "citizen"]
+GameResultT = Literal["city_win", "mafia_win", "draw"]
+ParticipantInfoT = Literal["first_killed", "killed", "voted_out"]
+GameTypeT = Literal["tournament", "funky", "training"]
 # Вкладка «Игры» в админке создаёт только бот-форматы: турнирные игры теперь
 # заводятся исключительно как слоты этапа (см. app.routers.admin, раздел
 # турниров) -- там сразу известны tournament_id/stage_id и плейсхолдер-дата.
-CREATABLE_GAME_TYPES = {"funky", "training"}
+CreatableGameTypeT = Literal["funky", "training"]
 
-
-def _round_half_step(value: float | None, step: float, field_name: str) -> float | None:
-    """Значение должно быть кратно шагу. Шаги заданы регламентом клуба и
-    продублированы в форме оценки (frontend/src/components/admin/game-form.tsx)."""
-    if value is None:
-        return None
-    ratio = value / step
-    if abs(ratio - round(ratio)) > 1e-6:
-        raise ValueError(f"{field_name} должен быть кратен {step}")
-    return value
+# Поле балла -> (шаг кратности, подпись для ошибки). Шаги заданы регламентом
+# клуба и продублированы в форме оценки (frontend/src/components/admin/game-form.tsx).
+_STEP_BY_FIELD: dict[str, tuple[float, str]] = {
+    "points_win": (0.25, "Баллы за победу"),
+    "points_judge": (0.25, "Баллы от судей"),
+    "ci": (0.5, "Ci"),
+    "lh": (0.5, "lh"),
+    "zk": (0.5, "zk"),
+    "sk": (0.5, "sk"),
+}
 
 
 class ParticipantIn(BaseModel):
     player_id: int
     seat_number: int = Field(ge=1, le=10)
-    role: str
+    role: InGameRoleT
     points_win: float = Field(default=0, ge=0, le=10)
     # Судейские баллы -- от 0 до 5 с шагом 0.25 (регламент клуба).
     points_judge: float = Field(default=0, ge=0, le=5)
     lh: float | None = Field(default=None, ge=0, le=1.5)
     ci: float | None = Field(default=None, ge=-20, le=20)
-    info: str | None = None
+    info: ParticipantInfoT | None = None
     removals: int | None = Field(default=None, ge=0, le=10)
     ppk: bool = False
     zk: float | None = Field(default=None, ge=0, le=10)
     sk: float | None = Field(default=None, ge=0, le=10)
 
-    @field_validator("role")
+    @field_validator("points_win", "points_judge", "ci", "lh", "zk", "sk")
     @classmethod
-    def validate_role(cls, v: str) -> str:
-        if v not in IN_GAME_ROLES:
-            raise ValueError(f"role должен быть одним из {IN_GAME_ROLES}")
+    def _round_to_step(cls, v: float | None, info) -> float | None:
+        if v is None:
+            return None
+        step, name = _STEP_BY_FIELD[info.field_name]
+        ratio = v / step
+        if abs(ratio - round(ratio)) > 1e-6:
+            raise ValueError(f"{name} должен быть кратен {step}")
         return v
-
-    @field_validator("info")
-    @classmethod
-    def validate_info(cls, v: str | None) -> str | None:
-        if v is not None and v not in INFO_VALUES:
-            raise ValueError(f"info должен быть одним из {INFO_VALUES}")
-        return v
-
-    @field_validator("points_win")
-    @classmethod
-    def validate_points_win(cls, v: float) -> float:
-        return _round_half_step(v, 0.25, "Баллы за победу")
-
-    @field_validator("points_judge")
-    @classmethod
-    def validate_points_judge(cls, v: float) -> float:
-        return _round_half_step(v, 0.25, "Баллы от судей")
-
-    @field_validator("ci")
-    @classmethod
-    def validate_ci(cls, v: float | None) -> float | None:
-        return _round_half_step(v, 0.5, "Ci")
-
-    @field_validator("lh")
-    @classmethod
-    def validate_lh(cls, v: float | None) -> float | None:
-        return _round_half_step(v, 0.5, "lh")
-
-    @field_validator("zk")
-    @classmethod
-    def validate_zk(cls, v: float | None) -> float | None:
-        return _round_half_step(v, 0.5, "zk")
-
-    @field_validator("sk")
-    @classmethod
-    def validate_sk(cls, v: float | None) -> float | None:
-        return _round_half_step(v, 0.5, "sk")
 
 
 class ParticipantOut(BaseModel):
@@ -109,57 +77,30 @@ class ParticipantOut(BaseModel):
 class GameCreate(BaseModel):
     starts_at: datetime
     location: str | None = Field(default=None, max_length=200)
-    game_type: str = "funky"
-    # tournament_id/stage_id тут больше не нужны: 'tournament' вообще нельзя
-    # передать через этот эндпоинт (см. validate_game_type ниже).
+    # 'tournament' сюда не передать -- тип это запрещает (турнирные игры
+    # заводятся только как слоты этапа), поэтому tournament_id/stage_id тут
+    # не нужны.
+    game_type: CreatableGameTypeT = "funky"
     tournament_id: int | None = None
     stage_id: int | None = None
-    result: str
+    result: GameResultT
     notes: str | None = Field(default=None, max_length=2000)
     participants: list[ParticipantIn]
-
-    @field_validator("game_type")
-    @classmethod
-    def validate_game_type(cls, v: str) -> str:
-        if v not in CREATABLE_GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {CREATABLE_GAME_TYPES}")
-        return v
-
-    @field_validator("result")
-    @classmethod
-    def validate_result(cls, v: str) -> str:
-        if v not in GAME_RESULTS:
-            raise ValueError(f"result должен быть одним из {GAME_RESULTS}")
-        return v
 
 
 class GameUpdate(BaseModel):
     starts_at: datetime | None = None
     location: str | None = Field(default=None, max_length=200)
-    game_type: str | None = None
+    game_type: GameTypeT | None = None
     tournament_id: int | None = None
     stage_id: int | None = None
-    result: str | None = None
+    result: GameResultT | None = None
     notes: str | None = Field(default=None, max_length=2000)
     participants: list[ParticipantIn] | None = None
     # Осознанная смена состава в турнирной таблице, где уже есть другие
     # оценённые игры. По умолчанию такое отклоняется 422 с кодом
     # ROSTER_MISMATCH -- флаг ставит форма после подтверждения администратором.
     allow_roster_change: bool = False
-
-    @field_validator("game_type")
-    @classmethod
-    def validate_game_type(cls, v: str | None) -> str | None:
-        if v is not None and v not in GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {GAME_TYPES}")
-        return v
-
-    @field_validator("result")
-    @classmethod
-    def validate_result(cls, v: str | None) -> str | None:
-        if v is not None and v not in GAME_RESULTS:
-            raise ValueError(f"result должен быть одним из {GAME_RESULTS}")
-        return v
 
 
 class GameRosterEntry(BaseModel):

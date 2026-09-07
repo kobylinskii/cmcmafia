@@ -1,8 +1,7 @@
 import Link from "next/link";
-import Image from "next/image";
 import type { RatingRowOut } from "@/types/api";
 import { formatPercent, formatDash } from "@/lib/format";
-import { mediaUrl } from "@/lib/api";
+import { PlayerAvatar } from "@/components/ui/player-avatar";
 
 export function RatingTable({ rows }: { rows: RatingRowOut[] }) {
   if (rows.length === 0) {
@@ -32,24 +31,7 @@ export function RatingTable({ rows }: { rows: RatingRowOut[] }) {
               <td className="px-4 py-3 font-mono text-sm text-ink-400">{row.rank}</td>
               <td className="px-4 py-3">
                 <Link href={`/mafia/${row.slug}`} className="flex items-center gap-3 font-medium text-ink-50 hover:text-brand-400">
-                  <span className="relative h-8 w-8 shrink-0 overflow-hidden rounded-full bg-ink-800">
-                    {mediaUrl(row.photo_url) ? (
-                      <Image
-                      src={mediaUrl(row.photo_url)!}
-                      alt={row.nickname}
-                      fill
-                      // Без sizes Next подставляет 100vw, и на аватар 32px
-                      // браузер тянет самый крупный кандидат srcset -- в этой
-                      // таблице их до пятидесяти на экран.
-                      sizes="32px"
-                      className="object-cover"
-                    />
-                    ) : (
-                      <span className="flex h-full w-full items-center justify-center text-xs text-ink-300">
-                        {row.nickname.slice(0, 1).toUpperCase()}
-                      </span>
-                    )}
-                  </span>
+                  <PlayerAvatar photoUrl={row.photo_url} nickname={row.nickname} />
                   {row.nickname}
                 </Link>
               </td>

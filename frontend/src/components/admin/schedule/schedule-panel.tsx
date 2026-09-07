@@ -5,7 +5,7 @@ import { ArrowLeft, CalendarPlus, CaretRight, Warning } from "@phosphor-icons/re
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { formatDateTime, plural, withCount } from "@/lib/format";
+import { formatDate, formatDateTime, formatTime, plural, withCount } from "@/lib/format";
 import type { ScheduleDayOut, SessionOut } from "@/types/api";
 import { GAME_TYPE_LABELS } from "@/types/api";
 import { PlanForm } from "@/components/admin/schedule/plan-form";
@@ -14,14 +14,6 @@ import { SessionCard } from "@/components/admin/schedule/session-card";
 // Ведущий и двое судей сверх стола: те же HOST_LIMIT/JUDGE_LIMIT, которыми
 // registration_service отбивает четвёртого желающего в штаб.
 const STAFF_SEATS = 3;
-
-function timeOfDay(iso: string): string {
-  return new Intl.DateTimeFormat("ru-RU", {
-    hour: "2-digit",
-    minute: "2-digit",
-    timeZone: "Europe/Moscow",
-  }).format(new Date(iso));
-}
 
 /**
  * Планировщик игровых дней -- бывшая админка бота.
@@ -176,7 +168,7 @@ export function SchedulePanel({
               clientFetch<string[]>("/api/admin/schedule/locations")
                 .then(setLocations)
                 .catch(() => undefined);
-              if (created.length > 0) onOpenDay(clubDay(created[0].starts_at));
+              if (created.length > 0) onOpenDay(formatDate(created[0].starts_at));
             }}
           />
         ) : (
@@ -233,16 +225,6 @@ export function SchedulePanel({
   );
 }
 
-/** «ДД.ММ.ГГГГ» по клубному времени -- в этом виде день ходит в API. */
-function clubDay(iso: string): string {
-  return new Intl.DateTimeFormat("ru-RU", {
-    day: "2-digit",
-    month: "2-digit",
-    year: "numeric",
-    timeZone: "Europe/Moscow",
-  }).format(new Date(iso));
-}
-
 function SessionRow({ session, onOpen }: { session: SessionOut; onOpen: () => void }) {
   const registered = session.hosts + session.judges + session.players;
   const past = new Date(session.starts_at) <= new Date();
@@ -252,7 +234,7 @@ function SessionRow({ session, onOpen }: { session: SessionOut; onOpen: () => vo
       className="flex items-center justify-between gap-3 rounded-card border border-ink-800 bg-ink-900 p-4 text-left hover:border-brand-600/60"
     >
       <div className="flex flex-wrap items-center gap-3 text-sm">
-        <span className="font-mono text-ink-100">{timeOfDay(session.starts_at)}</span>
+        <span className="font-mono text-ink-100">{formatTime(session.starts_at)}</span>
         <span className="text-ink-500">Игра №{session.id}</span>
         <Badge tone="outline">{GAME_TYPE_LABELS[session.game_type]}</Badge>
         {!session.needs_rating && <Badge tone="neutral">Без оценки</Badge>}

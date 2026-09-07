@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import models, security
 from app.config import get_settings
+from app.errors import ServiceError
 from app.textmatch import ci_equals
 from app.services import slug_service
 
@@ -17,10 +18,8 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 
 
-class PlayerValidationError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(message)
+class PlayerValidationError(ServiceError):
+    pass
 
 
 # Поля, которые нельзя обнулить через PUT: без них строка игрока невалидна.

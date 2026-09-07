@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Check, UserFocus, X } from "@phosphor-icons/react/dist/ssr";
 import { ApiError, clientFetch } from "@/lib/api";
+import { useResource } from "@/lib/use-resource";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { RejectReasonBox } from "@/components/admin/reject-reason-box";
 import {
   AFFILIATION_LABELS,
   ROLE_LABELS,
@@ -20,23 +22,18 @@ import {
  * страница, куда никто не ходит.
  */
 export function PendingPlayers() {
-  const [items, setItems] = useState<PendingPlayerOut[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: items, error, reload } = useResource<PendingPlayerOut[]>(
+    "/api/admin/players/pending",
+    "Не удалось загрузить заявки"
+  );
   const [rejecting, setRejecting] = useState<number | null>(null);
   const [reason, setReason] = useState("");
   const [busyId, setBusyId] = useState<number | null>(null);
-
-  function load() {
-    clientFetch<PendingPlayerOut[]>("/api/admin/players/pending")
-      .then(setItems)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить заявки"));
-  }
-
-  useEffect(load, []);
+  const [decideError, setDecideError] = useState<string | null>(null);
 
   async function decide(player: PendingPlayerOut, decision: "confirm" | "reject") {
     setBusyId(player.id);
-    setError(null);
+    setDecideError(null);
     try {
       await clientFetch(`/api/admin/players/${player.id}/${decision}`, {
         method: "POST",
@@ -44,9 +41,9 @@ export function PendingPlayers() {
       });
       setRejecting(null);
       setReason("");
-      load();
+      reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось сохранить решение");
+      setDecideError(err instanceof ApiError ? err.message : "Не удалось сохранить решение");
     } finally {
       setBusyId(null);
     }
@@ -64,7 +61,9 @@ export function PendingPlayers() {
         игроков на сайте — но записываться на игры они уже могут.
       </p>
 
-      {error && <p className="mt-3 text-sm text-brand-300">{error}</p>}
+      {(error || decideError) && (
+        <p className="mt-3 text-sm text-brand-300">{error || decideError}</p>
+      )}
 
       <div className="mt-4 flex flex-col gap-3">
         {items === null && <p className="text-sm text-ink-500">Загрузка…</p>}
@@ -139,31 +138,14 @@ export function PendingPlayers() {
             </dl>
 
             {rejecting === player.id && (
-              <div className="mt-4 rounded-lg border border-ink-700 bg-ink-950 p-4">
-                <label className="flex flex-col gap-1.5 text-xs text-ink-400">
-                  Причина отклонения — её увидит игрок в боте
-                  <textarea
-                    autoFocus
-                    rows={2}
-                    value={reason}
-                    onChange={(e) => setReason(e.target.value)}
-                    placeholder="Например: ФИО не совпадает с указанным в заявке на пропуск"
-                    className="rounded-lg border border-ink-700 bg-ink-950 px-3.5 py-2.5 text-sm text-ink-50 focus:border-brand-500 focus:outline-none"
-                  />
-                </label>
-                <div className="mt-3 flex justify-end gap-2">
-                  <Button variant="ghost" className="!px-4 !py-2" onClick={() => setRejecting(null)}>
-                    Отмена
-                  </Button>
-                  <Button
-                    className="!px-4 !py-2"
-                    disabled={!reason.trim() || busyId === player.id}
-                    onClick={() => decide(player, "reject")}
-                  >
-                    Отклонить заявку
-                  </Button>
-                </div>
-              </div>
+              <RejectReasonBox
+                reason={reason}
+                onReason={setReason}
+                onCancel={() => setRejecting(null)}
+                onConfirm={() => decide(player, "reject")}
+                confirmLabel="Отклонить заявку"
+                busy={busyId === player.id}
+              />
             )}
           </article>
         ))}

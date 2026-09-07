@@ -81,6 +81,11 @@ export interface GameListOut {
  * сетка этапов во вкладке «Турниры». */
 export type ScheduleGameType = Exclude<GameType, "tournament">;
 
+/** Форматы, которые заводят расписание и форма оценки бот-игр. Порядок
+ * фиксированный -- им заполняются `<select>` в plan-form / session-card /
+ * game-form. */
+export const SCHEDULE_GAME_TYPES: ScheduleGameType[] = ["funky", "training"];
+
 export interface SessionOut {
   id: number;
   starts_at: string;

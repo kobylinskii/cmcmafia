@@ -6,14 +6,11 @@ import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useConfirmable } from "@/lib/use-confirmable";
 import { formatDateTime, fromClubDatetimeLocal, toDatetimeLocalValue } from "@/lib/format";
+import { fieldDense as field, fieldLabel as label } from "@/lib/ui";
 import type { RegistrationRole, ScheduleGameType, ScheduleSessionOut } from "@/types/api";
-import { GAME_TYPE_LABELS } from "@/types/api";
-
-const CREATABLE_GAME_TYPES: Record<ScheduleGameType, string> = {
-  funky: "Фанки",
-  training: "Обучающая",
-};
+import { GAME_TYPE_LABELS, SCHEDULE_GAME_TYPES } from "@/types/api";
 
 const ROSTER_ROLE_LABELS: Record<RegistrationRole, string> = {
   host: "Ведущий",
@@ -23,10 +20,6 @@ const ROSTER_ROLE_LABELS: Record<RegistrationRole, string> = {
 
 // Ведущий и двое судей сверх стола (registration_service.HOST_LIMIT/JUDGE_LIMIT).
 const STAFF_SEATS = 3;
-
-const field =
-  "rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2 text-sm text-ink-50 focus:border-brand-500 focus:outline-none w-full";
-const label = "flex flex-col gap-1.5 text-xs font-medium text-ink-400";
 
 /** Статусы, из которых игру ещё можно подтвердить как проведённую -- те же,
  * что проверяет game_service.UNCONFIRMED_STATUSES на бэкенде. */
@@ -66,7 +59,11 @@ export function SessionCard({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState<string | null>(null);
-  const [confirming, setConfirming] = useState<"delete" | "not-held" | null>(null);
+  const del = useConfirmable<"delete" | "not-held">(async () => {
+    await clientFetch(`/api/admin/schedule/sessions/${sessionId}`, { method: "DELETE" });
+    onChanged();
+    onBack();
+  }, "Не удалось удалить игру");
 
   // Неконтролируемое поле: <input type="datetime-local"> отдаёт "" для любого
   // не до конца заполненного значения, и при controlled value набранная дата
@@ -133,21 +130,6 @@ export function SessionCard({
     }
   }
 
-  async function remove() {
-    setSaving(true);
-    setError(null);
-    try {
-      await clientFetch(`/api/admin/schedule/sessions/${sessionId}`, { method: "DELETE" });
-      setConfirming(null);
-      onChanged();
-      onBack();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Не удалось удалить игру");
-    } finally {
-      setSaving(false);
-    }
-  }
-
   if (error && !session) return <p className="text-sm text-brand-300">{error}</p>;
   if (!session) return <p className="text-sm text-ink-500">Загрузка…</p>;
 
@@ -193,7 +175,7 @@ export function SessionCard({
               variant="secondary"
               className="!px-4 !py-2"
               disabled={saving}
-              onClick={() => setConfirming("not-held")}
+              onClick={() => del.ask("not-held")}
             >
               <Prohibit size={16} />
               Не состоялась
@@ -244,9 +226,9 @@ export function SessionCard({
               value={gameType}
               onChange={(e) => setGameType(e.target.value as ScheduleGameType)}
             >
-              {Object.entries(CREATABLE_GAME_TYPES).map(([value, title]) => (
+              {SCHEDULE_GAME_TYPES.map((value) => (
                 <option key={value} value={value}>
-                  {title}
+                  {GAME_TYPE_LABELS[value]}
                 </option>
               ))}
             </select>
@@ -285,7 +267,7 @@ export function SessionCard({
             variant="secondary"
             className="!px-5 !py-2.5"
             disabled={saving}
-            onClick={() => setConfirming("delete")}
+            onClick={() => del.ask("delete")}
           >
             <Trash size={16} />
             Удалить игру
@@ -331,9 +313,9 @@ export function SessionCard({
       </div>
 
       <ConfirmDialog
-        open={confirming !== null}
+        open={del.target !== null}
         title={
-          confirming === "not-held"
+          del.target === "not-held"
             ? `Игра №${session.id} не состоялась?`
             : `Удалить игру №${session.id}?`
         }
@@ -342,14 +324,11 @@ export function SessionCard({
           (session.reserves > 0 ? ` и ещё ${session.reserves} в резерве` : "") +
           ". Их записи исчезнут вместе с игрой, в статистику и рейтинг она не попадёт."
         }
-        confirmLabel={confirming === "not-held" ? "Да, не состоялась" : "Удалить игру"}
-        busy={saving}
-        error={error}
-        onConfirm={remove}
-        onCancel={() => {
-          setConfirming(null);
-          setError(null);
-        }}
+        confirmLabel={del.target === "not-held" ? "Да, не состоялась" : "Удалить игру"}
+        busy={del.busy}
+        error={del.error}
+        onConfirm={del.run}
+        onCancel={del.close}
       />
     </div>
   );

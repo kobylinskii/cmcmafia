@@ -9,13 +9,12 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app import models, serializers
+from app.errors import ServiceError
 from app.services import rating_service
 
 
-class GameValidationError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(message)
+class GameValidationError(ServiceError):
+    pass
 
 
 @dataclass

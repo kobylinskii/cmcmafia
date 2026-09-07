@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { CaretDown, CaretRight, Copy, IdentificationCard } from "@phosphor-icons/react/dist/ssr";
 import { ApiError, clientFetch } from "@/lib/api";
+import { useResource } from "@/lib/use-resource";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -23,23 +24,13 @@ import {
  */
 export function PassList() {
   const [open, setOpen] = useState(false);
-  const [data, setData] = useState<PassListOut | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, reload } = useResource<PassListOut>(
+    open ? "/api/admin/pass-list" : null,
+    "Не удалось загрузить список"
+  );
+  const [copyError, setCopyError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [editingRollover, setEditingRollover] = useState(false);
-
-  function load() {
-    setError(null);
-    clientFetch<PassListOut>("/api/admin/pass-list")
-      .then(setData)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Не удалось загрузить список"));
-  }
-
-  function toggle() {
-    const next = !open;
-    setOpen(next);
-    if (next && data === null) load();
-  }
 
   async function copyNames() {
     if (!data) return;
@@ -49,7 +40,7 @@ export function PassList() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError("Браузер не дал доступ к буферу обмена — скопируйте список вручную");
+      setCopyError("Браузер не дал доступ к буферу обмена — скопируйте список вручную");
     }
   }
 
@@ -65,7 +56,7 @@ export function PassList() {
       </p>
 
       <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button variant="secondary" className="!px-4 !py-2" onClick={toggle}>
+        <Button variant="secondary" className="!px-4 !py-2" onClick={() => setOpen((v) => !v)}>
           {open ? <CaretDown size={16} /> : <CaretRight size={16} />}
           {open ? "Скрыть список" : "Показать список"}
         </Button>
@@ -80,14 +71,16 @@ export function PassList() {
               <Copy size={16} />
               {copied ? "Скопировано" : "Скопировать ФИО"}
             </Button>
-            <Button variant="ghost" className="!px-4 !py-2" onClick={load}>
+            <Button variant="ghost" className="!px-4 !py-2" onClick={reload}>
               Обновить
             </Button>
           </>
         )}
       </div>
 
-      {error && <p className="mt-3 text-sm text-brand-300">{error}</p>}
+      {(error || copyError) && (
+        <p className="mt-3 text-sm text-brand-300">{error || copyError}</p>
+      )}
 
       {open && (
         <div className="mt-4">
@@ -119,7 +112,7 @@ export function PassList() {
                     }}
                     onSaved={() => {
                       setEditingRollover(false);
-                      load();
+                      reload();
                     }}
                   />
                 )}

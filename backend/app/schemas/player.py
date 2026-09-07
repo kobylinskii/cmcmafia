@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-ROLE_VALUES = {"mafia", "don", "sheriff", "citizen"}
+FavoriteRoleT = Literal["mafia", "don", "sheriff", "citizen"]
 
 
 class PlayerPublic(BaseModel):
@@ -69,16 +70,9 @@ class PlayerCreate(BaseModel):
     slug: str = Field(min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=150)
     age: int | None = Field(default=None, ge=5, le=100)
-    favorite_role: str | None = None
+    favorite_role: FavoriteRoleT | None = None
     experience: str | None = Field(default=None, max_length=2000)
     bio: str | None = Field(default=None, max_length=4000)
-
-    @field_validator("favorite_role")
-    @classmethod
-    def validate_role(cls, v: str | None) -> str | None:
-        if v is not None and v not in ROLE_VALUES:
-            raise ValueError(f"favorite_role должен быть одним из {ROLE_VALUES}")
-        return v
 
 
 class PlayerUpdate(BaseModel):
@@ -86,16 +80,9 @@ class PlayerUpdate(BaseModel):
     slug: str | None = Field(default=None, min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=150)
     age: int | None = Field(default=None, ge=5, le=100)
-    favorite_role: str | None = None
+    favorite_role: FavoriteRoleT | None = None
     experience: str | None = Field(default=None, max_length=2000)
     bio: str | None = Field(default=None, max_length=4000)
-
-    @field_validator("favorite_role")
-    @classmethod
-    def validate_role(cls, v: str | None) -> str | None:
-        if v is not None and v not in ROLE_VALUES:
-            raise ValueError(f"favorite_role должен быть одним из {ROLE_VALUES}")
-        return v
 
 
 class PlayerAdminOut(BaseModel):

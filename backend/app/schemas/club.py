@@ -61,16 +61,22 @@ class ProfileChangeOut(BaseModel):
     created_at: datetime
 
 
-class ProfileChangeRejectIn(BaseModel):
+class _RejectIn(BaseModel):
+    """Общее тело отказа: причину видит игрок в боте, пустая недопустима."""
+
     reason: str = Field(min_length=1, max_length=500)
 
     @field_validator("reason")
     @classmethod
-    def strip_reason(cls, v: str) -> str:
+    def _strip_reason(cls, v: str) -> str:
         cleaned = v.strip()
         if not cleaned:
             raise ValueError("Нужно указать причину отклонения")
         return cleaned
+
+
+class ProfileChangeRejectIn(_RejectIn):
+    pass
 
 
 class BotProfileChangeNotificationOut(BaseModel):
@@ -88,16 +94,8 @@ class BotProfileChangeAckIn(BaseModel):
     change_ids: list[int]
 
 
-class PlayerRejectIn(BaseModel):
-    reason: str = Field(min_length=1, max_length=500)
-
-    @field_validator("reason")
-    @classmethod
-    def strip_reason(cls, v: str) -> str:
-        cleaned = v.strip()
-        if not cleaned:
-            raise ValueError("Нужно указать причину отклонения")
-        return cleaned
+class PlayerRejectIn(_RejectIn):
+    pass
 
 
 class PassWeekSettingsIn(BaseModel):

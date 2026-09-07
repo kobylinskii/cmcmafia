@@ -15,16 +15,15 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from app import models
+from app.errors import ServiceError
 
 STATUS_PENDING = models.ConfirmationStatus.pending.value
 STATUS_CONFIRMED = models.ConfirmationStatus.confirmed.value
 STATUS_REJECTED = models.ConfirmationStatus.rejected.value
 
 
-class ConfirmationError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(message)
+class ConfirmationError(ServiceError):
+    pass
 
 
 def list_pending(db: Session) -> list[models.Player]:
