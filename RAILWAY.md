@@ -51,10 +51,10 @@ openssl rand -hex 32   # -> BOT_SERVICE_TOKEN
 | `REDIS_URL` | `${{ Redis.REDIS_URL }}` |
 | `JWT_SECRET` | сгенерированный секрет |
 | `BOT_SERVICE_TOKEN` | сгенерированный секрет (тот же в сервисе `bot`) |
-| `CORS_ORIGINS` | `["https://${{ web.RAILWAY_PUBLIC_DOMAIN }}"]` — JSON-массив; после привязки своего домена заменить на него |
+| `CORS_ORIGINS` | `["https://${{ web.RAILWAY_PUBLIC_DOMAIN }}"]` — JSON-массив (браузер к `api` напрямую не ходит, но пусть будет корректным) |
 | `COOKIE_SECURE` | `true` |
-| `COOKIE_SAMESITE` | `none`, если `api` и `web` на разных доменах (`*.up.railway.app`); `lax`, если оба на одном registrable-домене (`site.ru` + `api.site.ru`) |
-| `COOKIE_DOMAIN` | пусто для разных доменов; `.site.ru` — если сайт и API на поддоменах одного домена |
+| `COOKIE_SAMESITE` | `lax` — браузер обращается к API через тот же домен, что и сайт (прокси в `web`, см. ниже), поэтому кука first-party |
+| `COOKIE_DOMAIN` | пусто |
 | `MEDIA_ROOT` | `/app/media/players` |
 | `SUPERADMIN_TELEGRAM_IDS_RAW` | telegram id суперадминов через запятую (то же в `bot`) |
 | `BOOTSTRAP_ADMIN_PHONE_RAW` | телефон бут-админа (то же, что `ADMIN_PHONE`/аналог в `bot`) |
@@ -69,7 +69,7 @@ openssl rand -hex 32   # -> BOT_SERVICE_TOKEN
 | Переменная | Значение |
 |---|---|
 | `BOT_TOKEN` | токен от @BotFather |
-| `API_BASE_URL` | `http://${{ api.RAILWAY_PRIVATE_DOMAIN }}:${{ api.PORT }}` (приватная сеть, без TLS) |
+| `API_BASE_URL` | `http://${{ api.RAILWAY_PRIVATE_DOMAIN }}:8080` (приватная сеть, без TLS; порт — тот, что слушает контейнер `api`, обычно 8080) |
 | `BOT_SERVICE_TOKEN` | тот же секрет, что в `api` |
 | `REDIS_URL` | `${{ Redis.REDIS_URL }}` |
 | `CONFIRMATION_POLL_SECONDS` | `60` (по желанию) |
@@ -79,18 +79,25 @@ openssl rand -hex 32   # -> BOT_SERVICE_TOKEN
 
 ### Сервис `web`
 
-Эти переменные Railway автоматически передаёт в `docker build` как `--build-arg`
-(они объявлены `ARG` в `frontend/Dockerfile`), поэтому попадают в бандл на сборке:
+На Railway нет общего nginx, поэтому `web` сам проксирует `/api/*` и
+`/media/*` на бэкенд (route handlers `src/app/api/[...path]` и
+`src/app/media/players/[...path]`). Для браузера всё на одном домене — куки
+сессии становятся first-party, вход в админку работает.
 
-| Переменная | Значение |
-|---|---|
-| `NEXT_PUBLIC_API_URL` | `https://${{ api.RAILWAY_PUBLIC_DOMAIN }}` |
-| `NEXT_PUBLIC_SITE_URL` | `https://${{ web.RAILWAY_PUBLIC_DOMAIN }}` (или свой домен) |
-| `NEXT_PUBLIC_BOT_USERNAME` | username бота без `@` |
-| `API_INTERNAL_URL` | `https://${{ api.RAILWAY_PUBLIC_DOMAIN }}` — при сборке приватная сеть недоступна, нужен публичный URL |
+| Переменная | Значение | Когда читается |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | **пусто** (пустая строка) → браузер ходит на `/api` того же домена | сборка (вшивается в бандл) |
+| `NEXT_PUBLIC_SITE_URL` | `https://${{ web.RAILWAY_PUBLIC_DOMAIN }}` (или свой домен) | сборка |
+| `NEXT_PUBLIC_BOT_USERNAME` | username бота без `@` | сборка |
+| `API_INTERNAL_URL` | `https://${{ api.RAILWAY_PUBLIC_DOMAIN }}` — куда сервер `web` шлёт проксируемые и SSR-запросы | сборка **и** рантайм |
 
-> Смена любой из этих переменных требует **редеплоя `web`** (значения вшиты на
-> этапе сборки, рантайм их не перечитывает).
+> Пустое `NEXT_PUBLIC_API_URL`: в Railway создай переменную со значением `""`
+> (пустое поле). Если её вовсе не задать — фронт соберётся с фолбэком
+> `http://localhost:8000` и в проде работать не будет.
+>
+> `API_INTERNAL_URL` указывает на **публичный** адрес `api` (приватная сеть
+> при сборке недоступна). Смена любой `NEXT_PUBLIC_*` требует **редеплоя
+> `web`** — значения вшиты на этапе сборки.
 
 ---
 
@@ -101,23 +108,52 @@ openssl rand -hex 32   # -> BOT_SERVICE_TOKEN
    сам прогоняет `alembic upgrade head`. Дождаться, пока healthcheck `/health`
    станет зелёным.
 3. Открыть у `api` Public Networking (Settings → Networking → Generate Domain).
-4. Задать переменные `web`, задеплоить.
+4. Задать переменные `web` (в т.ч. `API_INTERNAL_URL` = публичный адрес `api`
+   из шага 3, `NEXT_PUBLIC_API_URL` = пусто), задеплоить.
 5. Задать переменные `bot`, задеплоить. В логах — `Start polling`.
-6. Проверить: `https://<web>/` открывается, `https://<api>/health` отвечает
+6. Создать первого администратора сайта (см. раздел 6).
+7. Проверить: `https://<web>/` открывается, `https://<api>/health` отвечает
    `{"status":"ok"}`, вход в админку сохраняет сессию, бот отвечает на `/start`.
 
 ---
 
 ## 4. Свои домены
 
-- `web` → `site.ru`, `api` → `api.site.ru` (один registrable-домен →
-  `COOKIE_SAMESITE=lax`, `COOKIE_DOMAIN=.site.ru`).
-- После привязки обновить `CORS_ORIGINS` в `api`, `NEXT_PUBLIC_API_URL` /
-  `NEXT_PUBLIC_SITE_URL` / `API_INTERNAL_URL` в `web` и редеплойнуть `web`.
+- `web` → `site.ru`, `api` → `api.site.ru`.
+- `NEXT_PUBLIC_SITE_URL` и `API_INTERNAL_URL` в `web` обновить на новые адреса,
+  `CORS_ORIGINS` в `api` — тоже, затем редеплой `web`. `NEXT_PUBLIC_API_URL`
+  оставить пустым (браузер по-прежнему ходит на `/api` того же домена).
 
 ---
 
-## 5. Что осталось от Compose
+## 5. Первый администратор сайта
+
+Регистрации на сайте нет — первый админ создаётся разовой командой
+[backend/app/scripts/create_admin.py](backend/app/scripts/create_admin.py)
+внутри контейнера `api`.
+
+**Через Railway CLI:**
+
+```bash
+npm i -g @railway/cli
+railway login
+railway link                      # выбрать проект и environment
+railway ssh --service api
+# внутри контейнера:
+python -m app.scripts.create_admin --nickname "Админ" --username root --password "ЗАДАЙ_ПАРОЛЬ"
+```
+
+**Без CLI:** `api` → Settings → Deploy → **Custom Start Command** временно
+поставить ту же команду `python -m app.scripts.create_admin ...`, задеплоить,
+прочитать в Deploy Logs `Site admin ready`, затем **очистить** Custom Start
+Command и задеплоить снова.
+
+Вход: `https://<web>/mafia/admin/login`. Дальше администраторов и игроков
+заводят через саму админку.
+
+---
+
+## 6. Что осталось от Compose
 
 `docker-compose.yml`, `nginx/` — только для локального запуска (см. `README.md`).
 На Railway они не используются: `railway.json` в каждой папке сервиса говорит
