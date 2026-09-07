@@ -178,7 +178,7 @@ async def _show_day(
         state,
         f"📅 {day} · {texts.game_type_title(game_type)} · "
         f"{texts.REGISTRATION_ROLES.get(role_kind, '')}\n\n"
-        "Нажмите на игру, чтобы записаться.\n"
+        "Нажмите на игру, чтобы записаться, на свою (✅) — чтобы отменить запись.\n"
         "Собранный стол помечен «в резерв» — запись на него ставит в очередь.",
         game_slots_keyboard(
             token=token, game_type=game_type, role_kind=role_kind, games=games, back_to=after_role
@@ -210,6 +210,44 @@ async def pick_role(callback: CallbackQuery, state: FSMContext, api: ApiClient) 
     await _show_day(callback, state, api, token=token, game_type=game_type, role_kind=role_kind)
 
 
+async def _cancel_from_slots(
+    callback: CallbackQuery,
+    state: FSMContext,
+    api: ApiClient,
+    *,
+    game: dict,
+    token: str,
+    game_type: str,
+    role_kind: str,
+) -> None:
+    """Повторное нажатие на свою строку -- отмена записи.
+
+    Отменяет и резерв: на бэкенде это одна ручка (unregister смотрит и в
+    записи, и в очередь), и человеку разница тем более не важна.
+    """
+    try:
+        result = await api.cancel_registration(callback.from_user.id, game["id"])
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    if not result["ok"]:
+        await callback.answer("Вы не записаны на эту игру.", show_alert=True)
+        return
+
+    # Освободившееся место могло поднять первого из очереди -- ему надо
+    # написать так же, как при отмене из «Мои регистрации».
+    await _notify_promoted(callback, game["id"], result)
+    await _show_day(
+        callback,
+        state,
+        api,
+        token=token,
+        game_type=game_type,
+        role_kind=role_kind,
+        alert=f"Запись на игру #{game['id']} отменена",
+    )
+
+
 @router.callback_query(F.data.startswith("sg:game:"))
 async def register_for_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
     _, _, token, game_type, role_kind, raw_id = callback.data.split(":")
@@ -218,13 +256,12 @@ async def register_for_game(callback: CallbackQuery, state: FSMContext, api: Api
     if game is None:
         await callback.answer("Игра не найдена.", show_alert=True)
         return
-    # Своя запись осталась в списке с галочкой -- повторное нажатие ничего не
-    # меняет, но и молчать на него нельзя: отменяют запись в «Мои регистрации».
+    # Своя запись осталась в списке с галочкой, и та же строка её снимает:
+    # запись и отмена -- одно действие с двумя исходами, и второе место для
+    # отмены («Мои регистрации») нужно только тем, кто пришёл туда за составом.
     if game.get("my_role"):
-        await callback.answer(
-            f"Вы уже записаны на игру #{game['id']} ✅\n"
-            "Отменить запись можно в «📋 Мои регистрации».",
-            show_alert=True,
+        await _cancel_from_slots(
+            callback, state, api, game=game, token=token, game_type=game_type, role_kind=role_kind
         )
         return
     if not game["is_open"]:

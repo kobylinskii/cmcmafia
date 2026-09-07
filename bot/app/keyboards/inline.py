@@ -218,7 +218,8 @@ def _slot_label(game: dict, role_kind: str) -> str:
     type_label = texts.GAME_TYPES.get(game.get("game_type", ""), "")
     # Своя запись остаётся в списке с галочкой, а не исчезает из него: раньше
     # строка после нажатия пропадала, и это читалось как «слот куда-то делся»,
-    # а не «место занято мной».
+    # а не «место занято мной». Она же и отменяет запись -- см. заголовок
+    # экрана в handlers/schedule.
     if game.get("my_role"):
         role = texts.ROSTER_ROLES.get(game["my_role"], "")
         return f"✅ {game['time']} · {type_label} · вы записаны ({role.lower()})"

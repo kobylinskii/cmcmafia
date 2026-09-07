@@ -131,6 +131,9 @@ class FakeApi:
         # Кого бэкенд поднял из резерва этой записью. Не None только тогда,
         # когда запись в штаб освободила место за столом.
         self.promote_on_register: int | None = None
+        # То же, но для отмены записи: место за столом освобождается и очередь
+        # сдвигается (registration_service.unregister).
+        self.promote_on_cancel: int | None = None
         self.broadcast_recipients: list[int] = []
         self.broadcast_audience: list[int] = []
         # Решения админа по заявкам и правкам: что вызвали и чем ответить.
@@ -243,7 +246,11 @@ class FakeApi:
     async def cancel_registration(self, tg_id: int, session_id: int) -> dict:
         self.registered = [item for item in self.registered if item[0] != session_id]
         self.session["my_role"] = None
-        return {"ok": True, "message": "Запись отменена", "promoted_telegram_id": None}
+        return {
+            "ok": True,
+            "message": "Запись отменена",
+            "promoted_telegram_id": self.promote_on_cancel,
+        }
 
     # ---- модерация из сообщения
     async def moderate_registration(self, tg_id: int, player_id: int, *, reason=None) -> dict:
@@ -778,18 +785,49 @@ async def test_role_is_asked_only_when_the_player_has_both(stack):
 
 
 @pytest.mark.asyncio
-async def test_signed_up_slot_is_marked_not_removed(stack):
-    """Повторное нажатие на свою строку не записывает второй раз и не молчит."""
+async def test_second_tap_on_your_own_slot_cancels_the_registration(stack):
+    """Одна строка -- два исхода: запись и её отмена. Галочка снимается тем же
+    нажатием, которым появилась."""
     dp, bot, api = stack
     await _register(dp, bot)
     day_token = api._day.replace(".", "")
-    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
+    slot = f"sg:game:{day_token}:funky:player:7"
+    await dp.feed_update(bot, _callback(slot))
+    assert api.registered == [(7, "player")]
 
     bot.reset()
-    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
-    alerts = [c.text for c in bot.calls if isinstance(c, AnswerCallbackQuery) and c.show_alert]
-    assert alerts and "уже записаны" in alerts[0]
-    assert api.registered == [(7, "player")]
+    await dp.feed_update(bot, _callback(slot))
+    assert api.registered == []
+    alerts = [c.text for c in bot.calls if isinstance(c, AnswerCallbackQuery)]
+    assert any("отменена" in (text or "") for text in alerts)
+    # Строка на месте и снова зовёт записаться -- галочки на ней больше нет.
+    labels = [
+        b.text
+        for c in bot.calls
+        for markup in [getattr(c, "reply_markup", None)]
+        if isinstance(markup, InlineKeyboardMarkup)
+        for row in markup.inline_keyboard
+        for b in row
+    ]
+    assert labels and not any("✅" in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_cancelling_from_the_slot_list_promotes_the_next_reserve(stack):
+    """Место освободилось так же, как при отмене из «Мои регистрации», -- и
+    первому из очереди должно прийти то же сообщение."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    day_token = api._day.replace(".", "")
+    slot = f"sg:game:{day_token}:funky:player:7"
+    await dp.feed_update(bot, _callback(slot))
+    api.promote_on_cancel = 555002
+
+    bot.reset()
+    await dp.feed_update(bot, _callback(slot))
+    promo = [c for c in bot.calls if isinstance(c, SendMessage) and c.chat_id == 555002]
+    assert promo, "поднятому из резерва никто не написал"
+    assert "освободилось место" in promo[0].text
 
 
 @pytest.mark.asyncio
@@ -827,3 +865,23 @@ async def test_already_decided_notification_stops_offering_buttons(stack):
     await dp.feed_update(bot, _callback("md:ok:r:42"))
     assert "уже рассмотрена" in bot.last_text
     assert not bot.last_inline()
+
+
+@pytest.mark.asyncio
+async def test_single_type_day_goes_straight_to_the_games(stack):
+    """Вопрос с единственным ответом человек не решает: если в дне только
+    обучающие (или только фанки), экран формата не показывается вовсе."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.session["game_type"] = "training"
+    day = datetime.fromisoformat(api.session["starts_at"])
+    api.extra = [_session(8, day.replace(hour=20), game_type="training")]
+    day_token = api._day.replace(".", "")
+
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
+    assert "Какие игры показать?" not in bot.last_text
+    assert bot.last_inline() == [
+        f"sg:game:{day_token}:training:player:7",
+        f"sg:game:{day_token}:training:player:8",
+        "sg:days",
+    ]
