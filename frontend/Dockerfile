@@ -34,6 +34,12 @@ RUN npm run build
 FROM node:20-slim AS run
 WORKDIR /app
 ENV NODE_ENV=production
+# Next standalone по умолчанию слушает localhost -> за пределами контейнера
+# (edge Railway, docker-хост) в него не достучаться, отдаёт 502 connection
+# refused. Слушаем на всех интерфейсах. PORT на Railway приходит из окружения
+# ($PORT), локально/в compose падаем на 3000.
+ENV HOSTNAME="0.0.0.0"
+ENV PORT=3000
 
 COPY --from=build /app/public ./public
 COPY --from=build /app/.next/standalone ./
