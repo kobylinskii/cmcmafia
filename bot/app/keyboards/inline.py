@@ -222,7 +222,7 @@ def _slot_label(game: dict, role_kind: str) -> str:
     # экрана в handlers/schedule.
     if game.get("my_role"):
         role = texts.ROSTER_ROLES.get(game["my_role"], "")
-        return f"✅ {game['time']} · {type_label} · вы записаны ({role.lower()})"
+        return f"✅ {game['time']} · {type_label} · вы записаны)"
     # Заполненный стол не прячем и отказом не встречаем: запись на него --
     # это запись в резерв, и человек должен видеть это до нажатия, а не
     # после (см. registration_service.register_for_kind на бэкенде).
