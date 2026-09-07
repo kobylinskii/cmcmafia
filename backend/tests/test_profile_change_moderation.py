@@ -151,6 +151,27 @@ def test_second_edit_of_the_same_field_replaces_the_first(admin):
     assert queue[0]["new_value"] == "Второй вариант"
 
 
+def test_replaced_edit_keeps_its_id_so_older_cards_still_work(admin):
+    """Правка вытесняется НА МЕСТЕ, id остаётся прежним.
+
+    Пересоздание строки ломало уже открытую админку и уже разосланные админам
+    сообщения: они ссылаются на id, и «Применить» у всех, кроме последней
+    правки, утыкалось в «Правка не найдена» -- снаружи это выглядело так,
+    будто подтвердить можно только последнюю.
+    """
+    client, headers = admin
+    _confirmed_player(client, headers)
+
+    _put(client, {"bio": "Первый вариант"})
+    stale_id = _queue(client, headers)[0]["id"]
+    _put(client, {"bio": "Второй вариант"})
+
+    assert _queue(client, headers)[0]["id"] == stale_id
+    resp = client.post(f"/api/admin/players/profile-changes/{stale_id}/apply", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert _profile(client)["bio"] == "Второй вариант"
+
+
 def test_edits_to_different_fields_queue_separately(admin):
     client, headers = admin
     _confirmed_player(client, headers)

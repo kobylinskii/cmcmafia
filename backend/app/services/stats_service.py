@@ -3,10 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
-from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy import and_, case, func, nullslast, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app import models
+from app.services import visibility
 from app.timeutil import CLUB_TZ
 
 # ЛХ хранится в game_participants.lh как ПОПАДАНИЯ («сколько из трёх названных
@@ -162,27 +163,36 @@ def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: 
 
     query = (
         db.query(models.Player, models.PlayerRating, avg_bonus_subq.c.avg_bonus)
-        .join(models.PlayerRating, models.PlayerRating.player_id == models.Player.id)
+        .outerjoin(models.PlayerRating, models.PlayerRating.player_id == models.Player.id)
         .outerjoin(avg_bonus_subq, avg_bonus_subq.c.player_id == models.Player.id)
-        .filter(models.Player.is_active.is_(True), models.PlayerRating.games_count > 0)
+        # Тот же критерий видимости, что и у остальной публичной части: без
+        # него поиск показывал бы новичка, которого админ ещё не подтвердил, --
+        # причём со ссылкой на страницу, отдающую 404.
+        .filter(*visibility.public_player_criteria())
     )
     if q:
-        like = f"%{q.strip()}%"
-        query = query.filter(models.Player.nickname.ilike(like))
+        # Поиск -- это «найди человека», а не «покажи таблицу»: новичок без
+        # единой сыгранной игры обязан находиться по нику, иначе его страницу
+        # на сайте не открыть ниоткуда. В самой таблице (без запроса) он
+        # по-прежнему не показывается -- рейтинга у него ещё нет.
+        query = query.filter(models.Player.nickname.ilike(f"%{q.strip()}%"))
+    else:
+        query = query.filter(models.PlayerRating.games_count > 0)
 
     total = query.count()
-    query = query.order_by(models.PlayerRating.rating.desc())
+    # nullslast: у ненайденных в рейтинге его просто нет, и место им -- в конце.
+    query = query.order_by(nullslast(models.PlayerRating.rating.desc()))
     rows = query.offset(offset).limit(limit).all()
 
     result: list[RatingRow] = []
     for idx, (player, rating, avg_bonus) in enumerate(rows, start=offset + 1):
-        games_count = rating.games_count
+        games_count = rating.games_count if rating else 0
         win_rate = (rating.wins / games_count) if games_count else None
         result.append(
             RatingRow(
                 player=player,
                 rank=idx,
-                rating=float(rating.rating),
+                rating=float(rating.rating) if rating else 0.0,
                 games_count=games_count,
                 win_rate=win_rate,
                 avg_bonus=float(avg_bonus) if avg_bonus is not None else None,

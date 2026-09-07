@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.database import get_db
-from app.deps import get_bot_actor, require_bot_service
+from app.deps import get_bot_actor, require_bot_service, require_club_admin_actor
 from app.rate_limit import limiter
 from app.textmatch import ci_equals
 from app.serializers import is_session_open, roster_to_out, session_to_out
@@ -29,11 +29,17 @@ from app.schemas.club import (
     BotConfirmationNotificationOut,
     BotProfileChangeAckIn,
     BotProfileChangeNotificationOut,
+    DayReminderGameOut,
+    DayReminderOut,
+    DayRemindersAckIn,
+    PlayerRejectIn,
+    ProfileChangeRejectIn,
 )
 from app.services import (
     admin_grant,
     admin_notification_service,
     bootstrap_admin_service,
+    day_reminder_service,
     player_confirmation_service,
     profile_change_service,
     registration_service,
@@ -341,6 +347,152 @@ def ack_admin_notifications(
     }
 
 
+# ------------------------------------------------------- напоминания о дне игр
+@router.get("/day-reminders", response_model=list[DayReminderOut])
+@limiter.limit("60/minute")
+def list_day_reminders(
+    request: Request, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
+) -> list[DayReminderOut]:
+    """Дни, до первой игры которых осталось меньше трёх часов.
+
+    Та же схема «очередь + ack», что и у остальных рассылок: текст собирает и
+    отправляет бот, бэкенд в Telegram не ходит (см. day_reminder_service).
+    """
+    return [
+        DayReminderOut(
+            day=item.day,
+            marker_game_id=item.marker_game_id,
+            games=[
+                DayReminderGameOut(
+                    starts_at=game.starts_at, game_type=game.game_type, location=game.location
+                )
+                for game in item.games
+            ],
+            recipients=[player.telegram_id for player in item.recipients],
+        )
+        for item in day_reminder_service.pending_reminders(db)
+    ]
+
+
+@router.post("/day-reminders/ack")
+@limiter.limit("60/minute")
+def ack_day_reminders(
+    request: Request,
+    data: DayRemindersAckIn,
+    db: Session = Depends(get_db),
+    _: None = Depends(require_bot_service),
+) -> dict:
+    marked = day_reminder_service.mark_sent(db, game_ids=data.game_ids)
+    db.commit()
+    return {"marked": marked}
+
+
+# ------------------------------------------------------------ модерация из бота
+# Решение по заявке и по правке принимается прямо в Telegram, кнопками под тем
+# самым сообщением, которым бот сообщил о новом событии: админ клуба живёт в
+# боте, а не в браузере, и лишний вход в админку сайта откладывал проверку на
+# сутки. Те же операции остались и на сайте (routers/admin.py) -- это одни и
+# те же сервисы, просто вызванные из разных мест.
+#
+# Права шире, чем у остальной /api/bot/admin: уведомление уходит любому админу
+# с привязанным Telegram, в том числе админу сайта без прав в боте (см.
+# deps.require_club_admin_actor).
+
+
+@router.post("/moderation/registrations/{player_id}/confirm")
+@limiter.limit("60/minute")
+def moderate_confirm_registration(
+    request: Request,
+    player_id: int,
+    telegram_id: int,
+    db: Session = Depends(get_db),
+    _: models.Player = Depends(require_club_admin_actor),
+) -> dict:
+    player = db.get(models.Player, player_id)
+    if player is None:
+        raise HTTPException(404, "Игрок не найден")
+    try:
+        player_confirmation_service.confirm(db, player=player)
+        db.commit()
+    except ConfirmationError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.message) from exc
+    return {"nickname": player.nickname}
+
+
+@router.post("/moderation/registrations/{player_id}/reject")
+@limiter.limit("60/minute")
+def moderate_reject_registration(
+    request: Request,
+    player_id: int,
+    telegram_id: int,
+    data: PlayerRejectIn,
+    db: Session = Depends(get_db),
+    _: models.Player = Depends(require_club_admin_actor),
+) -> dict:
+    player = db.get(models.Player, player_id)
+    if player is None:
+        raise HTTPException(404, "Игрок не найден")
+    try:
+        player_confirmation_service.reject(db, player=player, reason=data.reason)
+        db.commit()
+    except ConfirmationError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.message) from exc
+    return {"nickname": player.nickname}
+
+
+@router.post("/moderation/profile-changes/{change_id}/apply")
+@limiter.limit("60/minute")
+def moderate_apply_profile_change(
+    request: Request,
+    change_id: int,
+    telegram_id: int,
+    db: Session = Depends(get_db),
+    _: models.Player = Depends(require_club_admin_actor),
+) -> dict:
+    change = db.get(models.PlayerProfileChange, change_id)
+    if change is None:
+        raise HTTPException(404, "Правка не найдена")
+    try:
+        profile_change_service.apply(db, change=change)
+        db.commit()
+    except ProfileChangeError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.message) from exc
+    return {
+        "nickname": change.player.nickname,
+        "field_label": profile_change_service.FIELD_LABELS.get(change.field, change.field),
+        "new_value": change.new_value,
+    }
+
+
+@router.post("/moderation/profile-changes/{change_id}/reject")
+@limiter.limit("60/minute")
+def moderate_reject_profile_change(
+    request: Request,
+    change_id: int,
+    telegram_id: int,
+    data: ProfileChangeRejectIn,
+    db: Session = Depends(get_db),
+    _: models.Player = Depends(require_club_admin_actor),
+) -> dict:
+    change = db.get(models.PlayerProfileChange, change_id)
+    if change is None:
+        raise HTTPException(404, "Правка не найдена")
+    try:
+        profile_change_service.reject(db, change=change, reason=data.reason)
+        db.commit()
+    except ProfileChangeError as exc:
+        db.rollback()
+        raise HTTPException(409, exc.message) from exc
+    return {
+        "nickname": change.player.nickname,
+        "field_label": profile_change_service.FIELD_LABELS.get(change.field, change.field),
+        "new_value": change.new_value,
+    }
+
+
 @router.get("/game-days")
 @limiter.limit("20/minute")
 def list_game_days(
@@ -350,9 +502,8 @@ def list_game_days(
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
 ) -> list[str]:
-    sessions = registration_service.list_open_sessions(db, game_type=game_type, exclude_player_id=actor.id)
-    days = sorted({club_day(s.starts_at) for s in sessions})
-    return days
+    sessions = registration_service.list_open_sessions(db, game_type=game_type)
+    return sorted({club_day(s.starts_at) for s in sessions})
 
 
 @router.get("/sessions/open", response_model=list[SessionOut])
@@ -365,21 +516,23 @@ def list_open_sessions(
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
 ) -> list[SessionOut]:
-    sessions = registration_service.list_open_sessions(db, game_type=game_type, exclude_player_id=actor.id)
+    sessions = registration_service.list_open_sessions(db, game_type=game_type)
     if day:
         sessions = [s for s in sessions if club_day(s.starts_at) == day]
-    return [session_to_out(s) for s in sessions]
+    mine = registration_service.my_roles(db, player_id=actor.id)
+    return [session_to_out(s, my_role=mine.get(s.id)) for s in sessions]
 
 
 @router.get("/sessions/{session_id}", response_model=SessionOut)
 @limiter.limit("20/minute")
 def get_session(
-    request: Request, session_id: int, telegram_id: int, db: Session = Depends(get_db), _: models.Player = Depends(get_bot_actor)
+    request: Request, session_id: int, telegram_id: int, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
 ) -> SessionOut:
     game = db.get(models.Game, session_id)
     if game is None:
         raise HTTPException(404, "Сессия не найдена")
-    return session_to_out(game)
+    mine = registration_service.my_roles(db, player_id=actor.id)
+    return session_to_out(game, my_role=mine.get(game.id))
 
 
 @router.post("/sessions/{session_id}/register", response_model=RegistrationOut)

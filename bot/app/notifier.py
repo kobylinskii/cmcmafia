@@ -1,14 +1,18 @@
 """Рассылки, которые может сделать только бот -- у него один живёт токен Telegram.
 
-Три независимые очереди, все устроены одинаково: бот забирает у API список
+Четыре независимые очереди, все устроены одинаково: бот забирает у API список
 недоставленного, рассылает и подтверждает ack'ом. Пока ack не пришёл, строка
 остаётся в очереди, так что упавший бот ничего не теряет.
 
 - решения админа по заявкам на вступление  -> игроку   (раздел 3.7)
 - решения админа по правкам профиля         -> игроку   (раздел 3.8)
 - новые заявки и правки, ждущие проверки     -> админам  (admin_notification_service)
+- «сегодня игры», за три часа до первой       -> записавшимся (day_reminder_service)
 
 Очереди независимы: недоставленное в одной не задерживает другие.
+
+Уведомление админам уходит с кнопками решения: разбирает заявку он тут же, в
+этом сообщении (см. handlers/moderation.py).
 """
 
 from __future__ import annotations
@@ -18,9 +22,12 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNotFound
+from aiogram.types import InlineKeyboardMarkup
 
 from app import texts
-from app.api_client import ApiClient
+from app.api_client import ApiClient, format_time
+from app.handlers.moderation import KIND_CHANGE, KIND_REGISTRATION
+from app.keyboards.inline import moderation_keyboard
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +78,8 @@ def profile_change_text(item: dict) -> str:
 
 
 def admin_registration_text(item: dict) -> str:
-    """«Пришла новая заявка» для админа сайта. Ровно столько, чтобы решить, стоит
-    ли открывать «Обзор» прямо сейчас, -- разбирается заявка всё равно там."""
+    """«Пришла новая заявка» для админа. Ровно столько, чтобы решить прямо
+    здесь, кнопками под сообщением."""
     lines = [f"🆕 Новая заявка на вступление: {item.get('nickname') or 'без ника'}"]
     if item.get("full_name"):
         lines.append(f"ФИО: {item['full_name']}")
@@ -81,12 +88,13 @@ def admin_registration_text(item: dict) -> str:
         lines.append(f"Проход: {affiliation}")
     if item.get("telegram_username"):
         lines.append(f"Telegram: @{item['telegram_username']}")
-    lines.append("\nПроверить можно в админке сайта.")
+    lines.append("\nРешите кнопками ниже.")
     return "\n".join(lines)
 
 
 def admin_profile_change_text(item: dict) -> str:
-    """«Игрок просит поправить профиль» для админа сайта."""
+    """«Игрок просит поправить профиль» -- с обоими значениями рядом: решение
+    принимается прямо в этом сообщении, открывать сайт незачем."""
     field = item.get("field_label") or "поле"
     nickname = item.get("player_nickname") or "игрок"
     current = item.get("current_value") or "пусто"
@@ -95,11 +103,31 @@ def admin_profile_change_text(item: dict) -> str:
         f"✏️ {nickname} просит поправить профиль — {field}\n"
         f"сейчас: {current}\n"
         f"станет: {new_value}\n\n"
-        "Проверить можно в админке сайта."
+        "Решите кнопками ниже."
     )
 
 
-async def _deliver(bot: Bot, telegram_id: int, text: str) -> bool | None:
+def day_reminder_text(item: dict) -> str:
+    """«Сегодня игры» -- одно сообщение на день, а не на каждый слот.
+
+    Место показывается у каждой игры: в один день клуб играет и на ВМК, и в
+    других аудиториях, и «сегодня игры» без адреса заставляет искать его в
+    переписке.
+    """
+    lines = [f"⏰ Сегодня игры — {item.get('day', '')}\n"]
+    for game in item.get("games") or []:
+        type_label = texts.GAME_TYPES.get(game.get("game_type", ""), "")
+        lines.append(
+            f"• {format_time(game['starts_at'])} — {type_label}, "
+            f"{game.get('location') or 'место уточняется'}"
+        )
+    lines.append("\nСостав и отмена записи — в «📋 Мои регистрации».")
+    return "\n".join(lines)
+
+
+async def _deliver(
+    bot: Bot, telegram_id: int, text: str, keyboard: InlineKeyboardMarkup | None = None
+) -> bool | None:
     """Отправить одно сообщение (общее для всех очередей: игроку и админу).
 
     True -- доставлено; False -- доставить не выйдет никогда (чат недоступен),
@@ -107,7 +135,7 @@ async def _deliver(bot: Bot, telegram_id: int, text: str) -> bool | None:
     None -- временная ошибка, строка остаётся в очереди до следующего прохода.
     """
     try:
-        await bot.send_message(telegram_id, text)
+        await bot.send_message(telegram_id, text, reply_markup=keyboard)
     except (TelegramForbiddenError, TelegramNotFound):
         # Адресат заблокировал бота или удалил аккаунт.
         logger.info("Чат %s недоступен, пропускаем", telegram_id)
@@ -171,7 +199,9 @@ async def deliver_profile_changes_once(bot: Bot, api: ApiClient) -> int:
     return delivered
 
 
-async def _deliver_to_admins(bot: Bot, recipients: list[int], text: str) -> bool:
+async def _deliver_to_admins(
+    bot: Bot, recipients: list[int], text: str, keyboard: InlineKeyboardMarkup
+) -> bool:
     """Разослать одно уведомление всем админам сразу.
 
     True -- у каждого получателя исход окончательный (доставлено или чат
@@ -182,13 +212,13 @@ async def _deliver_to_admins(bot: Bot, recipients: list[int], text: str) -> bool
     """
     resolved = True
     for telegram_id in recipients:
-        if await _deliver(bot, telegram_id, text) is None:
+        if await _deliver(bot, telegram_id, text, keyboard) is None:
             resolved = False
     return resolved
 
 
 async def deliver_admin_notifications_once(bot: Bot, api: ApiClient) -> int:
-    """Один проход по очереди оповещения админов сайта.
+    """Один проход по очереди оповещения админов.
 
     Возвращает число разосланных событий (заявок и правок), а не сообщений.
     """
@@ -205,12 +235,22 @@ async def deliver_admin_notifications_once(bot: Bot, api: ApiClient) -> int:
     acked_registrations = [
         item["player_id"]
         for item in registrations
-        if await _deliver_to_admins(bot, recipients, admin_registration_text(item))
+        if await _deliver_to_admins(
+            bot,
+            recipients,
+            admin_registration_text(item),
+            moderation_keyboard(KIND_REGISTRATION, item["player_id"]),
+        )
     ]
     acked_changes = [
         item["change_id"]
         for item in profile_changes
-        if await _deliver_to_admins(bot, recipients, admin_profile_change_text(item))
+        if await _deliver_to_admins(
+            bot,
+            recipients,
+            admin_profile_change_text(item),
+            moderation_keyboard(KIND_CHANGE, item["change_id"]),
+        )
     ]
 
     if acked_registrations or acked_changes:
@@ -221,12 +261,39 @@ async def deliver_admin_notifications_once(bot: Bot, api: ApiClient) -> int:
     return len(acked_registrations) + len(acked_changes)
 
 
+async def deliver_day_reminders_once(bot: Bot, api: ApiClient) -> int:
+    """Один проход по очереди напоминаний «сегодня игры».
+
+    День подтверждается, только когда у каждого получателя исход окончательный:
+    иначе половина записавшихся осталась бы без напоминания. Тем, кому уже
+    дошло, на повторе уйдёт второй раз -- лучше, чем не напомнить вовсе.
+    """
+    queue = await api.day_reminders()
+    if not queue:
+        return 0
+
+    acked: list[int] = []
+    for item in queue:
+        text = day_reminder_text(item)
+        resolved = True
+        for telegram_id in item.get("recipients") or []:
+            if await _deliver(bot, telegram_id, text) is None:
+                resolved = False
+        if resolved:
+            acked.append(item["marker_game_id"])
+
+    if acked:
+        await api.ack_day_reminders(acked)
+    return len(acked)
+
+
 async def notifier_loop(bot: Bot, api: ApiClient, interval_seconds: int) -> None:
     while True:
         for name, deliver in (
             ("решений по заявкам", deliver_once),
             ("решений по правкам профиля", deliver_profile_changes_once),
             ("новых заявок и правок админам", deliver_admin_notifications_once),
+            ("напоминаний о сегодняшних играх", deliver_day_reminders_once),
         ):
             try:
                 sent = await deliver(bot, api)

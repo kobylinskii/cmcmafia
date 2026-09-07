@@ -2,8 +2,8 @@
 
 Это главный экран бота -- три ручки, через которые проходит каждый, кто
 открывает «Игры». Отбор в registration_service.list_open_sessions устроен
-неочевидно (турнирные слоты вон, свои записи вон, дни считаются по московской
-полуночи), а проверялся до сих пор только косвенно, через запись на игру.
+неочевидно (турнирные слоты вон, свои записи помечены, дни считаются по
+московской полуночи), а проверялся до сих пор только косвенно, через запись на игру.
 """
 
 from __future__ import annotations
@@ -60,8 +60,12 @@ def test_open_sessions_lists_upcoming_slots_with_their_occupancy(admin):
     assert _open_sessions(client, 8001)[0]["hosts"] == 1
 
 
-def test_open_sessions_hide_the_players_own_registrations(admin):
-    """Записанный не видит игру в списке записи -- она уехала в «Мои игры»."""
+def test_open_sessions_mark_the_players_own_registrations(admin):
+    """Записанный видит свою игру в списке -- с пометкой роли, а не пустотой.
+
+    Раньше игра из списка исчезала, и нажатие «Записаться» выглядело так,
+    будто слот пропал, а не занят самим игроком.
+    """
     client, headers = admin
     ids = make_sessions(client, headers, starts_at="2030-06-01T15:00:00Z", count=2)
     register_bot_player(client, 8101, "Люмен")
@@ -72,18 +76,22 @@ def test_open_sessions_hide_the_players_own_registrations(admin):
         headers=BOT_HEADERS,
         json={"telegram_id": 8101, "role_kind": "player"},
     )
-    assert [s["id"] for s in _open_sessions(client, 8101)] == [ids[1]["id"]]
+    mine = {s["id"]: s["my_role"] for s in _open_sessions(client, 8101)}
+    assert mine == {taken: "player", ids[1]["id"]: None}
 
-    # Резерв прячет игру так же: второй раз предлагать её незачем.
+    # Резерв помечается так же -- своей «ролью».
     client.post(
         f"/api/bot/sessions/{ids[1]['id']}/reserve?telegram_id=8101",
         headers=BOT_HEADERS,
         json={"telegram_id": 8101},
     )
-    assert _open_sessions(client, 8101) == []
-    # А другому игроку обе по-прежнему видны.
+    assert {s["id"]: s["my_role"] for s in _open_sessions(client, 8101)} == {
+        taken: "player",
+        ids[1]["id"]: "reserve",
+    }
+    # А другому игроку обе видны как свободные.
     register_bot_player(client, 8102, "Ёрш")
-    assert len(_open_sessions(client, 8102)) == 2
+    assert [s["my_role"] for s in _open_sessions(client, 8102)] == [None, None]
 
 
 def test_open_sessions_exclude_past_games_and_tournament_slots(admin):
@@ -146,7 +154,9 @@ def test_game_days_are_grouped_by_moscow_midnight(admin):
     assert len(_open_sessions(client, 8401, day="02.06.2030")) == 2
 
 
-def test_game_days_shrink_as_the_player_signs_up(admin):
+def test_game_days_keep_the_day_the_player_signed_up_for(admin):
+    """День не исчезает из списка после записи: игра в нём остаётся, просто
+    помеченная как своя (см. test_open_sessions_mark_the_players_own_registrations)."""
     client, headers = admin
     register_bot_player(client, 8501, "Жетон")
     only_game = make_session(client, headers, starts_at="2030-06-01T15:00:00Z")
@@ -157,7 +167,7 @@ def test_game_days_shrink_as_the_player_signs_up(admin):
         headers=BOT_HEADERS,
         json={"telegram_id": 8501, "role_kind": "player"},
     )
-    assert _game_days(client, 8501) == []
+    assert _game_days(client, 8501) == ["01.06.2030"]
 
 
 def test_my_stats_card_matches_the_public_profile(admin):
@@ -241,3 +251,21 @@ def test_bot_session_lists_require_the_service_token(admin):
     assert client.get(
         "/api/bot/sessions/open", params={"telegram_id": 999999}, headers=BOT_HEADERS
     ).status_code == 404
+
+
+def test_nickname_may_be_one_letter_or_contain_spaces(admin):
+    """Ник -- это как человека зовут в клубе, а не идентификатор.
+
+    Однобуквенный «Я» и «Дядя Фёдор» с пробелом -- обычные клубные ники, и
+    регистрация из бота обязана их принять. Особый случай здесь -- slug:
+    ck_players_slug_format требует минимум трёх символов, и без добивки в
+    slug_service однобуквенный ник падал бы уже на констрейнте (500).
+    """
+    client, _ = admin
+    short = register_bot_player(client, 8901, "Я")
+    spaced = register_bot_player(client, 8902, "Дядя Фёдор")
+
+    assert short["nickname"] == "Я"
+    assert len(short["slug"]) >= 3
+    assert spaced["nickname"] == "Дядя Фёдор"
+    assert " " not in spaced["slug"]

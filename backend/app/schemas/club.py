@@ -189,6 +189,28 @@ class BotAdminNotificationsOut(BaseModel):
     profile_changes: list[AdminProfileChangeNoticeOut]
 
 
+class DayReminderGameOut(BaseModel):
+    """Одна игра дня в напоминании -- бот собирает из них текст сообщения."""
+
+    starts_at: datetime
+    game_type: str
+    location: str | None
+
+
+class DayReminderOut(BaseModel):
+    """Один клубный день, о котором пора напомнить записавшимся."""
+
+    day: str
+    # Первая игра дня: её id бот присылает обратно ack'ом как «разослано».
+    marker_game_id: int
+    games: list[DayReminderGameOut]
+    recipients: list[int]
+
+
+class DayRemindersAckIn(BaseModel):
+    game_ids: list[int] = Field(min_length=1, max_length=100)
+
+
 class BotAdminNotificationsAckIn(BaseModel):
     registration_player_ids: list[int] = Field(default_factory=list, max_length=100)
     profile_change_ids: list[int] = Field(default_factory=list, max_length=100)

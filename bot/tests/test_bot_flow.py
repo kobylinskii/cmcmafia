@@ -35,7 +35,7 @@ from aiogram.types import (
     User,
 )
 
-from app.api_client import LOCAL_TZ
+from app.api_client import LOCAL_TZ, ConflictError
 
 USER_ID = 424242
 CHAT_ID = 424242
@@ -115,6 +115,7 @@ def _session(session_id: int, starts_at: datetime, **overrides: Any) -> dict:
         "players": 3,
         "max_players": 10,
         "reserves": 0,
+        "my_role": None,
     }
     session.update(overrides)
     return session
@@ -132,12 +133,18 @@ class FakeApi:
         self.promote_on_register: int | None = None
         self.broadcast_recipients: list[int] = []
         self.broadcast_audience: list[int] = []
+        # Решения админа по заявкам и правкам: что вызвали и чем ответить.
+        self.moderated: list[tuple[str, int, str | None]] = []
+        self.moderation_error: Exception | None = None
         soon = datetime.now(LOCAL_TZ) + timedelta(days=1)
         self.session = _session(7, soon.replace(hour=18, minute=0, second=0, microsecond=0))
+        # Ещё игры того же дня -- ими проверяется экран выбора формата, который
+        # показывается, только когда в дне есть и фанки, и обучающие.
+        self.extra: list[dict] = []
 
     @property
     def sessions(self) -> dict[int, dict]:
-        return {self.session["id"]: self.session}
+        return {s["id"]: s for s in [self.session, *self.extra]}
 
     @property
     def _day(self) -> str:
@@ -186,7 +193,9 @@ class FakeApi:
         return [self._day]
 
     async def list_open_sessions(self, tg_id: int, game_type=None, day=None) -> list[dict]:
-        return [self.session]
+        # Фильтр по формату делает сам обработчик: ему нужно знать, какие
+        # форматы в дне вообще есть.
+        return [self.session, *self.extra]
 
     async def get_session(self, tg_id: int, session_id: int) -> dict | None:
         return self.sessions.get(session_id)
@@ -194,6 +203,7 @@ class FakeApi:
     async def register_for_session(self, tg_id: int, session_id: int, role_kind: str) -> dict:
         if self.reserve_next:
             self.registered.append((session_id, "reserve"))
+            self.session["my_role"] = "reserve"
             return {
                 "ok": True,
                 "message": "Основной состав уже собран — вы в резерве, №2",
@@ -202,6 +212,7 @@ class FakeApi:
                 "reserve_position": 2,
             }
         self.registered.append((session_id, role_kind))
+        self.session["my_role"] = "host" if role_kind == "staff" else role_kind
         return {
             "ok": True,
             "message": "Вы успешно записаны",
@@ -231,7 +242,21 @@ class FakeApi:
 
     async def cancel_registration(self, tg_id: int, session_id: int) -> dict:
         self.registered = [item for item in self.registered if item[0] != session_id]
+        self.session["my_role"] = None
         return {"ok": True, "message": "Запись отменена", "promoted_telegram_id": None}
+
+    # ---- модерация из сообщения
+    async def moderate_registration(self, tg_id: int, player_id: int, *, reason=None) -> dict:
+        if self.moderation_error:
+            raise self.moderation_error
+        self.moderated.append(("registration", player_id, reason))
+        return {"nickname": "Новичок"}
+
+    async def moderate_profile_change(self, tg_id: int, change_id: int, *, reason=None) -> dict:
+        if self.moderation_error:
+            raise self.moderation_error
+        self.moderated.append(("change", change_id, reason))
+        return {"nickname": "Шериф", "field_label": "никнейм", "new_value": "Комиссар"}
 
     # ---- админские ручки
     async def admin_weekly_broadcast(self, tg_id: int, days: int = 7) -> dict:
@@ -258,9 +283,9 @@ def _fresh_routers():
     обработчиков перезагружаются -- это честнее, чем отвязывать роутеры,
     трогая приватные поля aiogram."""
     import app.handlers as handlers_pkg
-    from app.handlers import admin, common, profile, registration, schedule
+    from app.handlers import admin, common, moderation, profile, registration, schedule
 
-    for module in (common, registration, profile, schedule, admin):
+    for module in (common, registration, moderation, profile, schedule, admin):
         importlib.reload(module)
     return importlib.reload(handlers_pkg).setup_routers
 
@@ -359,7 +384,7 @@ async def test_registration_walks_all_six_steps(stack):
     assert api.profile["confirmation_status"] == "pending"
     # Меню инлайновое: нижней клавиатуры после регистрации не остаётся, иначе
     # каждое её нажатие снова засоряло бы чат текстом.
-    assert bot.last_inline() == ["sg:types", "mr:list:active", "pf:menu"]
+    assert bot.last_inline() == ["sg:days", "mr:list:active", "pf:menu"]
 
 
 @pytest.mark.asyncio
@@ -381,10 +406,12 @@ async def test_registration_refuses_to_finish_without_a_role(stack):
 @pytest.mark.asyncio
 async def test_flow_screens_never_pile_up(stack):
     """Каждое нажатие инлайн-кнопки правит тот же экран, а не шлёт новый."""
-    dp, bot, _ = stack
+    dp, bot, api = stack
     await _register(dp, bot)
+    day_token = api._day.replace(".", "")
 
-    for data in ("sg:types", "sg:type:funky", "sg:types", "mn:menu"):
+    for data in ("sg:days", "sg:day:{day}", "sg:days", "mn:menu"):
+        data = data.format(day=day_token)
         bot.reset()
         await dp.feed_update(bot, _callback(data))
         assert sum(isinstance(c, SendMessage) for c in bot.calls) == 0, data
@@ -414,20 +441,26 @@ async def test_signing_up_for_a_game_and_cancelling(stack):
     dp, bot, api = stack
     await _register(dp, bot)
 
-    await dp.feed_update(bot, _callback("sg:types"))
-    assert "На какие игры" in bot.last_text
-
-    # У игрока отмечена одна роль -- экран выбора роли пропускается.
-    await dp.feed_update(bot, _callback("sg:type:funky"))
+    await dp.feed_update(bot, _callback("sg:days"))
     assert "Выберите день" in bot.last_text
     day_token = api._day.replace(".", "")
-    assert f"sg:day:funky:player:{day_token}" in bot.last_inline()
+    assert f"sg:day:{day_token}" in bot.last_inline()
 
-    await dp.feed_update(bot, _callback(f"sg:day:funky:player:{day_token}"))
-    assert "sg:game:funky:player:7" in bot.last_inline()
+    # В этот день только фанки и роль у игрока одна -- оба промежуточных
+    # экрана пропускаются, сразу список игр.
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
+    assert f"sg:game:{day_token}:funky:player:7" in bot.last_inline()
 
-    await dp.feed_update(bot, _callback("sg:game:funky:player:7"))
+    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
     assert api.registered == [(7, "player")]
+    # Строка не исчезла: она осталась на месте с галочкой.
+    assert f"sg:game:{day_token}:funky:player:7" in bot.last_inline()
+    # «Назад» ведёт на дни: ни формат, ни роль этому игроку не показывали,
+    # и возврат на пропущенный экран был бы холостым нажатием.
+    assert bot.last_inline()[-1] == "sg:days"
+    assert any("✅" in b.text for c in bot.calls
+               for markup in [getattr(c, "reply_markup", None)] if isinstance(markup, InlineKeyboardMarkup)
+               for row in markup.inline_keyboard for b in row)
 
     await dp.feed_update(bot, _callback("mr:list:active"))
     assert "Предстоящие игры" in bot.last_text
@@ -452,16 +485,15 @@ async def test_eleventh_player_goes_to_reserve_in_one_tap(stack):
     api.session.update(players=10, reserves=1)
 
     day_token = api._day.replace(".", "")
-    await dp.feed_update(bot, _callback("sg:types"))
-    await dp.feed_update(bot, _callback("sg:type:funky"))
-    await dp.feed_update(bot, _callback(f"sg:day:funky:player:{day_token}"))
+    await dp.feed_update(bot, _callback("sg:days"))
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
     # Заполненный стол виден до нажатия -- подписью на самой кнопке.
     assert any("в резерв" in b.text for c in bot.calls
                for markup in [getattr(c, "reply_markup", None)] if isinstance(markup, InlineKeyboardMarkup)
                for row in markup.inline_keyboard for b in row)
 
     bot.reset()
-    await dp.feed_update(bot, _callback("sg:game:funky:player:7"))
+    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
     assert api.registered == [(7, "reserve")]
     alerts = [c.text for c in bot.calls if isinstance(c, AnswerCallbackQuery) and c.show_alert]
     assert alerts and "в резерве, №2" in alerts[0]
@@ -641,7 +673,7 @@ async def test_weekly_announcement_goes_only_to_those_without_a_registration(sta
     assert [c.chat_id for c in sent] == [111, 222]
     assert all("Игры на ближайшие 7 дней" in c.text for c in sent)
     # В каждом сообщении -- кнопка записи, ведущая в обычный экран выбора.
-    assert all(c.reply_markup.inline_keyboard[0][0].callback_data == "sg:types" for c in sent)
+    assert all(c.reply_markup.inline_keyboard[0][0].callback_data == "sg:days" for c in sent)
     assert "Доставлено: 2" in bot.last_text
 
 
@@ -658,12 +690,11 @@ async def test_switching_to_staff_notifies_the_promoted_player(stack):
     api.promote_on_register = 555001
 
     day_token = api._day.replace(".", "")
-    await dp.feed_update(bot, _callback("sg:types"))
-    await dp.feed_update(bot, _callback("sg:type:funky"))
-    await dp.feed_update(bot, _callback(f"sg:day:funky:staff:{day_token}"))
+    await dp.feed_update(bot, _callback("sg:days"))
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
 
     bot.reset()
-    await dp.feed_update(bot, _callback("sg:game:funky:staff:7"))
+    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:staff:7"))
     assert api.registered == [(7, "staff")]
 
     promo = [
@@ -684,13 +715,115 @@ async def test_plain_registration_notifies_nobody(stack):
     await _register(dp, bot)
 
     day_token = api._day.replace(".", "")
-    await dp.feed_update(bot, _callback("sg:types"))
-    await dp.feed_update(bot, _callback("sg:type:funky"))
-    await dp.feed_update(bot, _callback(f"sg:day:funky:player:{day_token}"))
+    await dp.feed_update(bot, _callback("sg:days"))
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
 
     bot.reset()
-    await dp.feed_update(bot, _callback("sg:game:funky:player:7"))
+    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
     assert api.registered == [(7, "player")]
     assert not [
         call for call in bot.calls if isinstance(call, SendMessage) and call.chat_id != CHAT_ID
     ]
+
+
+@pytest.mark.asyncio
+async def test_mixed_day_asks_which_games_to_show(stack):
+    """Формат спрашивается, только если в этот день есть и фанки, и обучающие.
+
+    Раньше формат был первым экраном и спрашивался всегда -- в том числе у
+    человека, которому просто нужно знать, когда ближайшая игра.
+    """
+    dp, bot, api = stack
+    await _register(dp, bot)
+    day = datetime.fromisoformat(api.session["starts_at"])
+    api.extra = [_session(8, day.replace(hour=20), game_type="training")]
+    day_token = api._day.replace(".", "")
+
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
+    assert "Какие игры показать?" in bot.last_text
+    assert bot.last_inline() == [
+        f"sg:cat:{day_token}:funky",
+        f"sg:cat:{day_token}:training",
+        f"sg:cat:{day_token}:all",
+        "sg:days",
+    ]
+
+    await dp.feed_update(bot, _callback(f"sg:cat:{day_token}:training"))
+    slots = bot.last_inline()
+    assert f"sg:game:{day_token}:training:player:8" in slots
+    assert f"sg:game:{day_token}:training:player:7" not in slots
+    # «Назад» ведёт на показанный экран формата, а не на день, который тут же
+    # снова его показал бы.
+    assert slots[-1] == f"sg:day:{day_token}"
+
+
+@pytest.mark.asyncio
+async def test_role_is_asked_only_when_the_player_has_both(stack):
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["can_staff"] = True
+    day_token = api._day.replace(".", "")
+
+    await dp.feed_update(bot, _callback(f"sg:day:{day_token}"))
+    assert "В какой роли" in bot.last_text
+    assert bot.last_inline() == [
+        f"sg:role:{day_token}:funky:player",
+        f"sg:role:{day_token}:funky:staff",
+        # Формат в этот день один -- «Назад» ведёт сразу к дням.
+        "sg:days",
+    ]
+
+    await dp.feed_update(bot, _callback(f"sg:role:{day_token}:funky:staff"))
+    assert f"sg:game:{day_token}:funky:staff:7" in bot.last_inline()
+
+
+@pytest.mark.asyncio
+async def test_signed_up_slot_is_marked_not_removed(stack):
+    """Повторное нажатие на свою строку не записывает второй раз и не молчит."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    day_token = api._day.replace(".", "")
+    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
+
+    bot.reset()
+    await dp.feed_update(bot, _callback(f"sg:game:{day_token}:funky:player:7"))
+    alerts = [c.text for c in bot.calls if isinstance(c, AnswerCallbackQuery) and c.show_alert]
+    assert alerts and "уже записаны" in alerts[0]
+    assert api.registered == [(7, "player")]
+
+
+@pytest.mark.asyncio
+async def test_admin_decides_a_registration_from_the_notification(stack):
+    """Кнопки под уведомлением: подтверждение -- одним нажатием, отказ --
+    нажатием и причиной, которую увидит игрок."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("md:ok:r:42"))
+    assert api.moderated == [("registration", 42, None)]
+    assert "подтверждена" in bot.last_text
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("md:no:c:9"))
+    assert "причину отклонения" in bot.last_text
+    assert bot.last_inline() == ["md:back:c:9"]
+
+    await dp.feed_update(bot, _message("Ник уже занят другим игроком"))
+    assert api.moderated[-1] == ("change", 9, "Ник уже занят другим игроком")
+    assert "Отклонено" in bot.last_text
+    assert "Ник уже занят другим игроком" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_already_decided_notification_stops_offering_buttons(stack):
+    """Уведомление приходит каждому админу своей копией: решил один --
+    у остальных кнопка обязана честно сказать, что решать уже нечего."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.moderation_error = ConflictError(409, "Заявка уже рассмотрена")
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("md:ok:r:42"))
+    assert "уже рассмотрена" in bot.last_text
+    assert not bot.last_inline()

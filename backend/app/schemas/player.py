@@ -66,7 +66,7 @@ class PlayerDetailOut(BaseModel):
 
 
 class PlayerCreate(BaseModel):
-    nickname: str = Field(min_length=2, max_length=100)
+    nickname: str = Field(min_length=1, max_length=100)
     slug: str = Field(min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=150)
     age: int | None = Field(default=None, ge=5, le=100)
@@ -76,7 +76,7 @@ class PlayerCreate(BaseModel):
 
 
 class PlayerUpdate(BaseModel):
-    nickname: str | None = Field(default=None, min_length=2, max_length=100)
+    nickname: str | None = Field(default=None, min_length=1, max_length=100)
     slug: str | None = Field(default=None, min_length=3, max_length=50)
     full_name: str | None = Field(default=None, max_length=150)
     age: int | None = Field(default=None, ge=5, le=100)

@@ -39,7 +39,7 @@ def session_load_options():
     )
 
 
-def session_to_out(game: models.Game) -> SessionOut:
+def session_to_out(game: models.Game, *, my_role: str | None = None) -> SessionOut:
     hosts = sum(1 for r in game.registrations if r.role == "host")
     judges = sum(1 for r in game.registrations if r.role == "judge")
     players = sum(1 for r in game.registrations if r.role == "player")
@@ -58,6 +58,7 @@ def session_to_out(game: models.Game) -> SessionOut:
         players=players,
         max_players=game.max_players,
         reserves=len(game.reserves),
+        my_role=my_role,
     )
 
 

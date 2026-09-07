@@ -70,3 +70,16 @@ def require_bot_admin_actor(actor: models.Player = Depends(get_bot_actor)) -> mo
     if not actor.is_bot_admin:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Требуются права администратора бота")
     return actor
+
+
+def require_club_admin_actor(actor: models.Player = Depends(get_bot_actor)) -> models.Player:
+    """Админ любого рода -- для модерации заявок и правок прямо из Telegram.
+
+    Шире, чем require_bot_admin_actor: уведомление о новой заявке уходит
+    каждому админу с привязанным Telegram (admin_notification_service), в том
+    числе админу сайта без прав в боте, и кнопки в этом сообщении обязаны у
+    него работать. Права на рассылки и назначение админов это не даёт.
+    """
+    if not (actor.is_bot_admin or actor.is_site_admin):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Требуются права администратора")
+    return actor

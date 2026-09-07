@@ -23,6 +23,7 @@ from app.notifier import (
     admin_profile_change_text,
     admin_registration_text,
     deliver_admin_notifications_once,
+    deliver_day_reminders_once,
     deliver_once,
 )
 
@@ -35,11 +36,12 @@ class FakeBot:
         bad_request_for: dict[int, str] | None = None,
     ):
         self.sent: list[tuple[int, str]] = []
+        self.markups: list = []
         self._fail_for = fail_for or set()
         self._forbidden_for = forbidden_for or set()
         self._bad_request_for = bad_request_for or {}
 
-    async def send_message(self, chat_id: int, text: str) -> None:
+    async def send_message(self, chat_id: int, text: str, reply_markup=None) -> None:
         if chat_id in self._forbidden_for:
             from aiogram.exceptions import TelegramForbiddenError
 
@@ -51,6 +53,7 @@ class FakeBot:
         if chat_id in self._fail_for:
             raise RuntimeError("network is down")
         self.sent.append((chat_id, text))
+        self.markups.append(reply_markup)
 
 
 class FakeApi:
@@ -110,8 +113,12 @@ def test_broadcast_length_limit_leaves_room_under_telegram_cap():
         ("full_name", "Иванов Иван", None),
         ("full_name", "Ivanov Ivan Ivanovich", None),
         ("nickname", "Шериф", "Шериф"),
-        ("nickname", "ше", None),
+        # Пробел внутри ника разрешён, длина -- от одного символа.
+        ("nickname", "  Дядя   Фёдор ", "Дядя Фёдор"),
+        ("nickname", "Я", "Я"),
         ("nickname", "Шериф2000", None),
+        ("nickname", "", None),
+        ("nickname", "И" * 33, None),
         ("age", "25", 25),
         ("age", "3", None),
         ("age", "двадцать", None),
@@ -297,6 +304,76 @@ async def test_blocked_admin_does_not_hold_up_the_event():
 
     assert await deliver_admin_notifications_once(bot, api) == 1
     assert api.acked == [{"registrations": [1], "changes": []}]
+
+
+@pytest.mark.asyncio
+async def test_admin_notifications_carry_the_decision_buttons():
+    """Решение принимается в этом же сообщении: без кнопок админ снова
+    оказывается перед «проверить можно в админке сайта»."""
+    api = FakeAdminApi(
+        {
+            "recipients": [100],
+            "registrations": [_registration(1)],
+            "profile_changes": [_profile_change(9)],
+        }
+    )
+    bot = FakeBot()
+
+    await deliver_admin_notifications_once(bot, api)
+    buttons = [
+        b.callback_data for markup in bot.markups for row in markup.inline_keyboard for b in row
+    ]
+    assert buttons == ["md:ok:r:1", "md:no:r:1", "md:ok:c:9", "md:no:c:9"]
+
+
+# ------------------------------------------- напоминание о сегодняшних играх
+class FakeReminderApi:
+    def __init__(self, queue: list[dict]):
+        self.queue = queue
+        self.acked: list[int] = []
+
+    async def day_reminders(self) -> list[dict]:
+        return self.queue
+
+    async def ack_day_reminders(self, game_ids: list[int]) -> int:
+        self.acked.extend(game_ids)
+        return len(game_ids)
+
+
+def _reminder(marker_game_id: int, recipients: list[int]) -> dict:
+    return {
+        "day": "10.09.2026",
+        "marker_game_id": marker_game_id,
+        "games": [
+            {"starts_at": "2026-09-10T15:00:00Z", "game_type": "funky", "location": "ВМК"},
+            {"starts_at": "2026-09-10T18:00:00Z", "game_type": "training", "location": None},
+        ],
+        "recipients": recipients,
+    }
+
+
+@pytest.mark.asyncio
+async def test_day_reminder_goes_to_everyone_signed_up_and_is_acked():
+    api = FakeReminderApi([_reminder(7, [100, 200])])
+    bot = FakeBot()
+
+    assert await deliver_day_reminders_once(bot, api) == 1
+    assert {chat_id for chat_id, _ in bot.sent} == {100, 200}
+    text = bot.sent[0][1]
+    assert "Сегодня игры" in text
+    assert "18:00" in text, "все игры дня в одном сообщении"
+    assert "место уточняется" in text
+    assert api.acked == [7]
+
+
+@pytest.mark.asyncio
+async def test_day_reminder_stays_in_the_queue_if_someone_was_not_reached():
+    """Иначе половина записавшихся осталась бы без напоминания навсегда."""
+    api = FakeReminderApi([_reminder(7, [100, 200])])
+    bot = FakeBot(fail_for={200})
+
+    assert await deliver_day_reminders_once(bot, api) == 0
+    assert api.acked == []
 
 
 def test_admin_notification_texts_are_readable():

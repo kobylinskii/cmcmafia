@@ -222,6 +222,48 @@ class ApiClient:
         )
         return resp.json()
 
+    # ------------------------------------------------- решения админа из бота
+    # Кнопки под тем самым сообщением, которым бот сообщил о новом событии:
+    # админ клуба живёт в боте, и лишний вход в админку сайта откладывал
+    # проверку на сутки. Ручки требуют прав админа (telegram_id действующего),
+    # а не только сервисного токена.
+    async def moderate_registration(
+        self, tg_id: int, player_id: int, *, reason: str | None = None
+    ) -> dict:
+        decision = "reject" if reason is not None else "confirm"
+        resp = await self._request(
+            "POST",
+            f"/api/bot/moderation/registrations/{player_id}/{decision}",
+            params={"telegram_id": tg_id},
+            json={"reason": reason} if reason is not None else None,
+        )
+        return resp.json()
+
+    async def moderate_profile_change(
+        self, tg_id: int, change_id: int, *, reason: str | None = None
+    ) -> dict:
+        decision = "reject" if reason is not None else "apply"
+        resp = await self._request(
+            "POST",
+            f"/api/bot/moderation/profile-changes/{change_id}/{decision}",
+            params={"telegram_id": tg_id},
+            json={"reason": reason} if reason is not None else None,
+        )
+        return resp.json()
+
+    # ------------------------------------------------ напоминания о дне игр
+    async def day_reminders(self) -> list[dict]:
+        """Дни, до первой игры которых осталось меньше трёх часов. Ручка
+        сервисная, как и остальные очереди рассылок."""
+        resp = await self._request("GET", "/api/bot/day-reminders")
+        return resp.json()
+
+    async def ack_day_reminders(self, game_ids: list[int]) -> int:
+        resp = await self._request(
+            "POST", "/api/bot/day-reminders/ack", json={"game_ids": game_ids}
+        )
+        return int(resp.json().get("marked", 0))
+
     # ------------------------------------------------------------- sessions (user)
     async def list_game_days(self, tg_id: int, game_type: str | None = None) -> list[str]:
         params = {"telegram_id": tg_id}

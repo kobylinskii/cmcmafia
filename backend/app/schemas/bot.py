@@ -19,7 +19,7 @@ class BotPlayerRegisterIn(BaseModel):
     telegram_id: int
     telegram_username: str | None = None
     phone: str = Field(min_length=5, max_length=20)
-    nickname: str = Field(min_length=2, max_length=100)
+    nickname: str = Field(min_length=1, max_length=100)
     salutation: str = Field(min_length=1, max_length=20)
     full_name: str | None = Field(default=None, max_length=150)
     affiliation: AffiliationT
@@ -68,7 +68,7 @@ class BotPlayerProfileUpdateIn(BaseModel):
     salutation: str | None = Field(default=None, max_length=20)
     full_name: str | None = Field(default=None, max_length=150)
     affiliation: AffiliationT | None = None
-    nickname: str | None = Field(default=None, min_length=2, max_length=100)
+    nickname: str | None = Field(default=None, min_length=1, max_length=100)
     can_play: bool | None = None
     can_staff: bool | None = None
     age: int | None = Field(default=None, ge=5, le=100)
@@ -93,6 +93,10 @@ class SessionOut(BaseModel):
     players: int
     max_players: int
     reserves: int
+    # Роль действующего игрока в этой игре, если он уже записан
+    # ('host'/'judge'/'player'/'reserve'). Бот помечает такую строку галочкой
+    # вместо того, чтобы убирать её из списка.
+    my_role: str | None = None
 
 
 class RegisterIn(BaseModel):

@@ -29,10 +29,17 @@ STATUS_PENDING_CHANGE = models.ProfileChangeStatus.pending.value
 
 
 def admin_recipients(db: Session) -> list[models.Player]:
+    """Кому писать о заявке или правке.
+
+    Любой админ с привязанным Telegram -- и сайта, и бота: решение теперь
+    принимается прямо в сообщении, кнопками, а не только на вкладке «Обзор»
+    (см. /api/bot/moderation/*). Админ без telegram_id в рассылку не попадает
+    -- писать некуда.
+    """
     return (
         db.query(models.Player)
         .filter(
-            models.Player.is_site_admin.is_(True),
+            models.Player.is_site_admin.is_(True) | models.Player.is_bot_admin.is_(True),
             models.Player.telegram_id.isnot(None),
         )
         .order_by(models.Player.id.asc())

@@ -93,10 +93,20 @@ def submit(
     # Повторная правка того же поля вытесняет прежнюю: админу нужен последний
     # вариант, а не история промежуточных (и того же требует частичный
     # уникальный индекс uq_profile_changes_one_pending_per_field).
+    #
+    # Именно вытесняет, а не пересоздаёт: id строки обязан пережить правку.
+    # Пересоздание ломало уже разосланные админам карточки и сообщения --
+    # они ссылаются на id, и у всех, кроме последней, кнопка «Применить»
+    # утыкалась в «Правка не найдена». Снаружи это выглядело так, будто
+    # подтвердить можно только последнюю правку.
     existing = pending_for_field(db, player_id=player.id, field=field)
     if existing is not None:
-        db.delete(existing)
+        existing.new_value = new_value
+        # Значение поменялось -- админам нужно написать заново (старое
+        # сообщение показывает уже неактуальное «станет»).
+        existing.admin_notified_at = None
         db.flush()
+        return existing
 
     change = models.PlayerProfileChange(
         player_id=player.id, field=field, new_value=new_value, status=STATUS_PENDING

@@ -31,7 +31,12 @@ from app.keyboards.inline import (
 )
 from app.states import ProfileStates
 from app.ui import consume_input, edit_screen, open_screen
-from app.utils import validate_full_name, validate_nickname
+from app.utils import (
+    NICKNAME_MAX_LENGTH,
+    NICKNAME_MIN_LENGTH,
+    validate_full_name,
+    validate_nickname,
+)
 
 router = Router(name="profile")
 
@@ -42,8 +47,10 @@ TEXT_FIELDS: dict[str, tuple[str, str]] = {
         "Нужны ровно три слова на русском языке, только буквы.",
     ),
     "nickname": (
-        "Введите новый никнейм — от 3 до 32 букв, без цифр и знаков.",
-        "Никнейм должен быть от 3 до 32 символов и состоять только из букв.",
+        f"Введите новый никнейм — от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} "
+        "букв, можно с пробелами, без цифр и знаков.",
+        f"Никнейм — от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов, "
+        "только буквы и пробелы между ними.",
     ),
     "age": ("Сколько вам лет?", "Возраст — это число от 5 до 100."),
     "experience": (
@@ -357,8 +364,8 @@ def _parse(field: str, raw: str) -> str | int | None:
     if field == "full_name":
         return validate_full_name(text)
     if field == "nickname":
-        nickname = validate_nickname(text)
-        return nickname if nickname and 3 <= len(nickname) <= 32 else None
+        # Длина проверяется внутри validate_nickname -- одна граница на бота.
+        return validate_nickname(text)
     if field == "age":
         return int(text) if text.isdigit() and 5 <= int(text) <= 100 else None
     if field == "experience":

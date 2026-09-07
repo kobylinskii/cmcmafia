@@ -61,7 +61,13 @@ def is_role_kind_full(db: Session, game: models.Game, role_kind: str) -> bool:
     return False
 
 
-def list_open_sessions(db: Session, *, game_type: str | None = None, exclude_player_id: int | None = None):
+def list_open_sessions(db: Session, *, game_type: str | None = None):
+    """Игры, на которые сейчас идёт запись.
+
+    Свои записи отсюда НЕ вычитаются: строка остаётся в списке с галочкой (см.
+    my_roles ниже). Раньше игра после записи из списка исчезала, и нажатие
+    выглядело так, будто слот пропал, а не занят.
+    """
     query = db.query(models.Game).options(*serializers.session_load_options()).filter(
         models.Game.status == "scheduled",
         models.Game.starts_at >= datetime.now(timezone.utc),
@@ -74,17 +80,25 @@ def list_open_sessions(db: Session, *, game_type: str | None = None, exclude_pla
     )
     if game_type and game_type != "all":
         query = query.filter(models.Game.game_type == game_type)
-    if exclude_player_id is not None:
-        registered_ids = db.query(models.Registration.game_id).filter(
-            models.Registration.player_id == exclude_player_id
-        )
-        reserved_ids = db.query(models.Reserve.game_id).filter(
-            models.Reserve.player_id == exclude_player_id
-        )
-        query = query.filter(models.Game.id.notin_(registered_ids)).filter(
-            models.Game.id.notin_(reserved_ids)
-        )
     return query.order_by(models.Game.starts_at.asc()).all()
+
+
+def my_roles(db: Session, *, player_id: int) -> dict[int, str]:
+    """game_id -> роль игрока в этой игре ('host'/'judge'/'player'/'reserve').
+
+    Именно этим списки бота отмечают галочкой уже занятые слоты.
+    """
+    roles = {
+        game_id: role
+        for game_id, role in db.query(
+            models.Registration.game_id, models.Registration.role
+        ).filter(models.Registration.player_id == player_id)
+    }
+    for (game_id,) in db.query(models.Reserve.game_id).filter(
+        models.Reserve.player_id == player_id
+    ):
+        roles.setdefault(game_id, "reserve")
+    return roles
 
 
 def register(

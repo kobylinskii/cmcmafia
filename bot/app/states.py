@@ -43,3 +43,14 @@ class AdminStates(StatesGroup):
 
     waiting_for_admin_to_add = State()
     waiting_for_broadcast_text = State()
+
+
+class ModerationStates(StatesGroup):
+    """Причина отказа по заявке или правке, которую админ пишет прямо в чате.
+
+    Одно состояние на оба случая: что именно отклоняют (заявку или правку) и
+    какое сообщение потом дописать, лежит в данных FSM -- отдельные состояния
+    означали бы два одинаковых обработчика текста.
+    """
+
+    waiting_for_rejection_reason = State()

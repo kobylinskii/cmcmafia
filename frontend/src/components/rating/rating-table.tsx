@@ -28,14 +28,20 @@ export function RatingTable({ rows }: { rows: RatingRowOut[] }) {
         <tbody className="divide-y divide-ink-800">
           {rows.map((row) => (
             <tr key={row.slug} className="odd:bg-ink-900/40 hover:bg-ink-850">
-              <td className="px-4 py-3 font-mono text-sm text-ink-400">{row.rank}</td>
+              {/* Ещё не игравший попадает сюда только поиском по нику: места и
+                  рейтинга у него нет, и печатать «#1 · 0» вместо них -- врать. */}
+              <td className="px-4 py-3 font-mono text-sm text-ink-400">
+                {row.games_count > 0 ? row.rank : "—"}
+              </td>
               <td className="px-4 py-3">
                 <Link href={`/mafia/${row.slug}`} className="flex items-center gap-3 font-medium text-ink-50 hover:text-brand-400">
                   <PlayerAvatar photoUrl={row.photo_url} nickname={row.nickname} />
                   {row.nickname}
                 </Link>
               </td>
-              <td className="px-4 py-3 text-right font-mono text-sm text-ink-50">{Math.round(row.rating)}</td>
+              <td className="px-4 py-3 text-right font-mono text-sm text-ink-50">
+                {row.games_count > 0 ? Math.round(row.rating) : "—"}
+              </td>
               <td className="px-4 py-3 text-right font-mono text-sm text-ink-300">{row.games_count}</td>
               <td className="px-4 py-3 text-right font-mono text-sm text-ink-300">{formatPercent(row.win_rate)}</td>
               <td className="px-4 py-3 text-right font-mono text-sm text-ink-300">{formatDash(row.avg_bonus)}</td>

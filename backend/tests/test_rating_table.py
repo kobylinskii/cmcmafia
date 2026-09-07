@@ -8,7 +8,12 @@
 
 from __future__ import annotations
 
-from tests.conftest import make_players, make_tournament, make_tournament_game
+from tests.conftest import (
+    make_players,
+    make_tournament,
+    make_tournament_game,
+    register_bot_player,
+)
 
 ROLES = ["don", "mafia", "mafia", "sheriff"] + ["citizen"] * 6
 
@@ -96,3 +101,34 @@ def test_search_keeps_the_club_wide_rank(admin):
     found = _rating(client, q=target["nickname"])["items"]
     assert found, "поиск ничего не нашёл"
     assert found[0]["rank"] == full[found[0]["slug"]]
+
+
+def test_search_finds_a_player_who_has_not_played_yet(admin):
+    """Поиск -- это «найди человека», а не «покажи таблицу».
+
+    Новичок без единой сыгранной игры находится по нику: иначе его страницу на
+    сайте не открыть ниоткуда. В самой таблице (запроса нет) он по-прежнему не
+    показывается -- рейтинга у него ещё нет.
+    """
+    client, headers = admin
+    ids = make_players(client, headers, 10)
+    tid = make_tournament(client, headers)
+    _rated_game(client, headers, ids, tid, "2026-02-01T18:00:00Z")
+
+    newcomer = client.post(
+        "/api/admin/players", json={"nickname": "Салага", "slug": "salaga"}, headers=headers
+    )
+    assert newcomer.status_code == 200, newcomer.text
+
+    assert [it["nickname"] for it in _rating(client, q="Салага")["items"]] == ["Салага"]
+    assert _rating(client, q="Салага")["items"][0]["games_count"] == 0
+    # Без запроса таблица прежняя: только те, кто уже играл.
+    assert _rating(client, limit=50)["total"] == 10
+
+
+def test_search_still_hides_an_unconfirmed_newcomer(admin):
+    """Модерация регистрации сильнее поиска: пока админ не подтвердил
+    новичка, его на сайте нет вовсе -- и ссылка вела бы на 404."""
+    client, _ = admin
+    register_bot_player(client, 9401, "Неизвестный")
+    assert _rating(client, q="Неизвестный")["total"] == 0

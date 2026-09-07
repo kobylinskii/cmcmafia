@@ -41,6 +41,11 @@ def suggest_slug(nickname: str, db: Session, *, scope: str = "player") -> str:
     base = slugify(nickname, max_length=48) or "player"
     if base in RESERVED_SLUGS:
         base = f"{base}-player"
+    # ck_players_slug_format требует минимум трёх символов, а ник теперь
+    # разрешён и однобуквенный («Я» -> "ia"): без добивки регистрация такого
+    # ника падала бы на констрейнте уже в базе.
+    if len(base) < 3:
+        base = f"{base}-player"
 
     taken = is_tournament_slug_taken if scope == "tournament" else is_slug_taken
     candidate = base

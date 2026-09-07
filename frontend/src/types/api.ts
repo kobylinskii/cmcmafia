@@ -102,6 +102,10 @@ export interface SessionOut {
   players: number;
   max_players: number;
   reserves: number;
+  /** Роль действующего игрока в этой игре, если он записан. Заполняет только
+   * бот-ручка: ею бот помечает свои строки галочкой вместо того, чтобы
+   * убирать их из списка. В расписании на сайте всегда null. */
+  my_role?: string | null;
 }
 
 export interface RosterMember {

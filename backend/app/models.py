@@ -372,6 +372,10 @@ class Game(Base):
     needs_rating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     result: Mapped[str | None] = mapped_column(String(10))
     results_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Когда бот разослал записавшимся «сегодня игры». Метка стоит только на
+    # первой игре клубного дня: напоминание одно на день, независимо от того,
+    # на сколько слотов человек записан (см. day_reminder_service).
+    day_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     notes: Mapped[str | None] = mapped_column(Text)
     # RESTRICT, а не SET NULL: обнуление увело бы оценённые турнирные игры в

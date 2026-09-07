@@ -30,7 +30,7 @@ def main_menu_keyboard(*, is_admin: bool) -> InlineKeyboardMarkup:
     """Корневой экран. Раньше это была нижняя reply-клавиатура, и каждое
     нажатие оставляло в чате текстовое сообщение с названием раздела."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="📝 Запись на игры", callback_data="sg:types")
+    kb.button(text="📝 Запись на игры", callback_data="sg:days")
     kb.button(text="📋 Мои регистрации", callback_data="mr:list:active")
     kb.button(text="👤 Профиль", callback_data="pf:menu")
     if is_admin:
@@ -144,42 +144,64 @@ def profile_value_keyboard(field: str, inner: InlineKeyboardMarkup) -> InlineKey
 
 
 # --------------------------------------------------------------- запись на игры
-def game_types_keyboard() -> InlineKeyboardMarkup:
+# Порядок экранов: день -> формат (только если в этот день есть и фанки, и
+# обучающие) -> роль (только если игрок готов и играть, и вести) -> игры.
+# Раньше первым спрашивали формат, и человеку, который просто хочет знать,
+# когда ближайшая игра, приходилось выбирать его вслепую.
+#
+# День едет в callback_data токеном ДДММГГГГ: двоеточия в нём -- разделители
+# самой callback_data, а на всё вместе у Telegram 64 байта.
+def day_token(day: str) -> str:
+    return day.replace(".", "")
+
+
+def game_days_keyboard(days: list[str]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for value, label in texts.GAME_TYPES.items():
-        kb.button(text=label, callback_data=f"sg:type:{value}")
-    kb.button(text=texts.ALL_GAMES_LABEL, callback_data=f"sg:type:{texts.ALL_GAMES}")
-    kb.adjust(1)
+    for day in days:
+        kb.button(text=day, callback_data=f"sg:day:{day_token(day)}")
+    kb.adjust(2)
     kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
     return kb.as_markup()
 
 
-def registration_role_keyboard(game_type: str, *, can_play: bool, can_staff: bool) -> InlineKeyboardMarkup:
+def game_types_keyboard(token: str, game_types: list[str]) -> InlineKeyboardMarkup:
+    """Формат игр этого дня. Показывается, только когда их в дне больше одного."""
     kb = InlineKeyboardBuilder()
-    if can_play:
-        kb.button(text=texts.REGISTRATION_ROLES["player"], callback_data=f"sg:role:{game_type}:player")
-    if can_staff:
-        kb.button(text=texts.REGISTRATION_ROLES["staff"], callback_data=f"sg:role:{game_type}:staff")
+    for value in game_types:
+        kb.button(text=texts.GAME_TYPES.get(value, value), callback_data=f"sg:cat:{token}:{value}")
+    kb.button(text=texts.ALL_GAMES_LABEL, callback_data=f"sg:cat:{token}:{texts.ALL_GAMES}")
     kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data="sg:types"))
+    kb.row(InlineKeyboardButton(text=BACK, callback_data="sg:days"))
     return kb.as_markup()
 
 
-def game_days_keyboard(*, game_type: str, role_kind: str, days: list[str], back_to: str) -> InlineKeyboardMarkup:
+def registration_role_keyboard(
+    token: str, game_type: str, *, can_play: bool, can_staff: bool, back_to: str
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for day in days:
-        kb.button(text=day, callback_data=f"sg:day:{game_type}:{role_kind}:{day.replace('.', '')}")
-    kb.adjust(2)
+    if can_play:
+        kb.button(
+            text=texts.REGISTRATION_ROLES["player"],
+            callback_data=f"sg:role:{token}:{game_type}:player",
+        )
+    if can_staff:
+        kb.button(
+            text=texts.REGISTRATION_ROLES["staff"],
+            callback_data=f"sg:role:{token}:{game_type}:staff",
+        )
+    kb.adjust(1)
     kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
     return kb.as_markup()
 
 
-def game_slots_keyboard(*, game_type: str, role_kind: str, games: list[dict], back_to: str) -> InlineKeyboardMarkup:
+def game_slots_keyboard(
+    *, token: str, game_type: str, role_kind: str, games: list[dict], back_to: str
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     for game in games:
         kb.button(
             text=_slot_label(game, role_kind),
-            callback_data=f"sg:game:{game_type}:{role_kind}:{game['id']}",
+            callback_data=f"sg:game:{token}:{game_type}:{role_kind}:{game['id']}",
         )
     kb.adjust(1)
     kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
@@ -194,6 +216,12 @@ def _slot_label(game: dict, role_kind: str) -> str:
         current, limit = int(game.get("hosts", 0)) + int(game.get("judges", 0)), 3
     reserves = int(game.get("reserves", 0))
     type_label = texts.GAME_TYPES.get(game.get("game_type", ""), "")
+    # Своя запись остаётся в списке с галочкой, а не исчезает из него: раньше
+    # строка после нажатия пропадала, и это читалось как «слот куда-то делся»,
+    # а не «место занято мной».
+    if game.get("my_role"):
+        role = texts.ROSTER_ROLES.get(game["my_role"], "")
+        return f"✅ {game['time']} · {type_label} · вы записаны ({role.lower()})"
     # Заполненный стол не прячем и отказом не встречаем: запись на него --
     # это запись в резерв, и человек должен видеть это до нажатия, а не
     # после (см. registration_service.register_for_kind на бэкенде).
@@ -283,7 +311,31 @@ def announcement_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура самого анонса: кнопка ведёт в обычный экран записи, который
     и займёт это сообщение -- ещё одного в чате не появится."""
     kb = InlineKeyboardBuilder()
-    kb.button(text="📝 Записаться", callback_data="sg:types")
+    kb.button(text="📝 Записаться", callback_data="sg:days")
+    return kb.as_markup()
+
+
+# ------------------------------------------------------ модерация в сообщении
+# Решение по заявке и по правке принимается кнопкой под тем самым сообщением,
+# которым бот сообщил о новом событии. Уведомление приходит каждому админу
+# своей копией: решивший увидит итог в своей, остальные -- «уже рассмотрено»
+# при нажатии (бэкенд отвечает 409).
+def moderation_keyboard(kind: str, item_id: int) -> InlineKeyboardMarkup:
+    """kind: 'r' -- заявка на вступление, 'c' -- правка профиля."""
+    kb = InlineKeyboardBuilder()
+    kb.button(
+        text="✅ Подтвердить" if kind == "r" else "✅ Применить",
+        callback_data=f"md:ok:{kind}:{item_id}",
+    )
+    kb.button(text="⛔ Отклонить", callback_data=f"md:no:{kind}:{item_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def moderation_cancel_keyboard(kind: str, item_id: int) -> InlineKeyboardMarkup:
+    """Отмена ввода причины -- возвращает сообщение к двум кнопкам решения."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text=CANCEL, callback_data=f"md:back:{kind}:{item_id}")
     return kb.as_markup()
 
 

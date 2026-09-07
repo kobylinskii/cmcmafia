@@ -35,7 +35,12 @@ from app.ui import (
     open_screen,
     screen_message,
 )
-from app.utils import validate_full_name, validate_nickname
+from app.utils import (
+    NICKNAME_MAX_LENGTH,
+    NICKNAME_MIN_LENGTH,
+    validate_full_name,
+    validate_nickname,
+)
 
 router = Router(name="registration")
 
@@ -51,7 +56,8 @@ STEP_ROLES = (
 )
 STEP_NICKNAME = (
     "Шаг 6 из 6. Придумайте никнейм — он будет виден в составах игр и в рейтинге.\n\n"
-    "От 3 до 32 букв, без цифр и знаков."
+    f"От {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} букв, можно с пробелами, "
+    "без цифр и знаков."
 )
 
 
@@ -192,12 +198,12 @@ async def roles_saved(callback: CallbackQuery, state: FSMContext) -> None:
 async def nickname_received(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
     await consume_input(message)
     nickname = validate_nickname(message.text or "")
-    if not nickname or not (3 <= len(nickname) <= 32):
+    if not nickname:
         await open_screen(
             message,
             state,
-            "Никнейм должен быть от 3 до 32 символов и состоять только из русских "
-            "или латинских букв.\n\n" + STEP_NICKNAME,
+            f"Никнейм — от {NICKNAME_MIN_LENGTH} до {NICKNAME_MAX_LENGTH} символов, "
+            "только русские или латинские буквы и пробелы между ними.\n\n" + STEP_NICKNAME,
             restart_registration_keyboard(),
         )
         return
