@@ -5,18 +5,16 @@ from app import models
 from app.database import get_db
 from app.deps import require_site_admin
 from app.rate_limit import limiter
-from app.schemas.game import GameCreate, GameListItem, GameListOut, GameOut, GameRosterEntry, GameUpdate, ParticipantOut
+from app.schemas.game import GameCreate, GameListItem, GameListOut, GameOut, GameRosterEntry, GameUpdate
 from app.schemas.tournament import (
     AddStageGamesIn,
     TournamentAdminOut,
     TournamentCreate,
-    TournamentRef,
     TournamentStageAdvancesIn,
     TournamentStageAdvancesOut,
     TournamentStageCreate,
     TournamentStageGameOut,
     TournamentStageOut,
-    TournamentStageRef,
     TournamentStageUpdate,
     TournamentStandingOut,
     TournamentUpdate,

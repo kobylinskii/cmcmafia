@@ -14,7 +14,6 @@ from app.schemas.tournament import (
     TournamentDetailOut,
     TournamentListItem,
     TournamentPublic,
-    TournamentRef,
     TournamentStageDetailOut,
     TournamentStagePublicGameOut,
 )
