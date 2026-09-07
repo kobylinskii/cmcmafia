@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app import models, security
 from app.config import get_settings
+from app.textmatch import ci_equals
 from app.services import slug_service
 
 settings = get_settings()
@@ -53,7 +54,7 @@ def create_player(
     _validate_slug(slug)
     if slug_service.is_slug_taken(slug, db):
         raise PlayerValidationError(f"Slug «{slug}» уже занят")
-    if db.query(models.Player).filter(models.Player.nickname.ilike(nickname)).first():
+    if db.query(models.Player).filter(ci_equals(models.Player.nickname, nickname)).first():
         raise PlayerValidationError("Ник уже занят")
 
     player = models.Player(
@@ -83,7 +84,7 @@ def update_player(db: Session, *, player: models.Player, **fields) -> models.Pla
     if "nickname" in fields and fields["nickname"] is not None:
         existing = (
             db.query(models.Player)
-            .filter(models.Player.nickname.ilike(fields["nickname"]), models.Player.id != player.id)
+            .filter(ci_equals(models.Player.nickname, fields["nickname"]), models.Player.id != player.id)
             .first()
         )
         if existing:
@@ -184,9 +185,39 @@ def save_player_photo(db: Session, *, player: models.Player, raw_bytes: bytes) -
             "Не удалось обработать изображение — попробуйте другой файл"
         ) from exc
 
+    previous = player.photo_url
     player.photo_url = f"/media/players/{filename}"
     db.flush()
+    _delete_photo_file(previous)
     return player.photo_url
+
+
+def _delete_photo_file(photo_url: str | None) -> None:
+    """Убрать с диска файл, на который больше никто не ссылается.
+
+    Каждая перезагрузка фото писала новый uuid4().hex.jpg и только
+    перезаписывала photo_url -- прежний файл оставался в волюме навсегда и
+    по-прежнему открывался по прямой ссылке. Волюм рос линейно по числу
+    правок, а не по числу игроков.
+
+    Ошибка удаления не должна ронять уже удавшуюся загрузку: новое фото
+    сохранено и в базе, и на диске -- потерянный старый файл это в худшем
+    случае мусор, а не сломанный профиль.
+    """
+    if not photo_url:
+        return
+    # Ожидаем ровно то, что генерирует save_player_photo. Всё остальное
+    # (внешний URL, путь с сегментами) не трогаем: удалять по строке из базы
+    # можно только там, где эту строку записали мы сами.
+    name = photo_url.removeprefix("/media/players/")
+    if name == photo_url or "/" in name or name in ("", ".", ".."):
+        return
+    try:
+        os.remove(os.path.join(settings.media_root, name))
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logger.warning("Не удалось удалить прежнее фото %s", name, exc_info=True)
 
 
 def set_bot_admin(db: Session, *, player: models.Player, is_admin: bool) -> models.Player:

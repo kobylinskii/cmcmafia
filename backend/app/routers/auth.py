@@ -49,7 +49,15 @@ def login(request: Request, response: Response, data: LoginIn, db: Session = Dep
 
     generic_error = HTTPException(401, "Неверный логин или пароль")
 
-    if player is None or not player.site_password_hash:
+    # is_active снимает player_service.delete_player у игрока со сыгранными
+    # играми (мягкое удаление). Логин у такой учётки оставался рабочим: вход
+    # проходил, кука выписывалась, proxy.ts пускал на /mafia/admin -- и там
+    # админка встречала человека сплошными 401 из get_current_site_user,
+    # который is_active как раз проверяет. Отказываем сразу и тем же текстом.
+    if player is None or not player.site_password_hash or not player.is_active:
+        # Ответ обязан стоить столько же, сколько стоил бы настоящий: без
+        # этого время ответа отличало существующие логины от несуществующих.
+        security.burn_password_time(data.password)
         raise generic_error
 
     if player.locked_until and player.locked_until > datetime.now(timezone.utc):
@@ -73,6 +81,11 @@ def login(request: Request, response: Response, data: LoginIn, db: Session = Dep
 
 
 @router.post("/refresh")
+# Лимит нужен ровно как на /login: ручка декодирует JWT и выписывает три
+# свежие куки на каждый вызов, а до этого была единственной в роутере без
+# всякого ограничения. 30/мин с запасом покрывает обновление сессии раз в
+# 15 минут даже с несколькими открытыми вкладками.
+@limiter.limit("30/minute")
 def refresh(request: Request, response: Response, db: Session = Depends(get_db)) -> dict:
     token = request.cookies.get(REFRESH_COOKIE)
     if not token:
@@ -91,7 +104,19 @@ def refresh(request: Request, response: Response, db: Session = Depends(get_db))
 
 
 @router.post("/logout")
-def logout(response: Response, _: models.Player = Depends(get_current_site_user)) -> dict:
+def logout(response: Response, _: None = Depends(require_csrf)) -> dict:
+    """Выход. Действующей сессии НЕ требует -- ему нужно только стереть куки.
+
+    Раньше здесь висел Depends(get_current_site_user), и через 15 минут
+    простоя (столько живёт access) «Выйти» отдавало 401 ещё до тела
+    обработчика: delete_cookie не выполнялся, refresh_token оставался, а
+    proxy.ts гейтит /mafia/admin именно по нему -- то есть выйти было нельзя
+    ровно тогда, когда это нужнее всего.
+
+    От межсайтового «разлогинь его» по-прежнему защищает CSRF-токен: его кука
+    живёт столько же, сколько refresh, так что пока сессию есть чем чистить,
+    проверка проходит.
+    """
     for cookie in (ACCESS_COOKIE, REFRESH_COOKIE, CSRF_COOKIE):
         response.delete_cookie(cookie, domain=settings.cookie_domain)
     return {"ok": True}

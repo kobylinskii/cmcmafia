@@ -17,7 +17,6 @@ from app.schemas.tournament import (
     TournamentRef,
     TournamentStageDetailOut,
     TournamentStagePublicGameOut,
-    TournamentStandingOut,
 )
 from app import serializers
 from app.services import rating_service, stats_service, tournament_service, visibility
@@ -115,31 +114,6 @@ def list_tournaments(request: Request, db: Session = Depends(get_db)) -> list[To
     ]
 
 
-def _standing_rows_to_out(
-    rows: list, advanced_ids: set[int] | None = None
-) -> list[TournamentStandingOut]:
-    advanced_ids = advanced_ids or set()
-    return [
-        TournamentStandingOut(
-            rank=row.rank,
-            slug=row.player.slug,
-            nickname=row.player.nickname,
-            photo_url=row.player.photo_url,
-            games_count=row.games_count,
-            points_win=row.points_win,
-            points_judge=row.points_judge,
-            lh_points=row.lh_points,
-            ci=row.ci,
-            removals=row.removals,
-            ppk_count=row.ppk_count,
-            zk=row.zk,
-            sk=row.sk,
-            total_score=row.total_score,
-            advanced=row.player.id in advanced_ids,
-        )
-        for row in rows
-    ]
-
 
 @router.get("/tournaments/{slug}", response_model=TournamentDetailOut)
 @limiter.limit("60/minute")
@@ -165,14 +139,14 @@ def get_tournament(request: Request, slug: str, db: Session = Depends(get_db)) -
     return TournamentDetailOut(
         tournament=TournamentPublic.model_validate(tournament),
         games_count=tournament_service.games_count_for(db, tournament_id=tournament.id),
-        standings=_standing_rows_to_out(unstaged),
+        standings=serializers.standing_rows_to_out(unstaged),
         stages=[
             TournamentStageDetailOut(
                 id=stage.id,
                 name=stage.name,
                 order=stage.order,
                 is_final=stage.is_final,
-                standings=_standing_rows_to_out(
+                standings=serializers.standing_rows_to_out(
                     standings_by_stage.get(stage.id, []),
                     advances_by_stage.get(stage.id, set()),
                 ),

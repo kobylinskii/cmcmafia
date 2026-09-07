@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, serializers
 
 # Окно анонса по умолчанию -- ближайшая неделя от момента нажатия, а не
 # календарная: рассылку запускают в произвольный день, и «следующая неделя»
@@ -35,6 +35,7 @@ def upcoming_sessions(db: Session, *, days: int = DEFAULT_WINDOW_DAYS) -> list[m
     start, end = _window(days)
     return (
         db.query(models.Game)
+        .options(*serializers.session_load_options())
         .filter(
             models.Game.status == "scheduled",
             models.Game.game_type != "tournament",

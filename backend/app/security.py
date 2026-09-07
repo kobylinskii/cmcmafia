@@ -31,6 +31,22 @@ def generate_temp_password(length: int = 16) -> str:
     return secrets.token_urlsafe(length)
 
 
+# Хеш заведомо недостижимого пароля: считается один раз на старте и служит
+# только для выравнивания времени ответа (см. burn_password_time).
+_DUMMY_HASH = _hasher.hash(secrets.token_urlsafe(32))
+
+
+def burn_password_time(raw: str) -> None:
+    """Потратить столько же времени, сколько стоила бы проверка пароля.
+
+    Логин при неизвестном username возвращался мгновенно, а при известном --
+    после argon2, то есть на порядок медленнее. Разница во времени ответа
+    выдавала существующие учётки, и лимит 5/мин её не закрывал: он ограничивает
+    подбор ПАРОЛЯ, а перебор ЛОГИНОВ по таймингу шёл мимо него.
+    """
+    verify_password(raw, _DUMMY_HASH)
+
+
 def _create_token(subject: str, ttl_seconds: int, token_type: str, extra: dict | None = None) -> str:
     now = datetime.now(timezone.utc)
     payload = {

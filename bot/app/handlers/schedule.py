@@ -206,6 +206,10 @@ async def register_for_game(callback: CallbackQuery, state: FSMContext, api: Api
         await callback.answer(result["message"], show_alert=True)
         return
 
+    # Запись в штаб могла освободить место за столом и поднять первого из
+    # очереди -- ему надо написать так же, как при отмене чужой записи.
+    await _notify_promoted(callback, game["id"], result)
+
     await _show_slots(callback, state, api, game_type=game_type, role_kind=role_kind, day=day)
     if result.get("is_reserve"):
         # Отдельного экрана «мест нет» больше нет: стол на десять человек
@@ -301,6 +305,27 @@ async def view_registration(callback: CallbackQuery, state: FSMContext, api: Api
     )
 
 
+async def _notify_promoted(callback: CallbackQuery, game_id: int, result: dict) -> None:
+    """Написать тому, кого подняли из резерва освободившимся местом.
+
+    Мест освобождается два разных способа: отмена записи и уход игрока из-за
+    стола в штаб. Оба возвращают одни и те же promoted_*-поля, и сообщение у
+    них одно -- человеку всё равно, из-за чего освободилось место.
+    """
+    promoted = result.get("promoted_telegram_id")
+    if not promoted:
+        return
+    try:
+        await callback.bot.send_message(
+            promoted,
+            f"🎉 В игре #{game_id} освободилось место — вы переведены из резерва в основной состав!",
+        )
+    except Exception:
+        # Человек мог заблокировать бота: своё место он всё равно получил,
+        # ронять из-за этого чужое действие нельзя.
+        logger.warning("Не удалось уведомить %s о переводе из резерва", promoted)
+
+
 def _roster_text(game: dict, roster: dict) -> str:
     by_role: dict[str, list[dict]] = {"host": [], "judge": [], "player": []}
     for row in roster["registrations"]:
@@ -342,17 +367,7 @@ async def cancel_registration(callback: CallbackQuery, state: FSMContext, api: A
         await callback.answer("Вы не записаны на эту игру.", show_alert=True)
         return
 
-    promoted = result.get("promoted_telegram_id")
-    if promoted:
-        try:
-            await callback.bot.send_message(
-                promoted,
-                f"🎉 В игре #{game_id} освободилось место — вы переведены из резерва в основной состав!",
-            )
-        except Exception:
-            # Человек мог заблокировать бота: своё место он всё равно получил,
-            # ронять из-за этого отмену чужой записи нельзя.
-            logger.warning("Не удалось уведомить %s о переводе из резерва", promoted)
+    await _notify_promoted(callback, game_id, result)
 
     items = await _my_items(api, callback.from_user.id, "active")
     await edit_screen(

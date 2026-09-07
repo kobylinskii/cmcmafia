@@ -237,7 +237,10 @@ def create_tournament(request: Request, data: TournamentCreate, db: Session = De
 @router.get("/tournaments/slug-suggestion")
 @limiter.limit("30/minute")
 def suggest_tournament_slug(request: Request, name: str, db: Session = Depends(get_db)) -> dict:
-    return {"slug": slug_service.suggest_slug(name, db)}
+    # scope='tournament': свободным slug должен быть среди ТУРНИРОВ, а не
+    # среди игроков -- это разные пространства имён (/mafia/tournaments/[slug]
+    # против /mafia/[slug]). См. slug_service.suggest_slug.
+    return {"slug": slug_service.suggest_slug(name, db, scope="tournament")}
 
 
 @router.get("/tournaments/{tournament_id}", response_model=TournamentAdminOut)
@@ -339,29 +342,6 @@ def _stage_to_out(stage: models.TournamentStage, games_count: int = 0) -> Tourna
         is_final=stage.is_final, games_count=games_count,
     )
 
-
-def _standing_rows_to_out(rows: list, advanced_ids: set[int] | None = None) -> list[TournamentStandingOut]:
-    advanced_ids = advanced_ids or set()
-    return [
-        TournamentStandingOut(
-            rank=row.rank,
-            slug=row.player.slug,
-            nickname=row.player.nickname,
-            photo_url=row.player.photo_url,
-            games_count=row.games_count,
-            points_win=row.points_win,
-            points_judge=row.points_judge,
-            lh_points=row.lh_points,
-            ci=row.ci,
-            removals=row.removals,
-            ppk_count=row.ppk_count,
-            zk=row.zk,
-            sk=row.sk,
-            total_score=row.total_score,
-            advanced=row.player.id in advanced_ids,
-        )
-        for row in rows
-    ]
 
 
 @router.get("/tournaments/{tournament_id}/stages", response_model=list[TournamentStageOut])
@@ -486,7 +466,7 @@ def get_stage_standings(
     stage = _get_stage_or_404(db, tournament_id, stage_id)
     rows = stats_service.tournament_standings(db, tournament_id=tournament_id, stage_id=stage.id)
     advanced_ids = tournament_service.get_stage_advances(db, stage_id=stage.id)
-    return _standing_rows_to_out(rows, advanced_ids)
+    return serializers.standing_rows_to_out(rows, advanced_ids)
 
 
 @router.put("/tournaments/{tournament_id}/stages/{stage_id}/advances", response_model=TournamentStageAdvancesOut)
@@ -507,7 +487,6 @@ def set_stage_advances(
     tournament_service.set_stage_advances(db, stage_id=stage.id, player_ids=valid_ids)
     db.commit()
     return TournamentStageAdvancesOut(player_ids=sorted(valid_ids))
-    return {"ok": True}
 
 
 @router.get("/players", response_model=list[PlayerAdminOut])

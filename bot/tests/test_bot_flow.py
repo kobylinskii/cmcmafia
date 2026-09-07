@@ -127,6 +127,9 @@ class FakeApi:
         self.profile: dict | None = None
         self.registered: list[tuple[int, str]] = []
         self.reserve_next = False
+        # Кого бэкенд поднял из резерва этой записью. Не None только тогда,
+        # когда запись в штаб освободила место за столом.
+        self.promote_on_register: int | None = None
         self.broadcast_recipients: list[int] = []
         self.broadcast_audience: list[int] = []
         soon = datetime.now(LOCAL_TZ) + timedelta(days=1)
@@ -203,8 +206,10 @@ class FakeApi:
             "ok": True,
             "message": "Вы успешно записаны",
             "reason": None,
-            "role": role_kind,
+            "role": "host" if role_kind == "staff" else role_kind,
             "is_reserve": False,
+            "promoted_telegram_id": self.promote_on_register,
+            "promoted_nickname": "Резервист" if self.promote_on_register else None,
         }
 
     async def my_registrations(self, tg_id: int) -> list[dict]:
@@ -638,3 +643,54 @@ async def test_weekly_announcement_goes_only_to_those_without_a_registration(sta
     # В каждом сообщении -- кнопка записи, ведущая в обычный экран выбора.
     assert all(c.reply_markup.inline_keyboard[0][0].callback_data == "sg:types" for c in sent)
     assert "Доставлено: 2" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_switching_to_staff_notifies_the_promoted_player(stack):
+    """Уход из-за стола в штаб освобождает место, и поднятому из резерва
+    приходит то же сообщение, что и при отмене чужой записи.
+
+    Раньше промоушен был только у отмены: запись в штаб оставляла стол
+    неполным при непустой очереди, и писать было некому.
+    """
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.promote_on_register = 555001
+
+    day_token = api._day.replace(".", "")
+    await dp.feed_update(bot, _callback("sg:types"))
+    await dp.feed_update(bot, _callback("sg:type:funky"))
+    await dp.feed_update(bot, _callback(f"sg:day:funky:staff:{day_token}"))
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("sg:game:funky:staff:7"))
+    assert api.registered == [(7, "staff")]
+
+    promo = [
+        call
+        for call in bot.calls
+        if isinstance(call, SendMessage) and call.chat_id == 555001
+    ]
+    assert promo, "поднятому из резерва никто не написал"
+    assert "освободилось место" in promo[0].text
+    assert "#7" in promo[0].text
+
+
+@pytest.mark.asyncio
+async def test_plain_registration_notifies_nobody(stack):
+    """Обычная запись за стол ничьё место не освобождает -- лишних сообщений
+    в чужие чаты быть не должно."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+
+    day_token = api._day.replace(".", "")
+    await dp.feed_update(bot, _callback("sg:types"))
+    await dp.feed_update(bot, _callback("sg:type:funky"))
+    await dp.feed_update(bot, _callback(f"sg:day:funky:player:{day_token}"))
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("sg:game:funky:player:7"))
+    assert api.registered == [(7, "player")]
+    assert not [
+        call for call in bot.calls if isinstance(call, SendMessage) and call.chat_id != CHAT_ID
+    ]

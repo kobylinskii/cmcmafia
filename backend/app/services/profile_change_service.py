@@ -22,6 +22,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session, joinedload
 
 from app import models
+from app.textmatch import ci_equals
 
 STATUS_PENDING = models.ProfileChangeStatus.pending.value
 STATUS_APPLIED = models.ProfileChangeStatus.applied.value
@@ -109,7 +110,7 @@ def submit(
 def _ensure_nickname_free(db: Session, *, player: models.Player, nickname: str) -> None:
     taken = (
         db.query(models.Player)
-        .filter(models.Player.nickname.ilike(nickname), models.Player.id != player.id)
+        .filter(ci_equals(models.Player.nickname, nickname), models.Player.id != player.id)
         .first()
     )
     if taken is not None:

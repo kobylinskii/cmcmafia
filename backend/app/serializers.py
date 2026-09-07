@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from sqlalchemy.orm import selectinload
+
 from app import models
 from app.schemas.bot import RosterMemberOut, RosterOut, ReserveMemberOut, SessionOut
 from app.schemas.game import GameOut, GameRosterEntry, ParticipantOut
-from app.schemas.tournament import TournamentRef, TournamentStageRef
+from app.schemas.tournament import TournamentRef, TournamentStageRef, TournamentStandingOut
 
 
 def is_session_open(game: models.Game) -> bool:
@@ -20,6 +22,21 @@ def is_session_open(game: models.Game) -> bool:
     now = datetime.now(timezone.utc)
     deadline = game.registration_until or game.starts_at
     return deadline >= now and game.starts_at >= now
+
+
+def session_load_options():
+    """Что догрузить к играм, чтобы session_to_out/roster_to_out не ходили в БД.
+
+    session_to_out считает роли по game.registrations и длину game.reserves,
+    roster_to_out раскрывает ещё и самих игроков. На ленивых связях список из
+    восьми слотов стоил 1 запрос за играми плюс 16 догрузок, и так на каждом
+    открытии дня в расписании, экрана записи в боте и очереди подтверждений.
+    Разворачивать эти списки надо ровно везде, где сериализуется НЕ одна игра.
+    """
+    return (
+        selectinload(models.Game.registrations).selectinload(models.Registration.player),
+        selectinload(models.Game.reserves).selectinload(models.Reserve.player),
+    )
 
 
 def session_to_out(game: models.Game) -> SessionOut:
@@ -104,3 +121,37 @@ def game_to_out(game: models.Game, *, roster: list[GameRosterEntry] | None = Non
         ],
         roster=roster or [],
     )
+
+
+def standing_rows_to_out(
+    rows: list, advanced_ids: set[int] | None = None
+) -> list[TournamentStandingOut]:
+    """Строки турнирной таблицы -> ответ API.
+
+    Одна функция на обе стороны: публичная страница турнира и панель админки
+    показывают ОДНУ И ТУ ЖЕ таблицу, разница только в том, что админке нужны
+    ещё отметки прохода. Раньше это были две одинаковые функции в
+    routers/public.py и routers/admin.py -- ровно та конструкция, на которой
+    уже разъехался participant_to_out (см. комментарий к нему выше).
+    """
+    advanced_ids = advanced_ids or set()
+    return [
+        TournamentStandingOut(
+            rank=row.rank,
+            slug=row.player.slug,
+            nickname=row.player.nickname,
+            photo_url=row.player.photo_url,
+            games_count=row.games_count,
+            points_win=row.points_win,
+            points_judge=row.points_judge,
+            lh_points=row.lh_points,
+            ci=row.ci,
+            removals=row.removals,
+            ppk_count=row.ppk_count,
+            zk=row.zk,
+            sk=row.sk,
+            total_score=row.total_score,
+            advanced=row.player.id in advanced_ids,
+        )
+        for row in rows
+    ]

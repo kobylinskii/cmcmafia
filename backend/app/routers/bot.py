@@ -5,6 +5,7 @@ from app import models
 from app.database import get_db
 from app.deps import get_bot_actor, require_bot_service
 from app.rate_limit import limiter
+from app.textmatch import ci_equals
 from app.serializers import is_session_open, roster_to_out, session_to_out
 from app.timeutil import club_day
 from app.schemas.bot import (
@@ -69,7 +70,7 @@ def register_player(
 ) -> BotPlayerProfileOut:
     if db.query(models.Player).filter(models.Player.telegram_id == data.telegram_id).first():
         raise HTTPException(409, "Этот Telegram-аккаунт уже зарегистрирован")
-    if db.query(models.Player).filter(models.Player.nickname.ilike(data.nickname)).first():
+    if db.query(models.Player).filter(ci_equals(models.Player.nickname, data.nickname)).first():
         raise HTTPException(409, "Ник уже занят")
     # players.phone UNIQUE: без явной проверки повторный номер долетал до
     # констрейнта и возвращал 500 вместо понятного отказа. Случай не
@@ -151,7 +152,7 @@ def update_my_profile(
     применяются немедленно -- варианты в них задаёт сам бот.
     """
     if data.nickname and data.nickname.lower() != actor.nickname.lower():
-        if db.query(models.Player).filter(models.Player.nickname.ilike(data.nickname)).first():
+        if db.query(models.Player).filter(ci_equals(models.Player.nickname, data.nickname)).first():
             raise HTTPException(409, "Ник уже занят")
 
     # exclude_unset отличает «поле не прислали» от «прислали null»: второе --
@@ -347,6 +348,17 @@ def register_for_session(
             role=result.role,
             is_reserve=True,
             reserve_position=result.position,
+        )
+    # Уход за стол -> в штаб освобождает место игрока, и очередь сдвигается
+    # прямо здесь. Боту нужно кому написать -- те же поля, что и у отмены.
+    if result.promoted is not None:
+        db.refresh(result.promoted)
+        return RegistrationOut(
+            ok=True,
+            message="Вы успешно записаны",
+            role=result.role,
+            promoted_telegram_id=result.promoted.telegram_id,
+            promoted_nickname=result.promoted.nickname,
         )
     return RegistrationOut(ok=True, message="Вы успешно записаны", role=result.role)
 

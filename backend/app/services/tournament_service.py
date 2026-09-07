@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app import models
 from app.services import slug_service
+from app.textmatch import ci_equals
 
 
 class TournamentValidationError(Exception):
@@ -39,7 +40,7 @@ def _ensure_unique(db: Session, *, slug: str | None, name: str | None, exclude_i
         if query.first():
             raise TournamentValidationError(f"Slug «{slug}» уже занят другим турниром")
     if name is not None:
-        query = db.query(models.Tournament).filter(models.Tournament.name.ilike(name))
+        query = db.query(models.Tournament).filter(ci_equals(models.Tournament.name, name))
         if exclude_id is not None:
             query = query.filter(models.Tournament.id != exclude_id)
         if query.first():
@@ -231,7 +232,7 @@ def create_stage(
 ) -> models.TournamentStage:
     existing = (
         db.query(models.TournamentStage)
-        .filter(models.TournamentStage.tournament_id == tournament_id, models.TournamentStage.name.ilike(name))
+        .filter(models.TournamentStage.tournament_id == tournament_id, ci_equals(models.TournamentStage.name, name))
         .first()
     )
     if existing:
@@ -299,7 +300,7 @@ def update_stage(db: Session, *, stage: models.TournamentStage, **fields) -> mod
             db.query(models.TournamentStage)
             .filter(
                 models.TournamentStage.tournament_id == stage.tournament_id,
-                models.TournamentStage.name.ilike(new_name),
+                ci_equals(models.TournamentStage.name, new_name),
                 models.TournamentStage.id != stage.id,
             )
             .first()

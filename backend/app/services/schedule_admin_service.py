@@ -12,8 +12,9 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, serializers
 from app.services.game_service import UNCONFIRMED_STATUSES
+from app.textmatch import ci_equals
 from app.timeutil import CLUB_TZ
 
 # Сколько слотов максимум создаётся одним нажатием. Ограничение то же, что
@@ -176,6 +177,7 @@ def games_by_day(db: Session, *, day: str) -> list[models.Game]:
     start, end = _club_day_bounds(day)
     return (
         db.query(models.Game)
+        .options(*serializers.session_load_options())
         .filter(
             models.Game.starts_at >= start,
             models.Game.starts_at < end,
@@ -204,7 +206,7 @@ def find_player_by_username(db: Session, username: str) -> models.Player | None:
     clean = username.strip().lstrip("@")
     if not clean:
         return None
-    return db.query(models.Player).filter(models.Player.telegram_username.ilike(clean)).one_or_none()
+    return db.query(models.Player).filter(ci_equals(models.Player.telegram_username, clean)).one_or_none()
 
 
 def find_player_by_phone(db: Session, phone: str) -> models.Player | None:

@@ -7,6 +7,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app import models
+from app.textmatch import ci_equals
 
 
 def grant_bot_admin(db: Session, *, telegram_id: int | None, username: str | None) -> dict:
@@ -19,7 +20,7 @@ def grant_bot_admin(db: Session, *, telegram_id: int | None, username: str | Non
     elif username:
         clean = username.strip().lstrip("@")
         player = (
-            db.query(models.Player).filter(models.Player.telegram_username.ilike(clean)).one_or_none()
+            db.query(models.Player).filter(ci_equals(models.Player.telegram_username, clean)).one_or_none()
         )
 
     if player is not None:

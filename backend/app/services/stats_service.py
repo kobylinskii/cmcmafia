@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app import models
 from app.services import rating_service, visibility
+from app.textmatch import ci_contains
 from app.timeutil import CLUB_TZ
 
 # ЛХ хранится в game_participants.lh как ПОПАДАНИЯ («сколько из трёх названных
@@ -216,8 +217,7 @@ def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: 
         .filter(*visibility.public_player_criteria(), models.PlayerRating.games_count > 0)
     )
     if q:
-        like = f"%{q.strip()}%"
-        query = query.filter(models.Player.nickname.ilike(like))
+        query = query.filter(ci_contains(models.Player.nickname, q.strip()))
 
     total = query.count()
     # Player.id -- уникальный тай-брейкер. Без него порядок строк с одинаковым

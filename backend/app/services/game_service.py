@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, serializers
 from app.services import rating_service
 
 
@@ -90,7 +91,9 @@ def _validate_participants(participants: list[ParticipantInput]) -> None:
         raise GameValidationError("ЛХ заполняется только у первоубиенного")
 
 
-def _validate_ppk(participants: list[ParticipantInput], result: str) -> None:
+def _validate_ppk(
+    participants: Sequence[ParticipantInput | models.GameParticipant], result: str
+) -> None:
     """ППК -- поражение по причине нарушения: победа присуждается команде
     соперников, а нарушитель остаётся без дополнительных баллов и получает
     штраф (stats_service.SCORE_PENALTY_PPK).
@@ -98,6 +101,10 @@ def _validate_ppk(participants: list[ParticipantInput], result: str) -> None:
     Проверяется здесь, а не только в форме: правило меняет ИСХОД игры, а от
     исхода зависит и рейтинг Эло, и победы в статистике каждого участника.
     Разъехавшийся исход тихо испортил бы и то, и другое.
+
+    Принимает и присланный состав, и уже сохранённый: при смене одного лишь
+    исхода нового состава нет, а проверить правило всё равно нужно -- поля
+    ppk/role/points_judge/lh у обеих сторон называются одинаково.
     """
     offenders = [p for p in participants if p.ppk]
     if not offenders:
@@ -361,6 +368,11 @@ def update_rated_game(
     elif result is not None:
         if result not in {"city_win", "mafia_win", "draw"}:
             raise GameValidationError("Недопустимый исход игры")
+        # Тот же _validate_ppk, что и выше, но по УЖЕ СОХРАНЁННОМУ составу.
+        # Без него правило обходилось одним PUT {"result": ...} без
+        # participants: игра с ППК дона переписывалась на победу мафии, и
+        # recompute_all начислял победу самому нарушителю и его команде.
+        _validate_ppk(game.participants, result)
         game.result = result
 
     db.flush()
@@ -504,6 +516,7 @@ def sessions_awaiting_confirmation(db: Session) -> list[models.Game]:
     """
     return (
         db.query(models.Game)
+        .options(*serializers.session_load_options())
         .filter(models.Game.status.in_(UNCONFIRMED_STATUSES))
         .filter(models.Game.needs_rating.is_(True))
         .filter(models.Game.starts_at < datetime.now(timezone.utc))

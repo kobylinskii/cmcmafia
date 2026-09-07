@@ -76,7 +76,7 @@ def preferred_roles_keyboard(prefix: str, *, can_play: bool, can_staff: bool) ->
     kb = InlineKeyboardBuilder()
     kb.button(text=f"{_mark(can_play)} Игрок", callback_data=f"{prefix}:toggle:player")
     kb.button(text=f"{_mark(can_staff)} Ведущий/судья", callback_data=f"{prefix}:toggle:staff")
-    kb.button(text="Готово ✅", callback_data=f"{prefix}:save")
+    kb.button(text="Готово", callback_data=f"{prefix}:save")
     kb.adjust(1)
     return kb.as_markup()
 

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, serializers
 
 HOST_LIMIT = 1
 JUDGE_LIMIT = 2
@@ -35,6 +35,10 @@ class JoinResult:
     role: str
     reserved: bool
     position: int | None = None
+    # Кого подняли из резерва этой же записью. Заполняется только при уходе
+    # из-за стола в штаб: место игрока освобождается, и очередь обязана
+    # сдвинуться так же, как при отмене (см. register_for_kind).
+    promoted: "models.Player | None" = None
 
 
 def _role_count(db: Session, game_id: int, role: str) -> int:
@@ -58,7 +62,7 @@ def is_role_kind_full(db: Session, game: models.Game, role_kind: str) -> bool:
 
 
 def list_open_sessions(db: Session, *, game_type: str | None = None, exclude_player_id: int | None = None):
-    query = db.query(models.Game).filter(
+    query = db.query(models.Game).options(*serializers.session_load_options()).filter(
         models.Game.status == "scheduled",
         models.Game.starts_at >= datetime.now(timezone.utc),
         # Турнирные слоты этапа тоже лежат в статусе 'scheduled' (плейсхолдер
@@ -157,11 +161,29 @@ def register_for_kind(db: Session, *, game: models.Game, player: models.Player, 
         return JoinResult(role=reg.role, reserved=False)
     if role_kind != "staff":
         raise RegistrationError("Неизвестный тип роли")
+
+    # Уход из-за стола в штаб освобождает место игрока ровно так же, как
+    # отмена записи -- разница только в том, что человек остаётся в игре.
+    # Промоушен жил лишь в unregister(), и эта дорога его миновала: стол
+    # оставался неполным, а очередь резерва стояла при свободном месте.
+    freed_player_seat = (
+        db.query(models.Registration)
+        .filter(
+            models.Registration.game_id == game.id,
+            models.Registration.player_id == player.id,
+            models.Registration.role == "player",
+        )
+        .first()
+        is not None
+    )
+
     if _role_count(db, game.id, "host") < HOST_LIMIT:
         reg = register(db, game=game, player=player, role="host")
     else:
         reg = register(db, game=game, player=player, role="judge")
-    return JoinResult(role=reg.role, reserved=False)
+
+    promoted = promote_next_reserve(db, game_id=game.id) if freed_player_seat else None
+    return JoinResult(role=reg.role, reserved=False, promoted=promoted)
 
 
 def reserve_position(db: Session, *, game_id: int) -> int:
@@ -240,7 +262,13 @@ def promote_next_reserve(db: Session, *, game_id: int) -> models.Player | None:
     next_reserve = (
         db.query(models.Reserve)
         .filter(models.Reserve.game_id == game_id)
-        .order_by(models.Reserve.created_at.asc())
+        # id -- тай-брейкер, а не украшение: created_at заполняется
+        # server_default=func.now(), а это в Postgres время НАЧАЛА транзакции,
+        # одинаковое у всех строк одной транзакции. Без второго ключа порядок
+        # очереди при совпадении меток определял планировщик, и поднятым мог
+        # оказаться не тот, кому бот показал «вы в резерве, №1». Тот же приём
+        # уже применён в нумерации игр и в рейтинговой таблице.
+        .order_by(models.Reserve.created_at.asc(), models.Reserve.id.asc())
         .with_for_update(skip_locked=True)
         .first()
     )
