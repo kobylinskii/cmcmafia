@@ -127,21 +127,14 @@ class FakeApi:
         self.profile: dict | None = None
         self.registered: list[tuple[int, str]] = []
         self.reserve_next = False
-        self.played: list[int] = []
-        self.deleted: list[int] = []
-        self.created: list[dict] = []
         self.broadcast_recipients: list[int] = []
+        self.broadcast_audience: list[int] = []
         soon = datetime.now(LOCAL_TZ) + timedelta(days=1)
         self.session = _session(7, soon.replace(hour=18, minute=0, second=0, microsecond=0))
-        # Вчерашняя игра: её проведение админ ещё не подтверждал.
-        past = datetime.now(LOCAL_TZ) - timedelta(days=1)
-        self.past_session = _session(
-            8, past.replace(hour=18, minute=0, second=0, microsecond=0), is_open=False, players=10
-        )
 
     @property
     def sessions(self) -> dict[int, dict]:
-        return {self.session["id"]: self.session, self.past_session["id"]: self.past_session}
+        return {self.session["id"]: self.session}
 
     @property
     def _day(self) -> str:
@@ -236,41 +229,20 @@ class FakeApi:
         return {"ok": True, "message": "Запись отменена", "promoted_telegram_id": None}
 
     # ---- админские ручки
-    async def admin_sessions_awaiting_confirmation(self, tg_id: int) -> list[dict]:
-        return [self.past_session] if self.past_session["id"] not in self.played else []
-
-    async def admin_mark_session_played(self, tg_id: int, session_id: int) -> dict:
-        self.played.append(session_id)
-        self.sessions[session_id]["status"] = "played"
-        return self.sessions[session_id]
-
-    async def admin_delete_session(self, tg_id: int, session_id: int) -> bool:
-        self.deleted.append(session_id)
-        return True
-
-    async def admin_recent_locations(self, tg_id: int) -> list[str]:
-        return ["ВМК МГУ, ауд. 685"]
-
-    async def admin_check_conflicts(self, tg_id: int, starts: list[str]) -> list[str]:
-        return []
-
-    async def admin_create_sessions_bulk(
-        self, tg_id: int, starts: list[str], location: str, game_type: str
-    ) -> list[int]:
-        self.created.append({"starts": starts, "location": location, "game_type": game_type})
-        return list(range(100, 100 + len(starts)))
-
-    async def admin_day_cards(self, tg_id: int) -> list[dict]:
-        return [{"day": self._day, "types": ["funky"]}]
-
-    async def admin_sessions_by_day(self, tg_id: int, day: str) -> list[dict]:
-        return [self.session]
-
     async def admin_weekly_broadcast(self, tg_id: int, days: int = 7) -> dict:
         return {
             "days": days,
             "games": [self.session],
             "recipients": [{"telegram_id": tg, "nickname": f"И{tg}"} for tg in self.broadcast_recipients],
+        }
+
+    async def admin_broadcast_audience(self, tg_id: int) -> dict:
+        """Аудитория произвольного сообщения шире, чем у анонса: записавшихся
+        она не вычитает."""
+        return {
+            "recipients": [
+                {"telegram_id": tg, "nickname": f"И{tg}"} for tg in self.broadcast_audience
+            ]
         }
 
 
@@ -566,90 +538,82 @@ async def test_admin_menu_is_hidden_from_ordinary_players(stack):
     api.profile["is_bot_admin"] = True
     await dp.feed_update(bot, _message("/admin"))
     assert "Админ-меню" in bot.last_text
-    assert set(bot.last_inline()) == {
-        "am:create", "am:days", "am:toconfirm", "am:cast", "am:admins", "mn:menu"
-    }
+    # Планировщик уехал на сайт: в боте остались только права и две рассылки.
+    assert set(bot.last_inline()) == {"am:admins", "am:cast", "am:say", "mn:menu"}
 
 
 @pytest.mark.asyncio
-async def test_game_day_is_created_without_typing_a_single_date(stack):
-    """День, часы и место выбираются кнопками. Руками админ набирал «06.09.2026»
-    и «15:00-17:00», и каждая опечатка стоила ещё пары сообщений в чате."""
+async def test_old_scheduler_buttons_say_where_the_planner_went(stack):
+    """У админов в чате висят экраны, созданные до переезда. Нажатие на такую
+    кнопку раньше просто крутило часики -- теперь оно объясняет, куда идти."""
     dp, bot, api = stack
     await _register(dp, bot)
     api.profile["is_bot_admin"] = True
 
     await dp.feed_update(bot, _message("/admin"))
-    await dp.feed_update(bot, _callback("am:create"))
-    await dp.feed_update(bot, _callback("am:newtype:funky"))
-    assert "Выберите день" in bot.last_text
-    assert any(data.startswith("am:date:") for data in bot.last_inline())
-
-    await dp.feed_update(bot, _callback("am:date:26082026"))
-    assert "Во сколько начинается" in bot.last_text
-
-    await dp.feed_update(bot, _callback("am:from:18"))
-    assert "am:to:19" in bot.last_inline()
-    assert "am:to:18" not in bot.last_inline(), "конец не может совпадать с началом"
-
-    await dp.feed_update(bot, _callback("am:to:21"))
-    assert "Где играем" in bot.last_text
-    assert bot.last_inline()[:2] == ["am:loc:0", "am:locnew"]
-
-    await dp.feed_update(bot, _callback("am:loc:0"))
-    assert api.created == [
-        {
-            "starts": ["26.08.2026 18:00", "26.08.2026 19:00", "26.08.2026 20:00"],
-            "location": "ВМК МГУ, ауд. 685",
-            "game_type": "funky",
-        }
-    ]
-    assert "Создано игр: 3" in bot.last_text
+    for stale in ("am:create", "am:days", "am:toconfirm", "am:date:26082026", "am:played:8"):
+        await dp.feed_update(bot, _callback(stale))
+        assert "Расписание игр теперь ведётся на сайте" in bot.last_text
+        assert set(bot.last_inline()) == {"am:admins", "am:cast", "am:say", "mn:menu"}
 
 
 @pytest.mark.asyncio
-async def test_past_game_reaches_review_only_after_the_admin_confirms_it(stack):
+async def test_free_text_broadcast_asks_for_confirmation_before_sending(stack):
+    """Опечатку в сообщении всему клубу не отозвать, поэтому между вводом и
+    отправкой стоит предпросмотр с числом получателей."""
     dp, bot, api = stack
     await _register(dp, bot)
     api.profile["is_bot_admin"] = True
+    api.broadcast_audience = [111, 222, 333]
 
     await dp.feed_update(bot, _message("/admin"))
-    assert "Подтвердить проведение (1)" in "".join(
-        b.text for c in bot.calls
-        for markup in [getattr(c, "reply_markup", None)] if isinstance(markup, InlineKeyboardMarkup)
-        for row in markup.inline_keyboard for b in row
-    )
+    await dp.feed_update(bot, _callback("am:say"))
+    assert "Что разослать?" in bot.last_text
 
-    await dp.feed_update(bot, _callback("am:toconfirm"))
-    assert "am:confirm:8" in bot.last_inline()
+    await dp.feed_update(bot, _message("Сегодня играем в 685-й аудитории"))
+    assert "Получателей: 3" in bot.last_text
+    assert "Сегодня играем в 685-й аудитории" in bot.last_text
+    assert set(bot.last_inline()) == {"am:saygo", "am:say", "am:menu"}
 
-    await dp.feed_update(bot, _callback("am:confirm:8"))
-    assert "подтвердите, состоялась ли она" in bot.last_text
-    assert "am:played:8" in bot.last_inline()
-    assert "am:notheld:8" in bot.last_inline()
-
-    await dp.feed_update(bot, _callback("am:played:8"))
-    assert api.played == [8]
-    assert "Все прошедшие игры подтверждены" in bot.last_text
+    bot.reset()
+    await dp.feed_update(bot, _callback("am:saygo"))
+    sent = [c for c in bot.calls if isinstance(c, SendMessage)]
+    assert [c.chat_id for c in sent] == [111, 222, 333]
+    assert all(c.text == "Сегодня играем в 685-й аудитории" for c in sent)
+    # Под объявлением кнопки нет: это не анонс, записываться некуда.
+    assert all(c.reply_markup is None for c in sent)
+    assert "Доставлено: 3" in bot.last_text
 
 
 @pytest.mark.asyncio
-async def test_game_that_did_not_happen_is_deleted_with_a_confirmation(stack):
+async def test_broadcast_text_is_forgotten_after_it_is_sent(stack):
+    """Повторное «Разослать» из старого экрана не должно уйти клубу дважды."""
     dp, bot, api = stack
     await _register(dp, bot)
     api.profile["is_bot_admin"] = True
+    api.broadcast_audience = [111]
 
-    await dp.feed_update(bot, _message("/admin"))
-    await dp.feed_update(bot, _callback("am:toconfirm"))
-    await dp.feed_update(bot, _callback("am:confirm:8"))
+    await dp.feed_update(bot, _callback("am:say"))
+    await dp.feed_update(bot, _message("Перенос на час позже"))
+    await dp.feed_update(bot, _callback("am:saygo"))
 
-    await dp.feed_update(bot, _callback("am:notheld:8"))
-    assert "не состоялась?" in bot.last_text
-    assert api.deleted == [], "удаление только после подтверждения"
+    bot.reset()
+    await dp.feed_update(bot, _callback("am:saygo"))
+    assert [c for c in bot.calls if isinstance(c, SendMessage)] == []
+    assert "наберите его заново" in bot.last_text
 
-    await dp.feed_update(bot, _callback("am:notheldok:8"))
-    assert api.deleted == [8]
-    assert api.played == []
+
+@pytest.mark.asyncio
+async def test_overlong_broadcast_is_rejected_before_the_first_message(stack):
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["is_bot_admin"] = True
+    api.broadcast_audience = [111]
+
+    await dp.feed_update(bot, _callback("am:say"))
+    await dp.feed_update(bot, _message("я" * 5000))
+    assert "Слишком длинно" in bot.last_text
+    assert "am:saygo" not in bot.last_inline()
 
 
 @pytest.mark.asyncio

@@ -53,6 +53,19 @@ _SCORE_SQL = (
 # это компенсация, а не заработанный игроком дополнительный балл.
 _BONUS_SQL = models.GameParticipant.points_judge + _LH_POINTS_SQL
 
+def _score(value) -> float:
+    """Numeric из БД -> float для JSON, округлённый до сотых.
+
+    _SCORE_SQL складывает NUMERIC-колонки с питоновскими литералами штрафов
+    (0.5, 2.5, 1.0 в _LH_POINTS_SQL) -- Postgres приводит такое выражение к
+    double precision, и сумма по турниру приезжает как 2.7999999999999998.
+    Шкала баллов -- четверти балла, дальше сотых значащих цифр нет, так что
+    округление здесь ничего не теряет и убирает мусорный хвост сразу во всех
+    клиентах (сайт, админка, бот), а не в одной вёрстке.
+    """
+    return round(float(value), 2)
+
+
 BLACK_ROLES = ("mafia", "don")
 RED_ROLES = ("citizen", "sheriff")
 
@@ -228,7 +241,7 @@ def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: 
                 rating=float(rating.rating),
                 games_count=games_count,
                 win_rate=win_rate,
-                avg_bonus=float(avg_bonus) if avg_bonus is not None else None,
+                avg_bonus=_score(avg_bonus) if avg_bonus is not None else None,
             )
         )
     return result, total
@@ -305,15 +318,15 @@ def tournament_standings(
             player=players[r.player_id],
             rank=idx,
             games_count=r.games_count,
-            points_win=float(r.points_win),
-            points_judge=float(r.points_judge),
-            lh_points=float(r.lh_points),
-            ci=float(r.ci),
+            points_win=_score(r.points_win),
+            points_judge=_score(r.points_judge),
+            lh_points=_score(r.lh_points),
+            ci=_score(r.ci),
             removals=int(r.removals),
             ppk_count=int(r.ppk_count),
-            zk=float(r.zk),
-            sk=float(r.sk),
-            total_score=float(r.total_score),
+            zk=_score(r.zk),
+            sk=_score(r.sk),
+            total_score=_score(r.total_score),
         )
         for idx, r in enumerate(rows, start=1)
     ]
@@ -373,21 +386,21 @@ def tournament_standings_all(
         # Сортировка в Python, а не в SQL: одним запросом на весь турнир
         # ORDER BY дал бы общий порядок, а таблицы этапов нумеруются каждая
         # со своей единицы. Строк тут десятки, не тысячи.
-        stage_rows.sort(key=lambda r: float(r.total_score), reverse=True)
+        stage_rows.sort(key=lambda r: _score(r.total_score), reverse=True)
         result[stage_id] = [
             TournamentStandingRow(
                 player=players[r.player_id],
                 rank=idx,
                 games_count=r.games_count,
-                points_win=float(r.points_win),
-                points_judge=float(r.points_judge),
-                lh_points=float(r.lh_points),
-                ci=float(r.ci),
+                points_win=_score(r.points_win),
+                points_judge=_score(r.points_judge),
+                lh_points=_score(r.lh_points),
+                ci=_score(r.ci),
                 removals=int(r.removals),
                 ppk_count=int(r.ppk_count),
-                zk=float(r.zk),
-                sk=float(r.sk),
-                total_score=float(r.total_score),
+                zk=_score(r.zk),
+                sk=_score(r.sk),
+                total_score=_score(r.total_score),
             )
             for idx, r in enumerate(stage_rows, start=1)
         ]
@@ -499,8 +512,8 @@ def compute_player_stats(db: Session, player_id: int) -> PlayerStats:
     stats = PlayerStats(
         **{k: (v or 0) for k, v in row._mapping.items() if k not in ("avg_score", "avg_bonus")}
     )
-    stats.avg_score = float(row.avg_score) if row.avg_score is not None else None
-    stats.avg_bonus = float(row.avg_bonus) if row.avg_bonus is not None else None
+    stats.avg_score = _score(row.avg_score) if row.avg_score is not None else None
+    stats.avg_bonus = _score(row.avg_bonus) if row.avg_bonus is not None else None
 
     rating = db.get(models.PlayerRating, player_id)
     if rating and rating.games_count > 0:

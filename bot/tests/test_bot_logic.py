@@ -1,23 +1,24 @@
 """Проверки чистой логики бота.
 
 Сами диалоги проверяются вручную в Telegram, но то, что ниже, ломалось молча
-и незаметно: нарезка игрового дня по часам, граница «прошедшая игра»,
-развилка «игру пора подтвердить» и подтверждение доставки решений по заявкам.
-Ничего из этого не требует ни Telegram, ни сети.
+и незаметно: граница «прошедшая игра», разбор полей профиля и подтверждение
+доставки решений по заявкам. Ничего из этого не требует ни Telegram, ни сети.
+
+Нарезки игрового дня по часам и календаря здесь больше нет: планировщик уехал
+в админку сайта, и его проверяет backend/tests/test_e2e_flow.py.
 """
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 
 from app import texts
 from app.api_client import LOCAL_TZ, now_local
-from app.handlers.admin import _day_from_token, _hourly_starts, _needs_confirmation
+from app.handlers.admin import MAX_BROADCAST_LENGTH, _announcement_text
 from app.handlers.profile import _parse, _stats_line
 from app.handlers.schedule import _is_past
-from app.keyboards.inline import calendar_keyboard, hours_keyboard
 from app.notifier import deliver_once
 
 
@@ -71,77 +72,29 @@ def _item(player_id: int, telegram_id: int, status: str = "confirmed", reason: s
 
 
 # ---------------------------------------------------------------- админка
-def test_hourly_starts_are_left_closed():
-    """Диапазон 18:00-21:00 -- это три игры, а не четыре: 21:00 уже конец."""
-    assert _hourly_starts("26.08.2026", "18:00", "21:00") == [
-        "26.08.2026 18:00",
-        "26.08.2026 19:00",
-        "26.08.2026 20:00",
+def test_announcement_groups_games_under_one_heading_per_day():
+    """Заголовок на день, строка на игру: иначе анонс превращается в простыню."""
+    games = [
+        {"starts_at": "2026-09-10T15:00:00Z", "game_type": "funky", "location": "ВМК",
+         "players": 3, "max_players": 10},
+        {"starts_at": "2026-09-10T16:00:00Z", "game_type": "funky", "location": "ВМК",
+         "players": 10, "max_players": 10},
+        {"starts_at": "2026-09-11T15:00:00Z", "game_type": "training", "location": None,
+         "players": 0, "max_players": 10},
     ]
+    text = _announcement_text(games, 7)
+
+    assert text.count("📅") == 2, "два дня -- два заголовка"
+    assert "10.09.2026" in text and "11.09.2026" in text
+    assert "7 мест" in text
+    assert "стол собран, есть резерв" in text
+    assert "место уточняется" in text, "игра без места всё равно попадает в анонс"
 
 
-def test_last_game_of_the_day_starts_before_midnight():
-    """Верхняя граница сетки часов -- 24:00, и это игра в 23:00, а не в 24:00."""
-    assert _hourly_starts("26.08.2026", "22:00", "24:00") == [
-        "26.08.2026 22:00",
-        "26.08.2026 23:00",
-    ]
-
-
-def test_day_token_round_trip():
-    assert _day_from_token("26082026") == "26.08.2026"
-    assert _day_from_token("2608") is None
-    assert _day_from_token("не дата") is None
-
-
-def _cells(markup) -> list[tuple[str, str]]:
-    return [(b.text, b.callback_data) for row in markup.inline_keyboard for b in row]
-
-
-def test_calendar_does_not_offer_past_days():
-    """Игровой день задним числом не создают: на него нельзя записаться."""
-    today = date(2026, 9, 15)
-    cells = _cells(calendar_keyboard(year=2026, month=9, today=today, back_to="am:create"))
-    picks = {text: data for text, data in cells if data.startswith("am:date:")}
-
-    assert "14" not in picks, "прошедший день не должен быть кликабельным"
-    assert picks["16"] == "am:date:16092026"
-    # Сегодняшний день выбрать можно -- вечерняя игра сегодня остаётся игрой.
-    assert "·15·" in picks
-
-
-def test_calendar_does_not_flip_into_past_months():
-    today = date(2026, 9, 15)
-    current = _cells(calendar_keyboard(year=2026, month=9, today=today, back_to="am:create"))
-    assert not any(data.startswith("am:cal:2026") and data < "am:cal:202609" for _, data in current)
-
-    later = _cells(calendar_keyboard(year=2026, month=11, today=today, back_to="am:create"))
-    assert ("◀️", "am:cal:202610") in later
-
-
-def test_hours_keyboard_covers_the_whole_range():
-    cells = _cells(hours_keyboard(action="to", first=19, last=24, back_to="am:pickfrom"))
-    hours = [text for text, data in cells if data.startswith("am:to:")]
-    assert hours == ["19:00", "20:00", "21:00", "22:00", "23:00", "24:00"]
-
-
-@pytest.mark.parametrize(
-    "status, hours_shift, expected",
-    [
-        ("scheduled", -3, True),
-        # Игра ещё не началась -- подтверждать нечего.
-        ("scheduled", 3, False),
-        # Уже подтверждена: висеть в списке «состоялась ли?» ей незачем.
-        ("played", -3, False),
-        ("rated", -3, False),
-    ],
-)
-def test_only_past_unconfirmed_games_ask_to_be_confirmed(status, hours_shift, expected):
-    game = {
-        "status": status,
-        "starts_at": (now_local() + timedelta(hours=hours_shift)).isoformat(),
-    }
-    assert _needs_confirmation(game) is expected
+def test_broadcast_length_limit_leaves_room_under_telegram_cap():
+    """Предел проверяется до рассылки: узнать про 4096 символов на середине
+    очереди -- худший момент из возможных."""
+    assert MAX_BROADCAST_LENGTH < 4096
 
 
 # ---------------------------------------------------------------- профиль

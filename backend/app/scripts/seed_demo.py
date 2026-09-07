@@ -342,6 +342,10 @@ def main() -> int:
         make_rated_funky(db, players, admin.id, rng)
         make_pending_review(db, players, admin.id)
         make_upcoming_sessions(db, bot_players, admin.id)
+        # Игры выше создавались вперемешку по датам, а номер игры -- её место
+        # в хронологии (game_service.resequence_game_ids); на стенде это
+        # должно выглядеть так же, как на бою.
+        game_service.resequence_game_ids(db)
         db.commit()
 
         window_start, window_end = pass_list_service.current_week_window(db)

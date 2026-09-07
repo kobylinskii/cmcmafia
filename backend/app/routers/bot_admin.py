@@ -1,3 +1,13 @@
+"""То, что осталось от админки бота: права и две рассылки.
+
+Всё, что касается расписания -- создание игрового дня, правка слота,
+подтверждение проведения -- переехало в админку сайта
+(`routers/admin_schedule.py`). Здесь живёт ровно то, чего на сайте сделать
+нельзя: назначить админа тому, кого знают только по @username в Telegram, и
+собрать список получателей для рассылки, которую отправляет бот (токен
+Telegram есть только у него, см. ARCHITECTURE.md, раздел 12).
+"""
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -8,168 +18,19 @@ from app.rate_limit import limiter
 from app.schemas.bot import (
     AdminInfoOut,
     BotAdminGrantIn,
+    BroadcastAudienceOut,
     BroadcastPlayerOut,
-    BulkSessionCreateIn,
-    ConflictCheckIn,
-    DayCardOut,
     PlayerLookupOut,
-    SessionCreateIn,
-    SessionOut,
-    SessionUpdateIn,
     WeeklyBroadcastOut,
 )
-from app.schemas.game import GameListItem
 from app.serializers import session_to_out
-from app.services import admin_grant, broadcast_service, game_service, schedule_admin_service
-from app.services.game_service import GameValidationError
+from app.services import admin_grant, broadcast_service, schedule_admin_service
 
 router = APIRouter(
     prefix="/api/bot/admin",
     tags=["bot-admin"],
     dependencies=[Depends(require_bot_admin_actor)],
 )
-
-
-@router.post("/sessions", response_model=SessionOut)
-@limiter.limit("30/minute")
-def create_session(
-    request: Request,
-    telegram_id: int,
-    data: SessionCreateIn,
-    db: Session = Depends(get_db),
-    actor: models.Player = Depends(require_bot_admin_actor),
-) -> SessionOut:
-    game = models.Game(
-        starts_at=data.starts_at,
-        location=data.location,
-        game_type=data.game_type,
-        registration_until=data.registration_until or data.starts_at,
-        max_players=data.max_players,
-        status="scheduled",
-        created_by=actor.id,
-    )
-    db.add(game)
-    db.commit()
-    db.refresh(game)
-    return session_to_out(game)
-
-
-@router.post("/sessions/bulk", response_model=list[int])
-@limiter.limit("30/minute")
-def create_sessions_bulk(
-    request: Request,
-    telegram_id: int,
-    data: BulkSessionCreateIn,
-    db: Session = Depends(get_db),
-    actor: models.Player = Depends(require_bot_admin_actor),
-) -> list[int]:
-    ids = schedule_admin_service.bulk_create_sessions(
-        db,
-        starts_at_list=data.starts_at_list,
-        location=data.location,
-        game_type=data.game_type,
-        created_by=actor.id,
-    )
-    db.commit()
-    return ids
-
-
-@router.post("/sessions/check-conflicts")
-@limiter.limit("30/minute")
-def check_conflicts(request: Request, telegram_id: int, data: ConflictCheckIn, db: Session = Depends(get_db)) -> dict:
-    conflicts = schedule_admin_service.check_conflicts(
-        db, starts_at_list=data.starts_at_list, exclude_session_ids=set(data.exclude_session_ids)
-    )
-    return {"conflicts": conflicts}
-
-
-@router.get("/sessions/day-cards", response_model=list[DayCardOut])
-@limiter.limit("30/minute")
-def get_day_cards(request: Request, telegram_id: int, game_type: str | None = None, db: Session = Depends(get_db)) -> list[dict]:
-    return schedule_admin_service.day_cards(db, game_type=game_type)
-
-
-@router.get("/sessions/by-day", response_model=list[SessionOut])
-@limiter.limit("30/minute")
-def get_sessions_by_day(request: Request, telegram_id: int, day: str, db: Session = Depends(get_db)) -> list[SessionOut]:
-    games = schedule_admin_service.games_by_day(db, day=day)
-    return [session_to_out(g) for g in games]
-
-
-@router.put("/sessions/{session_id}", response_model=SessionOut)
-@limiter.limit("30/minute")
-def update_session(
-    request: Request, telegram_id: int, session_id: int, data: SessionUpdateIn, db: Session = Depends(get_db)
-) -> SessionOut:
-    game = db.get(models.Game, session_id)
-    if game is None:
-        raise HTTPException(404, "Сессия не найдена")
-
-    if data.starts_at is not None:
-        game.starts_at = data.starts_at
-    if data.location is not None:
-        game.location = data.location
-    if data.game_type is not None:
-        game.game_type = data.game_type
-    if data.registration_until is not None:
-        game.registration_until = data.registration_until
-    db.commit()
-    db.refresh(game)
-    return session_to_out(game)
-
-
-@router.delete("/sessions/{session_id}")
-@limiter.limit("30/minute")
-def delete_session(request: Request, telegram_id: int, session_id: int, db: Session = Depends(get_db)) -> dict:
-    game = db.get(models.Game, session_id)
-    if game is None:
-        raise HTTPException(404, "Сессия не найдена")
-    game_service.delete_game(db, game=game)
-    db.commit()
-    return {"ok": True}
-
-
-@router.get("/sessions/pending-review", response_model=list[GameListItem])
-@limiter.limit("30/minute")
-def sessions_pending_review(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> list[models.Game]:
-    return game_service.games_pending_review(db)
-
-
-@router.get("/sessions/awaiting-confirmation", response_model=list[SessionOut])
-@limiter.limit("30/minute")
-def sessions_awaiting_confirmation(
-    request: Request, telegram_id: int, db: Session = Depends(get_db)
-) -> list[SessionOut]:
-    """Прошедшие игры, проведение которых админ ещё не подтвердил."""
-    return [session_to_out(g) for g in game_service.sessions_awaiting_confirmation(db)]
-
-
-@router.post("/sessions/{session_id}/played", response_model=SessionOut)
-@limiter.limit("30/minute")
-def mark_session_played(
-    request: Request, telegram_id: int, session_id: int, db: Session = Depends(get_db)
-) -> SessionOut:
-    """«Игра проведена» из бота: единственный вход сессии в «Ждут оценки».
-
-    Фоновой задачи, делавшей это самой, больше нет -- см. app/main.py.
-    """
-    game = db.get(models.Game, session_id)
-    if game is None:
-        raise HTTPException(404, "Сессия не найдена")
-    try:
-        game_service.mark_session_played(db, game=game)
-        db.commit()
-    except GameValidationError as exc:
-        db.rollback()
-        raise HTTPException(409, exc.message) from exc
-    db.refresh(game)
-    return session_to_out(game)
-
-
-@router.get("/sessions/locations", response_model=list[str])
-@limiter.limit("30/minute")
-def recent_locations(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> list[str]:
-    return schedule_admin_service.recent_locations(db)
 
 
 @router.get("/broadcast/weekly", response_model=WeeklyBroadcastOut)
@@ -185,6 +46,20 @@ def weekly_broadcast(
         days=days,
         games=[session_to_out(g) for g in games],
         recipients=[BroadcastPlayerOut.model_validate(p) for p in recipients],
+    )
+
+
+@router.get("/broadcast/audience", response_model=BroadcastAudienceOut)
+@limiter.limit("30/minute")
+def broadcast_audience(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> BroadcastAudienceOut:
+    """Получатели произвольного сообщения от админа.
+
+    В отличие от анонса, записавшиеся отсюда не вычитаются: объявление
+    «сегодня играем в 685-й, а не в 683-й» нужно в первую очередь как раз им.
+    """
+    recipients = broadcast_service.all_recipients(db)
+    return BroadcastAudienceOut(
+        recipients=[BroadcastPlayerOut.model_validate(p) for p in recipients]
     )
 
 

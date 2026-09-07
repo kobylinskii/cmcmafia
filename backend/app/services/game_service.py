@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app import models
@@ -367,6 +368,100 @@ def update_rated_game(
     return game
 
 
+def resequence_game_ids(db: Session) -> dict[int, int]:
+    """Перенумеровывает игры: id = порядковый номер по дате проведения, без дыр.
+
+    Номер игры -- то, чем её называют («игра №14»), и он же лежит в URL
+    /mafia/games/{id}. По умолчанию SERIAL нумерует в порядке СОЗДАНИЯ, из-за
+    чего игра, заведённая задним числом, получала номер больше уже сыгранных
+    позже неё, а удаление непроведённой игры навсегда оставляло дыру в
+    нумерации. Здесь id приводится к тому, чем его и читают -- к позиции игры
+    в хронологии.
+
+    Возвращает {старый id: новый id} только для реально переехавших игр:
+    вызывающий код держит объекты, чьи первичные ключи после этого недействительны,
+    и обязан перечитать их по новому id (все роутеры так и делают -- сразу
+    после db.commit(), который и так сбрасывает состояние объектов).
+
+    Порядок -- (дата, момент создания, текущий id): у турнирных слотов дата
+    одна на весь этап (плейсхолдер по турниру, см. tournament_service), и без
+    двух запасных ключей их взаимный порядок скакал бы при каждой
+    перенумерации.
+
+    Переезд ключа за собой тянут внешние ключи с ON UPDATE CASCADE
+    (миграция c9a2f4e17b58) -- составы, записи, резерв и история рейтинга.
+    """
+    # Всё, что сессия ещё не записала, должно оказаться в таблице до того, как
+    # по ней пойдёт голый SQL: иначе новая игра не попадёт в нумерацию.
+    db.flush()
+
+    ids = list(
+        db.execute(
+            select(models.Game.id).order_by(
+                models.Game.starts_at, models.Game.created_at, models.Game.id
+            )
+        ).scalars()
+    )
+    mapping = {old: new for new, old in enumerate(ids, start=1) if old != new}
+
+    if mapping:
+        # Два прохода, потому что первичный ключ проверяется на уникальность
+        # построчно, а не в конце оператора: прямой UPDATE ... = row_number()
+        # упёрся бы в уже занятый номер. Сдвиг на max(id) выносит все ключи за
+        # пределы занятого диапазона, после чего целевые номера свободны.
+        offset = max(ids)
+        db.execute(text("UPDATE games SET id = id + :offset"), {"offset": offset})
+        db.execute(
+            text(
+                """
+                WITH ordered AS (
+                    SELECT id, row_number() OVER (
+                        ORDER BY starts_at, created_at, id
+                    ) AS rn
+                    FROM games
+                )
+                UPDATE games g SET id = ordered.rn
+                FROM ordered
+                WHERE g.id = ordered.id
+                """
+            )
+        )
+
+    # Последовательность ушла вперёд на все удалённые и перенумерованные игры;
+    # без сброса следующая игра получила бы номер из будущего и первая же
+    # перенумерация его отобрала.
+    db.execute(
+        text(
+            "SELECT setval("
+            "  pg_get_serial_sequence('games', 'id'),"
+            "  COALESCE((SELECT MAX(id) FROM games), 0) + 1,"
+            "  false"
+            ")"
+        )
+    )
+    return mapping
+
+
+def resequence_and_reload(db: Session, *, game_ids: list[int]) -> list[models.Game]:
+    """Перенумеровать игры, зафиксировать это и перечитать перечисленные игры
+    под их новыми номерами -- в том же порядке, в каком их передали.
+
+    Роутеры, меняющие состав или даты игр, вызывают это СРАЗУ ПОСЛЕ своего
+    db.commit(): к этому моменту у сессии не остаётся незаписанных изменений,
+    а объекты после коммита и так просрочены, так что старые (уже
+    недействительные) первичные ключи никто не прочитает. Обычный db.refresh()
+    на этом месте пошёл бы в базу за строкой по СТАРОМУ id и её там не нашёл.
+    """
+    mapping = resequence_game_ids(db)
+    db.commit()
+    games = []
+    for game_id in game_ids:
+        game = db.get(models.Game, mapping.get(game_id, game_id))
+        if game is not None:
+            games.append(game)
+    return games
+
+
 def delete_game(db: Session, *, game: models.Game) -> None:
     was_rated = game.status == "rated"
     db.delete(game)
@@ -382,27 +477,35 @@ def games_pending_review(db: Session) -> list[models.Game]:
     return (
         db.query(models.Game)
         .filter(models.Game.status == "played", models.Game.game_type != "tournament")
+        # Страховка на случай, если флаг сняли уже с проведённой игры: статус
+        # при этом откатывается в 'scheduled' (см. роутер расписания), но
+        # список оценки не должен зависеть от того, отработал ли откат.
+        .filter(models.Game.needs_rating.is_(True))
         .order_by(models.Game.starts_at.asc())
         .all()
     )
 
 
 # Статусы сессии, из которых её ещё можно подтвердить как проведённую.
-_UNCONFIRMED_STATUSES = ("scheduled", "registration_closed")
+UNCONFIRMED_STATUSES = ("scheduled", "registration_closed")
 
 
 def sessions_awaiting_confirmation(db: Session) -> list[models.Game]:
-    """Прошедшие бот-сессии, которые админ ещё не подтвердил.
+    """Прошедшие сессии, которые админ ещё не подтвердил.
 
     Раньше этого списка не существовало: фоновая задача сама переводила
     прошедшую игру в 'played', и она немедленно оказывалась в «Ждут оценки» --
     вместе с играми, которые на деле не собрались. Теперь переход делает
     человек, и ему нужно место, где видно всё непподтверждённое, иначе
     забытая игра не всплывёт нигде.
+
+    Игры с needs_rating=False сюда не попадают: у них не будет результата, и
+    спрашивать про них «состоялась ли» не за чем -- ответ ни на что не влияет.
     """
     return (
         db.query(models.Game)
-        .filter(models.Game.status.in_(_UNCONFIRMED_STATUSES))
+        .filter(models.Game.status.in_(UNCONFIRMED_STATUSES))
+        .filter(models.Game.needs_rating.is_(True))
         .filter(models.Game.starts_at < datetime.now(timezone.utc))
         .filter(models.Game.game_type != "tournament")
         .order_by(models.Game.starts_at.asc())
@@ -417,7 +520,9 @@ def mark_session_played(db: Session, *, game: models.Game) -> models.Game:
     минуя 'played' (см. раздел 7 ARCHITECTURE.md).
     """
     if game.game_type == "tournament":
-        raise GameValidationError("Турнирные игры оцениваются внутри этапа, а не через бота")
+        raise GameValidationError("Турнирные игры оцениваются внутри этапа, а не здесь")
+    if not game.needs_rating:
+        raise GameValidationError("Игра создана без оценки — подтверждать её проведение не нужно")
     if game.status == "rated":
         raise GameValidationError("Игра уже оценена")
     if game.status == "played":

@@ -6,7 +6,7 @@ import { CaretDown, CaretUp, Flag, PencilSimple, Plus, Trash } from "@phosphor-i
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { formatDateTime } from "@/lib/format";
+import { formatDash, formatDateTime } from "@/lib/format";
 import type { TournamentStageGameOut, TournamentStageOut, TournamentStandingOut } from "@/types/api";
 
 const field =
@@ -564,7 +564,7 @@ function StageAdvancesPanel({
                   <tr key={row.slug} className="odd:bg-ink-900/40">
                     <td className="px-3 py-2 font-mono text-xs text-ink-400">{row.rank}</td>
                     <td className="px-3 py-2 text-sm text-ink-100">{row.nickname}</td>
-                    <td className="px-3 py-2 text-right font-mono text-sm text-ink-50">{row.total_score}</td>
+                    <td className="px-3 py-2 text-right font-mono text-sm text-ink-50">{formatDash(row.total_score)}</td>
                     <td className="px-3 py-2 text-center">
                       <input
                         type="checkbox"

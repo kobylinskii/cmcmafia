@@ -33,6 +33,7 @@ def session_to_out(game: models.Game) -> SessionOut:
         location=game.location,
         game_type=game.game_type,
         status=game.status,
+        needs_rating=game.needs_rating,
         registration_until=game.registration_until,
         is_open=is_open,
         hosts=hosts,

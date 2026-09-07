@@ -8,17 +8,28 @@ Postgres-специфичные типы (JSONB, TIMESTAMPTZ), sqlite не по�
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.database import SessionLocal
 from app.main import app
 from app.services import player_service
+from app.timeutil import club_day
 
 # Настройка окружения и очистка базы -- в tests/conftest.py: pytest импортирует
 # его раньше любого тестового модуля, то есть до того, как app.config закэширует
 # настройки через lru_cache.
-from tests.conftest import BOT_HEADERS, make_tournament, make_tournament_game, reset_state
+from tests.conftest import (
+    BOT_HEADERS,
+    make_session,
+    make_sessions,
+    make_tournament,
+    make_tournament_game,
+    reset_state,
+    set_game_max_players,
+)
 
 
 def test_full_flow():
@@ -179,33 +190,17 @@ def test_full_flow():
     )
     assert resp.status_code == 409
 
-    # make this user a bot admin directly, then create a session as them
-    db = SessionLocal()
-    newbie = db.query(models.Player).filter(models.Player.telegram_id == 111).one()
-    newbie.is_bot_admin = True
-    db.commit()
-    db.close()
+    # сессию для записи планирует сайт-админ: планировщик переехал из бота в
+    # админку сайта, бот-ручки создания слотов больше нет
+    session_id = make_session(client, admin_headers(), starts_at="2026-12-01T18:00:00Z", location="Клуб")
+    set_game_max_players(session_id, 2)
 
-    resp = client.post(
-        f"/api/bot/admin/sessions?telegram_id=111",
-        headers=BOT_HEADERS,
-        json={
-            "starts_at": "2026-12-01T18:00:00Z",
-            "location": "Клуб",
-            "game_type": "funky",
-            "max_players": 2,
-        },
+    # без сессии сайт-админа планировщик недоступен (кука есть только у client)
+    resp = TestClient(app).post(
+        "/api/admin/schedule/plan",
+        json={"starts_at": "2026-12-01T18:00:00Z", "count": 1, "location": "x", "game_type": "funky"},
     )
-    assert resp.status_code == 200, resp.text
-    session_id = resp.json()["id"]
-
-    # a non-admin cannot create sessions
-    resp = client.post(
-        f"/api/bot/admin/sessions?telegram_id=111111111",
-        headers=BOT_HEADERS,
-        json={"starts_at": "2026-12-01T18:00:00Z", "location": "x", "game_type": "funky"},
-    )
-    assert resp.status_code == 404  # unknown telegram_id -> no actor found
+    assert resp.status_code == 401
 
     # register two more bot users to fill the 2-player session + one reserve
     for i, tg_id in enumerate([201, 202, 203], start=1):
@@ -271,7 +266,125 @@ def test_full_flow():
     print("E2E flow OK")
 
 
-def test_schedule_admin_flow():
+def _site_admin_client() -> tuple[TestClient, dict]:
+    db = SessionLocal()
+    actor = player_service.create_player(db, nickname="Организатор", slug="organizer")
+    password = player_service.grant_site_access(db, player=actor, username="admin")
+    db.commit()
+    db.close()
+    client = TestClient(app)
+    resp = client.post("/api/auth/login", json={"username": "admin", "password": password})
+    assert resp.status_code == 200, resp.text
+    return client, {"X-CSRF-Token": client.cookies.get("csrf_token")}
+
+
+def test_schedule_planner_flow():
+    """Планировщик игр в админке сайта: пачка слотов, обзор по дням, конфликты.
+
+    До переноса тем же занималась админка бота (`/api/bot/admin/sessions/*`);
+    ручек больше нет, расписание ведёт сайт-админ.
+    """
+    reset_state()
+    client, headers = _site_admin_client()
+
+    # Дата считается от «сегодня», а не зашита строкой: у прошедшего дня
+    # awaiting_count не ноль, и такой тест начинал бы врать со временем.
+    first = (datetime.now(timezone.utc) + timedelta(days=30)).replace(
+        hour=15, minute=0, second=0, microsecond=0
+    )
+    day = club_day(first)
+
+    # день из трёх слотов по часу
+    created = make_sessions(
+        client, headers, starts_at=first.isoformat(), location="Клуб", count=3, step_minutes=60
+    )
+    assert [datetime.fromisoformat(s["starts_at"]) for s in created] == [
+        first,
+        first + timedelta(hours=1),
+        first + timedelta(hours=2),
+    ]
+    assert all(s["needs_rating"] for s in created)
+
+    # обзор по дням: одна строка со счётчиками
+    resp = client.get("/api/admin/schedule/days", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert [(d["day"], d["types"], d["games_count"], d["awaiting_count"]) for d in resp.json()] == [
+        (day, ["funky"], 3, 0)
+    ]
+
+    # игры дня -- все три
+    resp = client.get("/api/admin/schedule/sessions", headers=headers, params={"day": day})
+    assert resp.status_code == 200
+    assert len(resp.json()) == 3
+
+    # предпросмотр плана показывает конфликты до записи: первое время занято,
+    # третьим часом позже -- свободно
+    resp = client.post(
+        "/api/admin/schedule/plan/preview",
+        headers=headers,
+        json={
+            "starts_at": first.isoformat(),
+            "count": 2,
+            "step_minutes": 180,
+            "location": "Клуб",
+            "game_type": "funky",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert [datetime.fromisoformat(v) for v in resp.json()["starts_at_list"]] == [
+        first,
+        first + timedelta(hours=3),
+    ]
+    assert [datetime.fromisoformat(v) for v in resp.json()["conflicts"]] == [first]
+
+    # шаг может быть любым в разумных пределах, но не меньше получаса
+    bad = client.post(
+        "/api/admin/schedule/plan",
+        headers=headers,
+        json={
+            "starts_at": (first + timedelta(days=1)).isoformat(),
+            "count": 2,
+            "step_minutes": 5,
+            "location": "Клуб",
+            "game_type": "funky",
+        },
+    )
+    assert bad.status_code == 422
+
+    # правка слота: место и формат
+    session_id = created[0]["id"]
+    resp = client.put(
+        f"/api/admin/schedule/sessions/{session_id}",
+        headers=headers,
+        json={"location": "ВМК МГУ, ауд. 685", "game_type": "training"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["location"] == "ВМК МГУ, ауд. 685"
+    assert resp.json()["game_type"] == "training"
+
+    # места прошлых игр предлагаются в форме, чтобы их не набирали руками
+    resp = client.get("/api/admin/schedule/locations", headers=headers)
+    assert resp.status_code == 200
+    assert "ВМК МГУ, ауд. 685" in resp.json()
+
+    # удаление слота убирает его из дня
+    assert client.delete(f"/api/admin/schedule/sessions/{session_id}", headers=headers).status_code == 200
+    resp = client.get("/api/admin/schedule/sessions", headers=headers, params={"day": day})
+    # Остались вторая и третья игры дня -- но уже под номерами 1 и 2: удаление
+    # не оставляет дыру в нумерации, а сдвигает всё, что стояло после
+    # (game_service.resequence_game_ids).
+    assert [s["starts_at"] for s in resp.json()] == [g["starts_at"] for g in created[1:]]
+    assert [s["id"] for s in resp.json()] == [1, 2]
+
+    print("Schedule planner flow OK")
+
+
+def test_bot_admin_management_flow():
+    """В боте от админки остались только права: выдать, увидеть, снять.
+
+    Назначение по @username человека, который ещё не открывал бота, -- ровно то,
+    чего на сайте не сделать: telegram_id у него появится только при /start.
+    """
     reset_state()
     client = TestClient(app)
 
@@ -297,54 +410,7 @@ def test_schedule_admin_flow():
     db.commit()
     db.close()
 
-    # bulk-create a day of hourly slots: 18:00, 19:00, 20:00
-    resp = client.post(
-        "/api/bot/admin/sessions/bulk?telegram_id=501",
-        headers=BOT_HEADERS,
-        json={
-            "starts_at_list": [
-                "2026-03-05T18:00:00Z",
-                "2026-03-05T19:00:00Z",
-                "2026-03-05T20:00:00Z",
-            ],
-            "location": "Клуб",
-            "game_type": "funky",
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    created_ids = resp.json()
-    assert len(created_ids) == 3
-
-    # day-cards groups by day across all statuses
-    resp = client.get("/api/bot/admin/sessions/day-cards?telegram_id=501", headers=BOT_HEADERS)
-    assert resp.status_code == 200
-    assert resp.json() == [{"day": "05.03.2026", "types": ["funky"]}]
-
-    # by-day lists all three sessions for that day
-    resp = client.get(
-        "/api/bot/admin/sessions/by-day", headers=BOT_HEADERS, params={"telegram_id": 501, "day": "05.03.2026"}
-    )
-    assert resp.status_code == 200
-    assert len(resp.json()) == 3
-
-    # conflict check: re-proposing the same three starts (excluding nothing) conflicts
-    resp = client.post(
-        "/api/bot/admin/sessions/check-conflicts?telegram_id=501",
-        headers=BOT_HEADERS,
-        json={"starts_at_list": ["2026-03-05T18:00:00Z", "2026-03-05T21:00:00Z"], "exclude_session_ids": []},
-    )
-    assert resp.status_code == 200
-    assert len(resp.json()["conflicts"]) == 1  # only 18:00 collides, 21:00 is free
-
-    # excluding the session itself clears the conflict
-    resp = client.post(
-        "/api/bot/admin/sessions/check-conflicts?telegram_id=501",
-        headers=BOT_HEADERS,
-        json={"starts_at_list": ["2026-03-05T18:00:00Z"], "exclude_session_ids": [created_ids[0]]},
-    )
-    assert resp.json()["conflicts"] == []
-
-    # admin lookup by username / phone
+    # поиск человека по @username / телефону -- шаг назначения админа
     resp = client.get(
         "/api/bot/admin/players/by-username", headers=BOT_HEADERS, params={"telegram_id": 501, "username": "sched_admin"}
     )
@@ -396,7 +462,15 @@ def test_schedule_admin_flow():
     assert resp.status_code == 200
     assert resp.json()["removed"] is True
 
-    print("Schedule/admin flow OK")
+    # расписанием бот-админ больше не управляет: ручки просто нет
+    gone = client.post(
+        "/api/bot/admin/sessions?telegram_id=501",
+        headers=BOT_HEADERS,
+        json={"starts_at": "2026-03-05T18:00:00Z", "location": "Клуб", "game_type": "funky"},
+    )
+    assert gone.status_code == 404
+
+    print("Bot admin management flow OK")
 
 
 def test_bootstrap_admin_via_config(monkeypatch):

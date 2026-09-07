@@ -69,3 +69,22 @@ def announcement_recipients(db: Session, *, days: int = DEFAULT_WINDOW_DAYS) -> 
             models.Player.id.notin_(busy_reserved)
         )
     return query.order_by(models.Player.id.asc()).all()
+
+
+def all_recipients(db: Session) -> list[models.Player]:
+    """Аудитория произвольного сообщения от админа.
+
+    Отличие от announcement_recipients ровно одно: записавшиеся не
+    вычитаются. Анонс им не нужен -- они уже идут; объявление («аудитория
+    поменялась», «сегодня без ведущего») нужно в первую очередь как раз им.
+    Отклонённые не получают ничего: у них сначала анкета.
+    """
+    return (
+        db.query(models.Player)
+        .filter(
+            models.Player.telegram_id.isnot(None),
+            models.Player.confirmation_status != models.ConfirmationStatus.rejected.value,
+        )
+        .order_by(models.Player.id.asc())
+        .all()
+    )

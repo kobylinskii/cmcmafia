@@ -20,11 +20,15 @@ export default function EditGamePage({ params }: { params: Promise<{ id: string 
 
   return (
     <div>
-      {/* Ссылка ведёт туда же, куда форма возвращает после сохранения:
-          турнирную игру админ открывает из карточки турнира, а не из общего
-          списка игр (турнирных там вообще нет). */}
+      {/* Ссылка ведёт туда, откуда админ сюда пришёл: турнирную игру он
+          открывает из карточки турнира (в общем списке турнирных вообще нет),
+          неоценённую -- из «Ждут оценки», уже оценённую -- из «Оценённых». */}
       <Link
-        href={game?.tournament ? `/mafia/admin/tournaments/${game.tournament.id}/edit` : "/mafia/admin/games"}
+        href={
+          game?.tournament
+            ? `/mafia/admin/tournaments/${game.tournament.id}/edit`
+            : `/mafia/admin/games?tab=${game?.status === "played" ? "pending" : "rated"}`
+        }
         className="inline-flex items-center gap-1.5 text-sm text-ink-400 hover:text-ink-100"
       >
         <ArrowLeft size={16} />

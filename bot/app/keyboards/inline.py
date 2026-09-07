@@ -11,9 +11,6 @@
 
 from __future__ import annotations
 
-import calendar
-from datetime import date, timedelta
-
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -22,11 +19,6 @@ from app import texts
 BACK = "↩️ Назад"
 CANCEL = "✖️ Отмена"
 MENU = "🏠 Меню"
-
-# Кнопка-заглушка календаря (пустая клетка, прошедший день, заголовок месяца).
-# Telegram обязан получить callback_data у каждой кнопки, поэтому «ничего не
-# делает» -- это отдельный callback, на который висит пустой ответ.
-NOOP = "ui:noop"
 
 
 def _mark(flag: bool) -> str:
@@ -249,174 +241,19 @@ def my_registration_keyboard(game_id: int, *, is_reserve: bool, can_cancel: bool
 
 
 # ------------------------------------------------------------------- админка
-def admin_menu_keyboard(*, awaiting: int = 0) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🎮 Создать игровой день", callback_data="am:create")
-    kb.button(text="📋 Игровые дни", callback_data="am:days")
-    # Счётчик прямо в подписи: игры больше не уезжают в «Ждут оценки» сами, и
-    # единственный сигнал «есть неподтверждённое» -- этот экран.
-    kb.button(
-        text="✅ Подтвердить проведение" + (f" ({awaiting})" if awaiting else ""),
-        callback_data="am:toconfirm",
-    )
-    kb.button(text="📢 Анонс игр на неделю", callback_data="am:cast")
-    kb.button(text="👮 Администраторы", callback_data="am:admins")
-    kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
-    return kb.as_markup()
+def admin_menu_keyboard() -> InlineKeyboardMarkup:
+    """Всё, что осталось от админки бота.
 
-
-# ------------------------------------------------------- календарь и время
-_MONTHS = (
-    "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
-)
-_WEEKDAYS = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")
-
-# Час, раньше которого игры в клубе не начинаются. Сетка часов в сутках --
-# 24 кнопки, из них ночные никто никогда не выбирал; список от 10:00 влезает
-# в четыре ряда и читается с одного взгляда.
-FIRST_HOUR = 10
-LAST_HOUR = 23
-
-
-def calendar_keyboard(*, year: int, month: int, today: date, back_to: str) -> InlineKeyboardMarkup:
-    """Месяц целиком. Дата игрового дня набиралась текстом («06.09.2026»), и
-    каждая опечатка стоила ещё одного сообщения в чате -- своего и бота.
-
-    Прошедшие числа не кликабельны: игровой день задним числом не создают, а
-    молча принять такую дату значило бы завести игру, на которую нельзя
-    записаться."""
-    kb = InlineKeyboardBuilder()
-    previous_month = date(year, month, 1) - timedelta(days=1)
-    can_go_back = date(previous_month.year, previous_month.month, 1) >= date(today.year, today.month, 1)
-    next_month = date(year, month, calendar.monthrange(year, month)[1]) + timedelta(days=1)
-    kb.row(
-        InlineKeyboardButton(
-            text="◀️" if can_go_back else " ",
-            callback_data=(f"am:cal:{previous_month:%Y%m}" if can_go_back else NOOP),
-        ),
-        InlineKeyboardButton(text=f"{_MONTHS[month - 1]} {year}", callback_data=NOOP),
-        InlineKeyboardButton(text="▶️", callback_data=f"am:cal:{next_month:%Y%m}"),
-    )
-    kb.row(*(InlineKeyboardButton(text=name, callback_data=NOOP) for name in _WEEKDAYS))
-
-    for week in calendar.Calendar(firstweekday=0).monthdayscalendar(year, month):
-        row = []
-        for day_number in week:
-            if day_number == 0 or date(year, month, day_number) < today:
-                row.append(InlineKeyboardButton(text="·", callback_data=NOOP))
-                continue
-            day = date(year, month, day_number)
-            label = f"·{day_number}·" if day == today else str(day_number)
-            row.append(InlineKeyboardButton(text=label, callback_data=f"am:date:{day:%d%m%Y}"))
-        kb.row(*row)
-
-    kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
-    return kb.as_markup()
-
-
-def hours_keyboard(*, action: str, first: int, last: int, back_to: str) -> InlineKeyboardMarkup:
-    """Целые часы [first, last]. Нарезка игрового дня всегда шла по часу, так
-    что выбирать минуты было нечего -- а формат «18:00-22:00» человек всё
-    равно ухитрялся написать десятком способов."""
-    kb = InlineKeyboardBuilder()
-    for hour in range(first, last + 1):
-        kb.button(text=f"{hour:02d}:00", callback_data=f"am:{action}:{hour}")
-    kb.adjust(4)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
-    return kb.as_markup()
-
-
-def locations_keyboard(locations: list[str], *, back_to: str) -> InlineKeyboardMarkup:
-    """Места прошлых игр + ручной ввод.
-
-    В callback_data едет индекс, а не само место: там 64 байта, а «ВМК МГУ,
-    ауд. 685» -- это ещё и двоеточия, по которым разбирается callback.
+    Игровые дни, карточки игр и подтверждение проведения отсюда убраны:
+    расписание ведут на сайте, во вкладке «Игры → Расписание». Здесь -- только
+    то, для чего нужен именно Telegram (см. handlers/admin.py).
     """
     kb = InlineKeyboardBuilder()
-    for index, location in enumerate(locations):
-        kb.button(text=f"📍 {location}", callback_data=f"am:loc:{index}")
-    kb.button(text="✍️ Другое место", callback_data="am:locnew")
+    kb.button(text="👮 Администраторы", callback_data="am:admins")
+    kb.button(text="📢 Анонс игр на неделю", callback_data="am:cast")
+    kb.button(text="✉️ Написать всем", callback_data="am:say")
     kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
-    return kb.as_markup()
-
-
-def admin_game_types_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for value, label in texts.GAME_TYPES.items():
-        kb.button(text=label, callback_data=f"am:newtype:{value}")
-    kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data="am:menu"))
-    return kb.as_markup()
-
-
-def admin_days_keyboard(day_cards: list[dict]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for card in day_cards:
-        day = str(card["day"])
-        types = ", ".join(card.get("types") or [])
-        kb.button(
-            text=f"{day}{f' · {types}' if types else ''}",
-            callback_data=f"am:day:{day.replace('.', '')}",
-        )
-    kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data="am:menu"))
-    return kb.as_markup()
-
-
-def admin_day_keyboard(day_token: str, games: list[dict]) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for game in games:
-        registered = int(game.get("players", 0)) + int(game.get("hosts", 0)) + int(game.get("judges", 0))
-        kb.button(
-            text=f"#{game['id']} · {game['time']} · {registered}/13",
-            callback_data=f"am:game:{game['id']}",
-        )
-    kb.adjust(1)
-    kb.row(InlineKeyboardButton(text="🗑️ Удалить весь день", callback_data=f"am:dayrm:{day_token}"))
-    kb.row(InlineKeyboardButton(text=BACK, callback_data="am:days"))
-    return kb.as_markup()
-
-
-ADMIN_GAME_FIELDS: tuple[tuple[str, str], ...] = (
-    ("starts_at", "🕒 Дата и время"),
-    ("location", "📍 Место"),
-    ("game_type", "🎮 Формат"),
-)
-
-
-def admin_game_keyboard(
-    game_id: int, day_token: str, *, needs_confirmation: bool = False, back_to: str | None = None
-) -> InlineKeyboardMarkup:
-    """Карточка игры. У прошедшей неподтверждённой игры вместо правки полей --
-    развилка «проведена / не состоялась»: без неё игра не попадёт ни в «Ждут
-    оценки», ни куда-либо ещё (game_service.mark_session_played)."""
-    kb = InlineKeyboardBuilder()
-    if needs_confirmation:
-        kb.row(InlineKeyboardButton(text="✅ Игра проведена", callback_data=f"am:played:{game_id}"))
-        kb.row(InlineKeyboardButton(text="🚫 Не состоялась", callback_data=f"am:notheld:{game_id}"))
-    for field, label in ADMIN_GAME_FIELDS:
-        kb.button(text=label, callback_data=f"am:edit:{game_id}:{field}")
-    kb.adjust(2)
-    if not needs_confirmation:
-        kb.row(InlineKeyboardButton(text="🗑️ Удалить игру", callback_data=f"am:rm:{game_id}"))
-    kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to or f"am:day:{day_token}"))
-    return kb.as_markup()
-
-
-def admin_awaiting_keyboard(games: list[dict]) -> InlineKeyboardMarkup:
-    """Прошедшие игры, ждущие ответа «состоялась или нет»."""
-    kb = InlineKeyboardBuilder()
-    for game in games:
-        registered = int(game.get("players", 0)) + int(game.get("hosts", 0)) + int(game.get("judges", 0))
-        kb.button(
-            text=f"#{game['id']} · {game['day_time']} · {registered} чел.",
-            callback_data=f"am:confirm:{game['id']}",
-        )
-    kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data="am:menu"))
+    kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
     return kb.as_markup()
 
 
@@ -429,28 +266,24 @@ def admin_broadcast_keyboard(*, can_send: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def admin_text_broadcast_keyboard(*, can_send: bool) -> InlineKeyboardMarkup:
+    """Предпросмотр произвольного сообщения. Отдельная кнопка «Изменить текст»:
+    опечатку замечают именно на этом экране, и заставлять ради неё возвращаться
+    в меню -- лишний шаг."""
+    kb = InlineKeyboardBuilder()
+    if can_send:
+        kb.button(text="✉️ Разослать", callback_data="am:saygo")
+    kb.button(text="✏️ Изменить текст", callback_data="am:say")
+    kb.button(text=BACK, callback_data="am:menu")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
 def announcement_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура самого анонса: кнопка ведёт в обычный экран записи, который
     и займёт это сообщение -- ещё одного в чате не появится."""
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Записаться", callback_data="sg:types")
-    return kb.as_markup()
-
-
-def admin_game_type_keyboard(game_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for value, label in texts.GAME_TYPES.items():
-        kb.button(text=label, callback_data=f"am:settype:{game_id}:{value}")
-    kb.adjust(1)
-    kb.row(InlineKeyboardButton(text=BACK, callback_data=f"am:game:{game_id}"))
-    return kb.as_markup()
-
-
-def admin_confirm_keyboard(*, confirm_data: str, back_data: str, label: str) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text=label, callback_data=confirm_data)
-    kb.button(text=BACK, callback_data=back_data)
-    kb.adjust(1)
     return kb.as_markup()
 
 

@@ -73,6 +73,68 @@ export interface GameListOut {
   total: number;
 }
 
+// --------------------------------------------------------------- расписание
+// Зеркалит backend/app/schemas/schedule.py и SessionOut из schemas/bot.py.
+// Раздел «Игры → Расписание» -- переехавшая из бота админка игровых дней.
+
+/** Формат слота. Турнирные игры в расписании не заводятся -- у них своя
+ * сетка этапов во вкладке «Турниры». */
+export type ScheduleGameType = Exclude<GameType, "tournament">;
+
+export interface SessionOut {
+  id: number;
+  starts_at: string;
+  location: string | null;
+  game_type: GameType;
+  status: string;
+  /** Будет ли у игры результат. false -- слот нужен только ради записи в
+   * боте: подтверждать его проведение не надо, в «Ждут оценки» он не идёт. */
+  needs_rating: boolean;
+  registration_until: string | null;
+  is_open: boolean;
+  hosts: number;
+  judges: number;
+  players: number;
+  max_players: number;
+  reserves: number;
+}
+
+export interface RosterMember {
+  nickname: string;
+  telegram_id: number | null;
+  telegram_username: string | null;
+  role: RegistrationRole;
+}
+
+export interface ReserveMember {
+  nickname: string;
+  telegram_id: number | null;
+}
+
+export interface SessionRoster {
+  registrations: RosterMember[];
+  reserves: ReserveMember[];
+}
+
+export interface ScheduleSessionOut extends SessionOut {
+  roster: SessionRoster;
+}
+
+export interface ScheduleDayOut {
+  /** «ДД.ММ.ГГГГ» по московскому времени -- он же ключ ручки по дню. */
+  day: string;
+  types: GameType[];
+  games_count: number;
+  /** Сколько игр дня ждут ответа «состоялась или нет». */
+  awaiting_count: number;
+  first_starts_at: string;
+}
+
+export interface SchedulePlanPreviewOut {
+  starts_at_list: string[];
+  conflicts: string[];
+}
+
 export interface RatingRowOut {
   rank: number;
   slug: string;

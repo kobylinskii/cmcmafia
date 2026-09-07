@@ -120,12 +120,6 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext, api: ApiClien
     await edit_screen(callback, state, menu_text(user), main_menu_keyboard(is_admin=user["is_bot_admin"]))
 
 
-@router.callback_query(F.data == "ui:noop")
-async def ignore_noop(callback: CallbackQuery) -> None:
-    """Неактивные клетки календаря и заголовки: нажатие есть, действия нет."""
-    await callback.answer()
-
-
 @router.message(Command("help"))
 async def help_handler(message: Message, state: FSMContext) -> None:
     await consume_input(message)

@@ -113,7 +113,10 @@ def describe_formula():
         start_rating=START_RATING,
         formula="R' = R + K · (Sa − E · M) / M − O",
         legend=[
-            RatingLegendItem(symbol="Sa", text="баллы игрока за игру: за победу + от судей + ЛХ + Ci"),
+            RatingLegendItem(
+                symbol="Sa",
+                text="баллы игрока за игру: за победу + от судей + ЛХ + Ci, минус карточки (ЖК, СК)",
+            ),
             RatingLegendItem(
                 symbol="E",
                 text=f"ожидаемый результат команды игрока против команды соперников (по среднему "
@@ -219,7 +222,23 @@ def recompute_all(db: Session) -> RecomputeResult:
             games_before = st.games_count
             k = _k_coefficient(games_before, ra)
             e = e_red if p.role in RED_ROLES else e_black
-            sa = float(p.points_win) + float(p.points_judge) + lh_points(p.lh) + float(p.ci or 0)
+            # Sa -- «итого очков за игру» из клубной таблицы, то есть баллы
+            # МИНУС карточные штрафы. ЖК и СК уже хранятся в игровых баллах,
+            # поэтому вычитаются прямо здесь, а не через O: сверка с реальной
+            # клубной таблицей (7 игр, 70 строк) показала, что без этого
+            # вычета каждая карточка стоила игроку 0 очков рейтинга вместо
+            # K*ЖК/M -- при K=40 это 2.86 очка, и ошибка расползалась дальше
+            # по всем играм через средние рейтинги команд. Удаления и ППК
+            # сюда НЕ входят: они считаются отдельным штрафом O сразу в очках
+            # рейтинга (_penalty_rates), а не в игровых баллах.
+            sa = (
+                float(p.points_win)
+                + float(p.points_judge)
+                + lh_points(p.lh)
+                + float(p.ci or 0)
+                - float(p.zk or 0)
+                - float(p.sk or 0)
+            )
             removal_rate, ppk_rate = _penalty_rates(games_before, ra)
             penalty = (p.removals or 0) * removal_rate + (ppk_rate if p.ppk else 0.0)
             r_new = ra + weight * (k * (sa - e * M) / M - penalty)

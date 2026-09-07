@@ -137,7 +137,10 @@ def create_game(
     except GameValidationError as exc:
         db.rollback()
         raise HTTPException(422, exc.message) from exc
-    db.refresh(game)
+    # Номер игры -- её место в хронологии, а не порядок внесения: игра,
+    # внесённая задним числом, встаёт между уже сыгранными и сдвигает
+    # последующие. См. game_service.resequence_game_ids.
+    game = game_service.resequence_and_reload(db, game_ids=[game.id])[0]
     return _game_to_out(game)
 
 
@@ -180,7 +183,9 @@ def update_game(request: Request, game_id: int, data: GameUpdate, db: Session = 
     except GameValidationError as exc:
         db.rollback()
         raise HTTPException(422, exc.message) from exc
-    db.refresh(game)
+    # Дату игры правят прямо здесь, а вместе с датой меняется и её место в
+    # нумерации.
+    game = game_service.resequence_and_reload(db, game_ids=[game.id])[0]
     return _game_to_out(game)
 
 
@@ -192,6 +197,9 @@ def delete_game(request: Request, game_id: int, db: Session = Depends(get_db)) -
         raise HTTPException(404, "Игра не найдена")
     game_service.delete_game(db, game=game)
     db.commit()
+    # Удаление не оставляет дыру в нумерации: все игры после удалённой
+    # сдвигаются на номер назад.
+    game_service.resequence_and_reload(db, game_ids=[])
     return {"ok": True}
 
 
@@ -273,6 +281,8 @@ def delete_tournament(request: Request, tournament_id: int, db: Session = Depend
     except TournamentValidationError as exc:
         db.rollback()
         raise HTTPException(422, exc.message) from exc
+    # Вместе с турниром удаляются его неоценённые слоты -- нумерацию сжимаем.
+    game_service.resequence_and_reload(db, game_ids=[])
     return {"ok": True}
 
 
@@ -302,8 +312,7 @@ def add_flat_tournament_games(
     tournament = _get_tournament_or_404(db, tournament_id)
     games = tournament_service.add_tournament_games(db, tournament=tournament, count=data.count, created_by=actor.id)
     db.commit()
-    for g in games:
-        db.refresh(g)
+    games = game_service.resequence_and_reload(db, game_ids=[g.id for g in games])
     return [TournamentStageGameOut.model_validate(g) for g in games]
 
 
@@ -419,6 +428,8 @@ def delete_tournament_stage(request: Request, tournament_id: int, stage_id: int,
     except TournamentValidationError as exc:
         db.rollback()
         raise HTTPException(422, exc.message) from exc
+    # То же, что и при удалении турнира: этап уносит с собой пустые слоты.
+    game_service.resequence_and_reload(db, game_ids=[])
     return {"ok": True}
 
 
@@ -457,8 +468,7 @@ def add_stage_games(
     stage = _get_stage_or_404(db, tournament_id, stage_id)
     games = tournament_service.add_stage_games(db, stage=stage, count=data.count, created_by=actor.id)
     db.commit()
-    for g in games:
-        db.refresh(g)
+    games = game_service.resequence_and_reload(db, game_ids=[g.id for g in games])
     return [TournamentStageGameOut.model_validate(g) for g in games]
 
 

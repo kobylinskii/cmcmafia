@@ -139,8 +139,12 @@ def test_first_rated_game_roster_is_editable(admin):
     ids = make_players(client, headers, 12)
     _, _, games = _tournament_with_stage(client, headers)
 
-    assert _rate(client, headers, games[0]["id"], ids[:10]).status_code == 200
-    assert _rate(client, headers, games[0]["id"], ids[:9] + [ids[10]]).status_code == 200
+    first = _rate(client, headers, games[0]["id"], ids[:10])
+    assert first.status_code == 200
+    # Оценка задаёт игре настоящую дату вместо плейсхолдера по турниру, а
+    # вместе с датой меняется её место в нумерации -- новый номер приезжает в
+    # ответе (см. game_service.resequence_game_ids).
+    assert _rate(client, headers, first.json()["id"], ids[:9] + [ids[10]]).status_code == 200
 
 
 def test_roster_change_is_refused_but_offers_an_override(admin):

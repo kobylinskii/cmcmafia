@@ -145,7 +145,10 @@ function revalidatePublicPages(path: string, init: RequestInit, res: Response): 
   if (method === "GET" || method === "HEAD") return;
   if (!res.ok) return;
   if (!path.startsWith("/api/admin/")) return;
-  void fetch("/api/revalidate", { method: "POST", credentials: "include" }).catch(() => {});
+  // Путь без префикса /api/ -- он зарезервирован под бэкенд, см. комментарий
+  // в app/revalidate/route.ts. Ответ намеренно не проверяется: сброс кеша не
+  // должен ни задерживать переход после сохранения, ни ронять его.
+  void fetch("/revalidate", { method: "POST", credentials: "include" }).catch(() => {});
 }
 
 export function mediaUrl(path: string | null | undefined): string | null {

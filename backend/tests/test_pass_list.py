@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 
 from app.services.pass_list_service import week_window
 from app.timeutil import CLUB_TZ
-from tests.conftest import BOT_HEADERS, make_bot_admin
+from tests.conftest import BOT_HEADERS, make_bot_admin, make_session
 
 ADMIN_TG = 9100
 
@@ -54,19 +54,8 @@ def _register_bot_player(client, *, telegram_id: int, nickname: str, affiliation
     return resp.json()
 
 
-def _create_session(client, *, starts_at: datetime, game_type: str = "funky") -> int:
-    resp = client.post(
-        "/api/bot/admin/sessions",
-        headers=BOT_HEADERS,
-        params={"telegram_id": ADMIN_TG},
-        json={
-            "starts_at": starts_at.isoformat(),
-            "location": "ВМК МГУ",
-            "game_type": game_type,
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    return resp.json()["id"]
+def _create_session(client, headers, *, starts_at: datetime, game_type: str = "funky") -> int:
+    return make_session(client, headers, starts_at=starts_at.isoformat(), game_type=game_type)
 
 
 def _register(client, *, game_id: int, telegram_id: int, role_kind: str = "player") -> None:
@@ -123,8 +112,8 @@ def test_only_people_who_need_a_pass_and_only_this_week(admin):
         full_name="Кузнецов Кузьма Кузьмич",
     )
 
-    this_week = _create_session(client, starts_at=datetime.now(CLUB_TZ) + timedelta(hours=2))
-    next_week = _create_session(client, starts_at=week_end + timedelta(hours=2))
+    this_week = _create_session(client, headers, starts_at=datetime.now(CLUB_TZ) + timedelta(hours=2))
+    next_week = _create_session(client, headers, starts_at=week_end + timedelta(hours=2))
     for telegram_id in (9001, 9002, 9003):
         _register(client, game_id=this_week, telegram_id=telegram_id)
     _register(client, game_id=next_week, telegram_id=9004)
@@ -152,7 +141,7 @@ def test_staff_reserve_and_unconfirmed_all_need_a_pass(admin):
             affiliation="outside_need_pass", full_name=full_name,
         )
 
-    game_id = _create_session(client, starts_at=datetime.now(CLUB_TZ) + timedelta(hours=3))
+    game_id = _create_session(client, headers, starts_at=datetime.now(CLUB_TZ) + timedelta(hours=3))
     _register(client, game_id=game_id, telegram_id=9011, role_kind="staff")
     _register(client, game_id=game_id, telegram_id=9013, role_kind="player")
     reserve = client.post(

@@ -199,6 +199,44 @@ def make_bot_admin(telegram_id: int, *, nickname: str, slug: str) -> int:
         db.close()
 
 
+def make_sessions(
+    client: TestClient,
+    headers: dict,
+    *,
+    starts_at: str,
+    location: str = "ВМК МГУ",
+    game_type: str = "funky",
+    needs_rating: bool = True,
+    count: int = 1,
+    step_minutes: int = 60,
+) -> list[dict]:
+    """Планирует слоты через ту же ручку, что и админка сайта.
+
+    До переноса планировщика тесты заводили сессии бот-ручкой
+    `/api/bot/admin/sessions`; её больше нет -- расписанием управляет
+    сайт-админ (см. app/routers/admin_schedule.py).
+    """
+    resp = client.post(
+        "/api/admin/schedule/plan",
+        json={
+            "starts_at": starts_at,
+            "count": count,
+            "step_minutes": step_minutes,
+            "location": location,
+            "game_type": game_type,
+            "needs_rating": needs_rating,
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def make_session(client: TestClient, headers: dict, **kwargs) -> int:
+    """Один слот; возвращает его id."""
+    return make_sessions(client, headers, count=1, **kwargs)[0]["id"]
+
+
 _UNSET = object()
 
 
@@ -212,6 +250,17 @@ def set_game_time(game_id: int, *, starts_at=_UNSET, registration_until=_UNSET) 
             game.starts_at = starts_at
         if registration_until is not _UNSET:
             game.registration_until = registration_until
+        db.commit()
+    finally:
+        db.close()
+
+
+def set_game_max_players(game_id: int, max_players: int) -> None:
+    """Мест за столом всегда десять, и планировщик другого числа не предлагает.
+    Тестам резерва нужен стол поменьше -- правим напрямую в БД."""
+    db = SessionLocal()
+    try:
+        db.get(models.Game, game_id).max_players = max_players
         db.commit()
     finally:
         db.close()

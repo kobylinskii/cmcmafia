@@ -103,6 +103,9 @@ class SessionOut(BaseModel):
     location: str | None
     game_type: str
     status: str
+    # Будет ли игра оцениваться. Бот этим полем не пользуется -- оно нужно
+    # планировщику на сайте, но представление сессии в проекте одно.
+    needs_rating: bool
     registration_until: datetime | None
     is_open: bool
     hosts: int
@@ -110,28 +113,6 @@ class SessionOut(BaseModel):
     players: int
     max_players: int
     reserves: int
-
-
-class SessionCreateIn(BaseModel):
-    starts_at: datetime
-    location: str = Field(min_length=1, max_length=200)
-    game_type: str = "funky"
-    registration_until: datetime | None = None
-    max_players: int = Field(default=10, ge=2, le=20)
-
-    @field_validator("game_type")
-    @classmethod
-    def validate_game_type(cls, v: str) -> str:
-        if v not in GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {GAME_TYPES}")
-        return v
-
-
-class SessionUpdateIn(BaseModel):
-    starts_at: datetime | None = None
-    location: str | None = Field(default=None, max_length=200)
-    game_type: str | None = None
-    registration_until: datetime | None = None
 
 
 class RegisterIn(BaseModel):
@@ -173,29 +154,6 @@ class BotAdminGrantIn(BaseModel):
     username: str | None = None
 
 
-class BulkSessionCreateIn(BaseModel):
-    starts_at_list: list[datetime] = Field(min_length=1, max_length=48)
-    location: str = Field(min_length=1, max_length=200)
-    game_type: str
-
-    @field_validator("game_type")
-    @classmethod
-    def validate_game_type(cls, v: str) -> str:
-        if v not in GAME_TYPES:
-            raise ValueError(f"game_type должен быть одним из {GAME_TYPES}")
-        return v
-
-
-class ConflictCheckIn(BaseModel):
-    starts_at_list: list[datetime]
-    exclude_session_ids: list[int] = Field(default_factory=list)
-
-
-class DayCardOut(BaseModel):
-    day: str
-    types: list[str]
-
-
 class RosterMemberOut(BaseModel):
     nickname: str
     telegram_id: int | None
@@ -233,6 +191,12 @@ class BroadcastPlayerOut(BaseModel):
 
     telegram_id: int
     nickname: str
+
+
+class BroadcastAudienceOut(BaseModel):
+    """Кому уйдёт произвольное сообщение админа."""
+
+    recipients: list[BroadcastPlayerOut]
 
 
 class WeeklyBroadcastOut(BaseModel):

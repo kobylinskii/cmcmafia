@@ -353,6 +353,11 @@ class Game(Base):
     max_players: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=10)
 
     status: Mapped[str] = mapped_column(String(30), nullable=False, default=GameStatus.scheduled.value)
+    # Будет ли у игры результат. False -- игра существует только ради записи в
+    # боте (сбор состава на «просто поиграть»): она не просит подтверждения
+    # проведения, не попадает в «Ждут оценки» и уходит из расписания сама,
+    # как только её время прошло. У турнирных слотов всегда True.
+    needs_rating: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default=text("true"))
     result: Mapped[str | None] = mapped_column(String(10))
     results_reminder_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -471,7 +476,7 @@ class Registration(Base):
     __tablename__ = "registrations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
     role: Mapped[str] = mapped_column(String(10), nullable=False)
     available_from: Mapped[str | None] = mapped_column(Text)
@@ -493,7 +498,7 @@ class Reserve(Base):
     __tablename__ = "reserves"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -507,7 +512,7 @@ class GameParticipant(Base):
     __tablename__ = "game_participants"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="RESTRICT"), nullable=False)
     seat_number: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     role: Mapped[str] = mapped_column(String(10), nullable=False)
@@ -569,7 +574,7 @@ class PlayerRatingHistory(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     player_id: Mapped[int] = mapped_column(ForeignKey("players.id", ondelete="CASCADE"), nullable=False)
-    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"), nullable=False)
+    game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE", onupdate="CASCADE"), nullable=False)
     rating_before: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False)
     rating_after: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False)
     delta: Mapped[float] = mapped_column(Numeric(7, 2), nullable=False)

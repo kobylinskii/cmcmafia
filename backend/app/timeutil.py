@@ -17,3 +17,8 @@ CLUB_TZ = ZoneInfo("Europe/Moscow")
 
 def club_day(dt: datetime) -> str:
     return dt.astimezone(CLUB_TZ).strftime("%d.%m.%Y")
+
+
+def club_day_time(dt: datetime) -> str:
+    """«ДД.ММ.ГГГГ ЧЧ:ММ» по клубному времени -- для текстов ошибок."""
+    return dt.astimezone(CLUB_TZ).strftime("%d.%m.%Y %H:%M")

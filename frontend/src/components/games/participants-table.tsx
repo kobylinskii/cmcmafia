@@ -19,7 +19,7 @@ export function ParticipantsTable({ participants }: { participants: ParticipantO
 
   return (
     <div className="overflow-x-auto rounded-card border border-ink-800">
-      <table aria-label="Участники игры, роли и баллы" className="w-full min-w-[960px] border-collapse">
+      <table aria-label="Участники игры, роли и баллы" className="w-full min-w-[1040px] border-collapse">
         <thead>
           <tr className="border-b border-ink-800 bg-ink-900">
             <th scope="col" className={thLeft} rowSpan={2}>
@@ -45,6 +45,9 @@ export function ParticipantsTable({ participants }: { participants: ParticipantO
             </th>
             <th scope="col" className={thCenter} rowSpan={2}>
               Удаления
+            </th>
+            <th scope="col" className={thCenter} rowSpan={2}>
+              ППК
             </th>
             <th scope="col" className={`${thCenter} border-l border-ink-800`} rowSpan={2}>
               ЖК
@@ -88,6 +91,13 @@ export function ParticipantsTable({ participants }: { participants: ParticipantO
                 {p.info ? INFO_LABELS[p.info] : "—"}
               </td>
               <td className={tdCenter}>{p.removals ?? "—"}</td>
+              {/* ППК стоит рядом с остальными штрафами, потому что это штраф и
+                  есть: минус SCORE_PENALTY_PPK в колонке «Итог»
+                  (см. participantScore). Без этой колонки итог у нарушителя
+                  просто не сходился с суммой остальных ячеек строки. */}
+              <td className={tdCenter}>
+                {p.ppk ? <span className="font-sans font-medium text-brand-300">да</span> : "—"}
+              </td>
               <td className={`${tdCenter} border-l border-ink-800`}>{formatDash(p.zk)}</td>
               <td className={tdCenter}>{formatDash(p.sk)}</td>
               <td className={`${tdCenter} border-l border-ink-800 font-semibold text-ink-50`}>

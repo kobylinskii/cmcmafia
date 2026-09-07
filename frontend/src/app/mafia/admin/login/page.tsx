@@ -32,7 +32,7 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-ink-950 px-4">
+    <div className="admin-ui flex min-h-screen items-center justify-center bg-ink-950 px-4">
       <div className="w-full max-w-sm">
         <div className="flex flex-col items-center gap-3 text-center">
           <LogoMark size={80} priority />

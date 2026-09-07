@@ -55,13 +55,6 @@ def _extract_message(response: httpx.Response) -> str:
     return str(body)
 
 
-def to_api_datetime(day_time: str) -> str:
-    """'ДД.ММ.ГГГГ ЧЧ:ММ' (московское время) -> ISO-строка с таймзоной для API."""
-    naive = datetime.strptime(day_time, "%d.%m.%Y %H:%M")
-    aware = naive.replace(tzinfo=LOCAL_TZ)
-    return aware.isoformat()
-
-
 def from_api_datetime(value: str) -> datetime:
     """ISO-строка от API -> datetime в московском времени (для форматирования)."""
     dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -262,93 +255,21 @@ class ApiClient:
         )
         return resp.json()
 
-    # ------------------------------------------------------------- sessions (admin)
-    async def admin_create_sessions_bulk(
-        self, tg_id: int, starts_at_list: list[str], location: str, game_type: str
-    ) -> list[int]:
-        resp = await self._request(
-            "POST",
-            f"/api/bot/admin/sessions/bulk?telegram_id={tg_id}",
-            json={
-                "starts_at_list": [to_api_datetime(s) for s in starts_at_list],
-                "location": location,
-                "game_type": game_type,
-            },
-        )
-        return resp.json()
-
-    async def admin_check_conflicts(
-        self, tg_id: int, starts_at_list: list[str], exclude_session_ids: list[int] | None = None
-    ) -> list[str]:
-        resp = await self._request(
-            "POST",
-            f"/api/bot/admin/sessions/check-conflicts?telegram_id={tg_id}",
-            json={
-                "starts_at_list": [to_api_datetime(s) for s in starts_at_list],
-                "exclude_session_ids": exclude_session_ids or [],
-            },
-        )
-        return [format_day_time(v) for v in resp.json()["conflicts"]]
-
-    async def admin_day_cards(self, tg_id: int, game_type: str | None = None) -> list[dict]:
-        params = {"telegram_id": tg_id}
-        if game_type:
-            params["game_type"] = game_type
-        resp = await self._request("GET", "/api/bot/admin/sessions/day-cards", params=params)
-        return resp.json()
-
-    async def admin_sessions_by_day(self, tg_id: int, day: str) -> list[dict]:
-        resp = await self._request(
-            "GET", "/api/bot/admin/sessions/by-day", params={"telegram_id": tg_id, "day": day}
-        )
-        return resp.json()
-
-    async def admin_update_session(self, tg_id: int, session_id: int, **fields: Any) -> dict:
-        if "starts_at" in fields and fields["starts_at"]:
-            fields["starts_at"] = to_api_datetime(fields["starts_at"])
-        resp = await self._request(
-            "PUT", f"/api/bot/admin/sessions/{session_id}?telegram_id={tg_id}", json=fields
-        )
-        return resp.json()
-
-    async def admin_delete_session(self, tg_id: int, session_id: int) -> bool:
-        try:
-            await self._request("DELETE", f"/api/bot/admin/sessions/{session_id}", params={"telegram_id": tg_id})
-        except NotFoundError:
-            return False
-        return True
-
-    async def admin_sessions_pending_review(self, tg_id: int) -> list[dict]:
-        resp = await self._request(
-            "GET", "/api/bot/admin/sessions/pending-review", params={"telegram_id": tg_id}
-        )
-        return resp.json()
-
-    async def admin_sessions_awaiting_confirmation(self, tg_id: int) -> list[dict]:
-        """Прошедшие игры, про которые админ ещё не сказал, состоялись ли они."""
-        resp = await self._request(
-            "GET", "/api/bot/admin/sessions/awaiting-confirmation", params={"telegram_id": tg_id}
-        )
-        return resp.json()
-
-    async def admin_mark_session_played(self, tg_id: int, session_id: int) -> dict:
-        """«Игра проведена»: только после этого игра попадает в «Ждут оценки»
-        на сайте -- фоновой задачи, делавшей это самой, больше нет."""
-        resp = await self._request(
-            "POST", f"/api/bot/admin/sessions/{session_id}/played", params={"telegram_id": tg_id}
-        )
-        return resp.json()
-
-    async def admin_recent_locations(self, tg_id: int) -> list[str]:
-        resp = await self._request(
-            "GET", "/api/bot/admin/sessions/locations", params={"telegram_id": tg_id}
-        )
-        return resp.json()
-
+    # -------------------------------------------------------------- рассылки
     async def admin_weekly_broadcast(self, tg_id: int, days: int = 7) -> dict:
         """Игры ближайшей недели и список тех, кому анонс ещё актуален."""
         resp = await self._request(
             "GET", "/api/bot/admin/broadcast/weekly", params={"telegram_id": tg_id, "days": days}
+        )
+        return resp.json()
+
+    async def admin_broadcast_audience(self, tg_id: int) -> dict:
+        """Получатели произвольного сообщения: весь клуб, кроме отклонённых.
+
+        Отдельно от анонса: там записавшиеся вычитаются, здесь -- нет.
+        """
+        resp = await self._request(
+            "GET", "/api/bot/admin/broadcast/audience", params={"telegram_id": tg_id}
         )
         return resp.json()
 
