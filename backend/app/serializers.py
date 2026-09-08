@@ -192,7 +192,6 @@ def awards_to_out(awards: list, *, with_candidates: bool = False) -> list[Tourna
             nomination=award.nomination.key,
             title=award.nomination.title,
             formula=award.nomination.formula,
-            stats_label=award.nomination.stats_label,
             winner=award_candidate_to_out(award.winner) if award.winner else None,
             manual=award.manual,
             candidates=(

@@ -23,7 +23,10 @@ export function TournamentAwardsSection({
   if (awards.length === 0) return null;
 
   const places = awards.filter((a) => PLACE_NOMINATIONS.includes(a.nomination));
-  const nominations = awards.filter((a) => !PLACE_NOMINATIONS.includes(a.nomination));
+  const mvp = awards.find((a) => a.nomination === "mvp") ?? null;
+  const roles = awards.filter(
+    (a) => !PLACE_NOMINATIONS.includes(a.nomination) && a.nomination !== "mvp"
+  );
   const scope = tableName ? `финального стола («${tableName}»)` : "турнира";
 
   return (
@@ -31,10 +34,7 @@ export function TournamentAwardsSection({
       {places.some((a) => a.winner) && (
         <section className="mt-10">
           <h2 className="font-display text-xl text-ink-50">Призёры</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            Топ-3 по сумме баллов {scope}. При равенстве баллов выше тот, у кого больше баллов от
-            судей, затем — побед, затем — побед на активных ролях.
-          </p>
+          <p className="mt-1 text-sm text-ink-500">Топ-3 по сумме баллов {scope}.</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-3">
             {places.map((award, i) => (
               <AwardCard key={award.nomination} award={award} accent={i === 0} />
@@ -43,16 +43,19 @@ export function TournamentAwardsSection({
         </section>
       )}
 
-      {nominations.some((a) => a.winner) && (
+      {(mvp?.winner || roles.some((a) => a.winner)) && (
         <section className="mt-10">
           <h2 className="font-display text-xl text-ink-50">Номинации</h2>
-          <p className="mt-1 text-sm text-ink-500">
-            По играм {scope}: средний балл за игру на роли.
-          </p>
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {nominations.map((award) => (
-              <AwardCard key={award.nomination} award={award} />
-            ))}
+          <p className="mt-1 text-sm text-ink-500">По играм {scope}.</p>
+          {/* MVP -- главная номинация: во всю ширину и со своей статистикой,
+              у ролевых карточек она короткая. */}
+          <div className="mt-4 flex flex-col gap-3">
+            {mvp?.winner && <AwardCard award={mvp} accent wide />}
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {roles.map((award) => (
+                <AwardCard key={award.nomination} award={award} />
+              ))}
+            </div>
           </div>
         </section>
       )}
@@ -60,15 +63,24 @@ export function TournamentAwardsSection({
   );
 }
 
-// У чёрных ролей в зачёт идут только судейские -- строку ЛХ в их карточке
-// показывать нечем (см. Nomination.with_lh в awards_service).
-const WITHOUT_LH = ["best_mafia", "best_don"];
-
-function AwardCard({ award, accent = false }: { award: TournamentAwardOut; accent?: boolean }) {
+function AwardCard({
+  award,
+  accent = false,
+  wide = false,
+}: {
+  award: TournamentAwardOut;
+  accent?: boolean;
+  /** Карточка во всю ширину секции -- статистика раскладывается в строку. */
+  wide?: boolean;
+}) {
   const { winner } = award;
   if (!winner) return null;
 
   const isPlace = PLACE_NOMINATIONS.includes(award.nomination);
+  const isMvp = award.nomination === "mvp";
+  // У ролевых номинаций строка статистики одна -- в две колонки подпись
+  // «Игр в зачёте» переносилась бы посреди узкой карточки.
+  const full = isPlace || isMvp;
   const Icon = award.nomination === "first_place" ? Crown : isPlace ? Medal : Star;
 
   return (
@@ -92,24 +104,30 @@ function AwardCard({ award, accent = false }: { award: TournamentAwardOut; accen
 
       <p className="mt-3 flex items-baseline gap-2">
         <span className="font-mono text-2xl text-ink-50">{formatDash(winner.score)}</span>
+        {/* Подпись, а не «N баллов за игру»: число дробное, и согласовывать с
+            ним существительное пришлось бы по падежу на каждое значение. */}
         <span className="text-xs text-ink-500">
-          {isPlace ? "сумма баллов" : "балл за игру"}
+          {isPlace ? "сумма баллов" : "средний доп. балл"}
         </span>
       </p>
 
-      <dl className="mt-4 grid grid-cols-2 gap-x-4 gap-y-1.5 border-t border-ink-800 pt-3 text-sm">
+      <dl
+        className={`mt-4 grid gap-x-4 gap-y-1.5 border-t border-ink-800 pt-3 text-sm ${
+          wide ? "grid-cols-2 sm:grid-cols-4" : full ? "grid-cols-2" : "grid-cols-1"
+        }`}
+      >
         <Stat label={isPlace ? "Игр на столе" : "Игр в зачёте"} value={winner.games_count} />
-        <Stat label="Побед" value={winner.wins} />
-        <Stat label="Поражений" value={winner.losses} />
-        <Stat label="% побед" value={formatPercent(winner.win_rate)} />
-        <Stat label="От судей" value={formatDash(winner.points_judge)} />
-        {!WITHOUT_LH.includes(award.nomination) && (
-          <Stat label="ЛХ" value={formatDash(winner.lh_points)} />
+        {full && (
+          <>
+            <Stat label="Побед" value={winner.wins} />
+            <Stat label="Поражений" value={winner.losses} />
+            <Stat label="% побед" value={formatPercent(winner.win_rate)} />
+            <Stat label="От судей" value={formatDash(winner.points_judge)} />
+            <Stat label="ЛХ" value={formatDash(winner.lh_points)} />
+            {isMvp && <Stat label="Итог в таблице" value={formatDash(winner.total_score)} />}
+          </>
         )}
-        {!isPlace && <Stat label="Итог в таблице" value={formatDash(winner.total_score)} />}
       </dl>
-
-      <p className="mt-3 text-xs leading-relaxed text-ink-600">{award.formula}</p>
     </article>
   );
 }

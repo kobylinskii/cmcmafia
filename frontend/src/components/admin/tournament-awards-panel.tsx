@@ -9,6 +9,11 @@ import { useResource } from "@/lib/use-resource";
 import { fieldDense } from "@/lib/ui";
 import { formatDash, formatPercent } from "@/lib/format";
 import type { TournamentAwardOut, TournamentAwardsOut } from "@/types/api";
+import { PLACE_NOMINATIONS } from "@/types/api";
+
+// У мест турнира зачётная величина -- сумма баллов таблицы, у остальных
+// номинаций -- средний дополнительный балл за игру (см. awards_service).
+const isPlace = (nomination: string) => PLACE_NOMINATIONS.includes(nomination);
 
 /**
  * Предпросмотр номинаций: посчитанные победители, статистика каждого и
@@ -150,9 +155,13 @@ function AwardRow({
       {award.winner ? (
         <div className="mt-2 flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-ink-500">
           <span className="font-display text-base text-ink-100">{award.winner.nickname}</span>
-          <span className="font-mono text-ink-200">{formatDash(award.winner.score)}</span>
           <span>
-            игр: <span className="font-mono text-ink-300">{award.winner.games_count}</span>
+            {isPlace(award.nomination) ? "сумма баллов" : "средний доп. балл"}:{" "}
+            <span className="font-mono text-ink-200">{formatDash(award.winner.score)}</span>
+          </span>
+          <span>
+            игр в зачёте:{" "}
+            <span className="font-mono text-ink-300">{award.winner.games_count}</span>
           </span>
           <span>
             побед: <span className="font-mono text-ink-300">{award.winner.wins}</span>

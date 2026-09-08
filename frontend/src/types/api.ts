@@ -432,7 +432,6 @@ export interface TournamentAwardOut {
   nomination: string;
   title: string;
   formula: string;
-  stats_label: string;
   winner: AwardCandidateOut | null;
   /** Победителя выбрал админ вручную, а не расчёт. */
   manual: boolean;

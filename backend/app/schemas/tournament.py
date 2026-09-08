@@ -166,7 +166,6 @@ class TournamentAwardOut(BaseModel):
     nomination: str
     title: str
     formula: str
-    stats_label: str
     winner: AwardCandidateOut | None
     # Победителя выбрал админ вручную, а не расчёт.
     manual: bool
