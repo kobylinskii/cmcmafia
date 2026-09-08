@@ -30,7 +30,9 @@ export default async function RatingPage({ searchParams }: PageProps<"/mafia/rat
   // считается сортировкой по умолчанию.
   const rawSort = firstParam(params, "sort");
   const sort: RatingSort =
-    rawSort === "win_rate" || rawSort === "avg_bonus" ? rawSort : "rating";
+    rawSort === "games_count" || rawSort === "win_rate" || rawSort === "avg_bonus"
+      ? rawSort
+      : "rating";
 
   const [rating, formula] = await Promise.all([
     serverGet<RatingTableOut>("/api/rating", { q, limit, offset, sort }),

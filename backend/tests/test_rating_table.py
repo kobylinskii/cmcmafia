@@ -135,8 +135,8 @@ def test_search_still_hides_an_unconfirmed_newcomer(admin):
 
 
 def test_sort_changes_order_but_not_the_rank(admin):
-    """Сортировка по проценту побед и по среднему доп. баллу меняет ПОРЯДОК
-    строк, а место в колонке «#» остаётся клубным -- местом по рейтингу."""
+    """Сортировка по числу игр, проценту побед и среднему доп. баллу меняет
+    ПОРЯДОК строк, а место в колонке «#» остаётся клубным -- по рейтингу."""
     client, headers = admin
     ids = make_players(client, headers, 10)
     tid = make_tournament(client, headers)
@@ -164,7 +164,12 @@ def test_sort_changes_order_but_not_the_rank(admin):
     by_bonus = _rating(client, limit=50, sort="avg_bonus")["items"]
     assert by_bonus[0]["slug"] == "player10"
 
+    by_games = _rating(client, limit=50, sort="games_count")["items"]
+    assert [it["games_count"] for it in by_games] == sorted(
+        (it["games_count"] for it in by_games), reverse=True
+    )
+
     # Порядок поменялся, места -- нет.
     assert [it["slug"] for it in by_win_rate] != [it["slug"] for it in by_rating]
-    for row in by_win_rate + by_bonus:
+    for row in by_win_rate + by_bonus + by_games:
         assert row["rank"] == ranks[row["slug"]]

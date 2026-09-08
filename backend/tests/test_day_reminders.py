@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.database import SessionLocal
+from app.services import day_reminder_service
 from tests.conftest import BOT_HEADERS, make_session, register_bot_player, set_game_time
 
 
@@ -53,22 +55,35 @@ def test_reminder_appears_only_inside_the_three_hour_window(admin):
 
 
 def test_one_reminder_per_day_covers_all_its_games(admin):
-    """Записанный на две игры одного дня получает одно напоминание, а не два."""
+    """Записанный на две игры одного дня получает одно напоминание, а не два.
+
+    Единственный тест файла, который зовёт сервис напрямую с фиксированным
+    `now`, а не ручку бота. Игры тут раскладываются по клубным дням -- то есть
+    по МОСКОВСКОЙ дате, -- и пара «через два часа / через четыре» при вечернем
+    прогоне переезжала через полночь: игры оказывались в разных днях, и тест
+    падал в зависимости от часа запуска, а не от кода.
+    """
     client, headers = admin
     register_bot_player(client, 6002, "Тень")
+    # 15:00 и 18:00 UTC -- это 18:00 и 21:00 по Москве, один клубный день.
     first = make_session(client, headers, starts_at="2030-06-01T15:00:00Z")
     second = make_session(client, headers, starts_at="2030-06-01T18:00:00Z")
     _sign_up(client, first, 6002)
     _sign_up(client, second, 6002)
 
-    set_game_time(first, starts_at=_in(2))
-    set_game_time(second, starts_at=_in(4))
+    db = SessionLocal()
+    try:
+        # За два часа до первой игры -- внутри окна напоминания.
+        reminders = day_reminder_service.pending_reminders(
+            db, now=datetime(2030, 6, 1, 13, 0, tzinfo=timezone.utc)
+        )
+    finally:
+        db.close()
 
-    queue = _queue(client)
-    assert len(queue) == 1
-    assert queue[0]["marker_game_id"] == first
-    assert len(queue[0]["games"]) == 2
-    assert queue[0]["recipients"] == [6002]
+    assert len(reminders) == 1
+    assert reminders[0].marker_game_id == first
+    assert len(reminders[0].games) == 2
+    assert [player.telegram_id for player in reminders[0].recipients] == [6002]
 
 
 def test_reserve_is_reminded_too(admin):

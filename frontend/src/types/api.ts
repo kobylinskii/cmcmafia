@@ -146,7 +146,7 @@ export interface SchedulePlanPreviewOut {
 
 /** Чем можно отсортировать таблицу рейтинга (параметр sort у /api/rating).
  * Зеркалит stats_service.RATING_SORTS. */
-export type RatingSort = "rating" | "win_rate" | "avg_bonus";
+export type RatingSort = "rating" | "games_count" | "win_rate" | "avg_bonus";
 
 export interface RatingRowOut {
   /** null у найденного поиском игрока без единой сыгранной игры: места в

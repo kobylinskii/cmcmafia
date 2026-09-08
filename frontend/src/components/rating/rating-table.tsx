@@ -38,7 +38,7 @@ export function RatingTable({
             <th scope="col" className="px-4 py-3 w-14">#</th>
             <th scope="col" className="px-4 py-3">Игрок</th>
             <SortableHeader label="Рейтинг" column="rating" sort={sort} sortUrl={sortUrl} />
-            <th scope="col" className="px-4 py-3 text-right">Игр</th>
+            <SortableHeader label="Игр" column="games_count" sort={sort} sortUrl={sortUrl} />
             <SortableHeader label="% побед" column="win_rate" sort={sort} sortUrl={sortUrl} />
             <SortableHeader label="Средний доп. балл" column="avg_bonus" sort={sort} sortUrl={sortUrl} />
           </tr>

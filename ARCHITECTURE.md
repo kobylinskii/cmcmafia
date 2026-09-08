@@ -490,7 +490,7 @@ Telegram) — очередь не трогается: адресат может 
 # ================= PUBLIC (app/routers/public.py) — читает кто угодно, только rate limit =================
 GET  /api/games                    ?limit=&offset=&date_from=&date_to=&game_type=&player_slug=&tournament_slug=
 GET  /api/games/{id}
-GET  /api/rating                   ?q=&limit=&offset=&sort=rating|win_rate|avg_bonus
+GET  /api/rating                   ?q=&limit=&offset=&sort=rating|games_count|win_rate|avg_bonus
                                    — без q: только те, кто уже играл. С q -- поиск человека
                                      по нику, в том числе не сыгравшего ни одной игры.
                                      sort меняет ТОЛЬКО порядок строк: место в колонке «#»

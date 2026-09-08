@@ -68,7 +68,7 @@ def get_rating(
     offset: int = Query(default=0, ge=0),
     # Порядок строк. Место в колонке «#» от него не зависит -- это всегда
     # место в клубе по рейтингу (см. stats_service.rating_table).
-    sort: Literal["rating", "win_rate", "avg_bonus"] = "rating",
+    sort: Literal["rating", "games_count", "win_rate", "avg_bonus"] = "rating",
     db: Session = Depends(get_db),
 ) -> RatingTableOut:
     rows, total = stats_service.rating_table(db, q=q, limit=limit, offset=offset, sort=sort)

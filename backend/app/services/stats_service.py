@@ -191,7 +191,7 @@ class RatingRow:
 
 # Чем можно отсортировать таблицу рейтинга. Ключи -- значения параметра sort
 # у GET /api/rating; «rating» это порядок по умолчанию, то есть по месту.
-RATING_SORTS = ("rating", "win_rate", "avg_bonus")
+RATING_SORTS = ("rating", "games_count", "win_rate", "avg_bonus")
 
 
 def rating_table(
@@ -269,6 +269,7 @@ def rating_table(
     # место в рейтинге», хотя рейтинг у него десятый.
     win_rate_expr = models.PlayerRating.wins * 1.0 / func.nullif(models.PlayerRating.games_count, 0)
     order_by = {
+        "games_count": nullslast(models.PlayerRating.games_count.desc()),
         "win_rate": nullslast(win_rate_expr.desc()),
         "avg_bonus": nullslast(avg_bonus_subq.c.avg_bonus.desc()),
     }.get(sort, nullslast(rank_subq.c.rank.asc()))
