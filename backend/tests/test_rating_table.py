@@ -173,3 +173,102 @@ def test_sort_changes_order_but_not_the_rank(admin):
     assert [it["slug"] for it in by_win_rate] != [it["slug"] for it in by_rating]
     for row in by_win_rate + by_bonus + by_games:
         assert row["rank"] == ranks[row["slug"]]
+
+
+def test_avg_bonus_is_the_same_number_in_the_table_and_on_the_player_page(admin) -> None:
+    """«Средний доп. балл» считается по одним и тем же играм с обеих сторон.
+
+    Обучающие игры в рейтинг не идут вовсе (rating_service.UNRATED_GAME_TYPES),
+    и таблица рейтинга их из этой колонки исключала, а страница игрока -- нет:
+    у одного игрока под одной подписью выходило 1.0 в таблице и 0.5 на его
+    собственной странице. Считаются только оценённые фановые и турнирные.
+    """
+    client, headers = admin
+    player_ids = make_players(client, headers, 10)
+    tournament_id = make_tournament(client, headers)
+
+    def roster(points_judge: float) -> list[dict]:
+        # Судейские получает только первый игрок -- за ним и следим.
+        return [
+            {
+                "player_id": player_ids[i - 1],
+                "seat_number": i,
+                "role": role,
+                "points_judge": points_judge if i == 1 else 0,
+            }
+            for i, role in enumerate(ROLES, start=1)
+        ]
+
+    def add_game(game_type: str, points_judge: float, starts_at: str) -> None:
+        resp = client.post(
+            "/api/admin/games",
+            json={
+                "starts_at": starts_at,
+                "game_type": game_type,
+                "result": "city_win",
+                "participants": roster(points_judge),
+            },
+            headers=headers,
+        )
+        assert resp.status_code == 200, resp.text
+
+    # Турнирная 1.0 и фановая 0.5 идут в зачёт, обучающая 0 -- нет. Считаются
+    # ОБА рейтинговых формата: если бы в зачёт шли только турнирные, среднее
+    # вышло бы 1.0, а если бы влезла обучающая -- 0.5.
+    make_tournament_game(
+        client, headers, tournament_id=tournament_id, participants=roster(1.0)
+    )
+    add_game("funky", 0.5, "2026-02-01T18:00:00Z")
+    add_game("training", 0, "2026-02-02T18:00:00Z")
+
+    table_row = client.get("/api/rating", params={"q": "Игрок1"}).json()["items"][0]
+    page_stats = client.get(f"/api/players/{table_row['slug']}").json()["stats"]
+
+    assert table_row["avg_bonus"] == page_stats["avg_bonus"] == 0.75
+    # Соседний «средний балл» на той же карточке считается по тому же набору
+    # игр -- иначе на одной странице стоят две средние величины по разным
+    # играм. Баллы за победу тут нулевые, так что средний балл равен доп.
+    assert page_stats["avg_score"] == 0.75
+    # Обучающая игра при этом из личной статистики не исчезает -- она просто
+    # не участвует в средних.
+    assert page_stats["total_games"] == 3
+    assert page_stats["rating_games_count"] == 2
+
+
+def test_avg_bonus_is_blank_for_a_player_with_only_training_games(admin) -> None:
+    """Игроку без единой зачётной игры доп. балл не считается вовсе.
+
+    Не ноль, а прочерк: ноль читался бы как «судьи не дали ни балла», хотя
+    игр, по которым его начисляют, у человека просто нет.
+    """
+    client, headers = admin
+    player_ids = make_players(client, headers, 10)
+    resp = client.post(
+        "/api/admin/games",
+        json={
+            "starts_at": "2026-03-01T18:00:00Z",
+            "game_type": "training",
+            "result": "city_win",
+            "participants": [
+                {
+                    "player_id": player_ids[i - 1],
+                    "seat_number": i,
+                    "role": role,
+                    "points_judge": 2.0 if i == 1 else 0,
+                }
+                for i, role in enumerate(ROLES, start=1)
+            ],
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+
+    # В самой таблице такого игрока нет (рейтинговых игр ноль) -- он находится
+    # поиском, и обе величины у него пустые.
+    table_row = client.get("/api/rating", params={"q": "Игрок1"}).json()["items"][0]
+    page_stats = client.get(f"/api/players/{table_row['slug']}").json()["stats"]
+
+    assert table_row["avg_bonus"] is None
+    assert page_stats["avg_bonus"] is None
+    assert page_stats["avg_score"] is None
+    assert page_stats["total_games"] == 1

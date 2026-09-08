@@ -11,6 +11,7 @@ Telegram есть только у него, см. ARCHITECTURE.md, раздел 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.ids import TelegramId, TelegramIdPath
 from app import models
 from app.database import get_db
 from app.deps import require_bot_admin_actor
@@ -36,7 +37,7 @@ router = APIRouter(
 @router.get("/broadcast/weekly", response_model=WeeklyBroadcastOut)
 @limiter.limit("30/minute")
 def weekly_broadcast(
-    request: Request, telegram_id: int, days: int = broadcast_service.DEFAULT_WINDOW_DAYS, db: Session = Depends(get_db)
+    request: Request, telegram_id: TelegramId, days: int = broadcast_service.DEFAULT_WINDOW_DAYS, db: Session = Depends(get_db)
 ) -> WeeklyBroadcastOut:
     """Что рассылать и кому. Сам текст собирает и отправляет бот (раздел 12)."""
     days = max(1, min(days, 31))
@@ -51,7 +52,7 @@ def weekly_broadcast(
 
 @router.get("/broadcast/audience", response_model=BroadcastAudienceOut)
 @limiter.limit("30/minute")
-def broadcast_audience(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> BroadcastAudienceOut:
+def broadcast_audience(request: Request, telegram_id: TelegramId, db: Session = Depends(get_db)) -> BroadcastAudienceOut:
     """Получатели произвольного сообщения от админа.
 
     В отличие от анонса, записавшиеся отсюда не вычитаются: объявление
@@ -65,7 +66,7 @@ def broadcast_audience(request: Request, telegram_id: int, db: Session = Depends
 
 @router.get("/players/by-username", response_model=PlayerLookupOut)
 @limiter.limit("30/minute")
-def lookup_by_username(request: Request, telegram_id: int, username: str, db: Session = Depends(get_db)) -> models.Player:
+def lookup_by_username(request: Request, telegram_id: TelegramId, username: str, db: Session = Depends(get_db)) -> models.Player:
     player = schedule_admin_service.find_player_by_username(db, username)
     if player is None:
         raise HTTPException(404, "Пользователь с таким @username не найден среди зарегистрированных")
@@ -74,7 +75,7 @@ def lookup_by_username(request: Request, telegram_id: int, username: str, db: Se
 
 @router.get("/players/by-phone", response_model=PlayerLookupOut)
 @limiter.limit("30/minute")
-def lookup_by_phone(request: Request, telegram_id: int, phone: str, db: Session = Depends(get_db)) -> models.Player:
+def lookup_by_phone(request: Request, telegram_id: TelegramId, phone: str, db: Session = Depends(get_db)) -> models.Player:
     player = schedule_admin_service.find_player_by_phone(db, phone)
     if player is None:
         raise HTTPException(404, "Пользователь с таким номером не найден среди зарегистрированных")
@@ -83,19 +84,19 @@ def lookup_by_phone(request: Request, telegram_id: int, phone: str, db: Session 
 
 @router.get("/admins", response_model=list[AdminInfoOut])
 @limiter.limit("30/minute")
-def list_admins(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> list[models.Player]:
+def list_admins(request: Request, telegram_id: TelegramId, db: Session = Depends(get_db)) -> list[models.Player]:
     return admin_grant.list_bot_admins(db)
 
 
 @router.get("/admins/pending", response_model=list[str])
 @limiter.limit("30/minute")
-def list_pending_admins(request: Request, telegram_id: int, db: Session = Depends(get_db)) -> list[str]:
+def list_pending_admins(request: Request, telegram_id: TelegramId, db: Session = Depends(get_db)) -> list[str]:
     return admin_grant.list_pending_admins(db)
 
 
 @router.post("/admins")
 @limiter.limit("30/minute")
-def add_admin(request: Request, telegram_id: int, data: BotAdminGrantIn, db: Session = Depends(get_db)) -> dict:
+def add_admin(request: Request, telegram_id: TelegramId, data: BotAdminGrantIn, db: Session = Depends(get_db)) -> dict:
     try:
         return admin_grant.grant_bot_admin(db, telegram_id=data.telegram_id, username=data.username)
     except ValueError as exc:
@@ -104,13 +105,13 @@ def add_admin(request: Request, telegram_id: int, data: BotAdminGrantIn, db: Ses
 
 @router.delete("/admins/by-telegram/{target_telegram_id}")
 @limiter.limit("30/minute")
-def remove_admin(request: Request, telegram_id: int, target_telegram_id: int, db: Session = Depends(get_db)) -> dict:
+def remove_admin(request: Request, telegram_id: TelegramId, target_telegram_id: TelegramIdPath, db: Session = Depends(get_db)) -> dict:
     removed = admin_grant.remove_bot_admin_by_telegram_id(db, telegram_id=target_telegram_id)
     return {"removed": removed}
 
 
 @router.delete("/admins/pending/{username}")
 @limiter.limit("30/minute")
-def remove_pending_admin(request: Request, telegram_id: int, username: str, db: Session = Depends(get_db)) -> dict:
+def remove_pending_admin(request: Request, telegram_id: TelegramId, username: str, db: Session = Depends(get_db)) -> dict:
     removed = admin_grant.remove_pending_by_username(db, username=username)
     return {"removed": removed}

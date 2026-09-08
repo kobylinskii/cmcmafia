@@ -82,6 +82,13 @@ def _score(value) -> float:
     return round(float(value), 2)
 
 
+# Форматы, по которым считаются СРЕДНИЕ величины игрока: обучающие игры в
+# рейтинг не входят вовсе (rating_service.UNRATED_GAME_TYPES), поэтому и в
+# «среднем балле» с «средним доп. баллом» им делать нечего -- иначе средние
+# считаются по большему числу игр, чем показывает соседний счётчик.
+_RATED_FORMAT_SQL = models.Game.game_type.notin_(rating_service.UNRATED_GAME_TYPES)
+
+
 BLACK_ROLES = ("mafia", "don")
 RED_ROLES = ("citizen", "sheriff")
 
@@ -632,8 +639,15 @@ def compute_player_stats(db: Session, player_id: int) -> PlayerStats:
             func.count()
             .filter(models.GameParticipant.info == "first_killed", models.GameParticipant.lh == 1.5)
             .label("lh_hits_3"),
-            func.avg(_SCORE_SQL).label("avg_score"),
-            func.avg(_BONUS_SQL).label("avg_bonus"),
+            # Обе средние -- по одному и тому же набору игр (_RATED_FORMAT_SQL):
+            # оценённые фановые и турнирные. Фильтр общий не для краткости, а
+            # чтобы они не разъехались снова: у доп. балла его не было, и один
+            # игрок показывал 1.0 в таблице рейтинга против 0.5 на своей
+            # странице. Счётчики игр рядом продолжают считать всё подряд --
+            # обучающая игра из личной статистики никуда не девается, она лишь
+            # не участвует в средних.
+            func.avg(_SCORE_SQL).filter(_RATED_FORMAT_SQL).label("avg_score"),
+            func.avg(_BONUS_SQL).filter(_RATED_FORMAT_SQL).label("avg_bonus"),
         )
         .select_from(models.GameParticipant)
         .join(models.Game, models.Game.id == models.GameParticipant.game_id)

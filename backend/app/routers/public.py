@@ -4,6 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from app.ids import DbId
 from app import models
 from app.database import get_db
 from app.rate_limit import limiter
@@ -51,7 +52,7 @@ def list_games(
 
 @router.get("/games/{game_id}", response_model=GameOut)
 @limiter.limit("60/minute")
-def get_game(request: Request, game_id: int, db: Session = Depends(get_db)) -> GameOut:
+def get_game(request: Request, game_id: DbId, db: Session = Depends(get_db)) -> GameOut:
     game = stats_service.get_rated_game(db, game_id)
     if game is None:
         raise HTTPException(404, "Игра не найдена")

@@ -4,6 +4,7 @@ from fastapi import Depends, HTTPException, Request, status
 from jose import JWTError
 from sqlalchemy.orm import Session
 
+from app.ids import TelegramId
 from app import models, security
 from app.database import get_db
 
@@ -56,7 +57,7 @@ def require_bot_service(request: Request) -> None:
 
 
 def get_bot_actor(
-    telegram_id: int,
+    telegram_id: TelegramId,
     db: Session = Depends(get_db),
     _: None = Depends(require_bot_service),
 ) -> models.Player:

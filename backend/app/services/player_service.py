@@ -106,6 +106,9 @@ def update_player(db: Session, *, player: models.Player, **fields) -> models.Pla
 
 
 def delete_player(db: Session, *, player: models.Player) -> str:
+    # Удаление последнего админа запирает админку так же, как снятие доступа,
+    # -- проверка одна на оба пути (см. ensure_not_last_site_admin).
+    ensure_not_last_site_admin(db, player=player)
     has_games = (
         db.query(models.GameParticipant).filter(models.GameParticipant.player_id == player.id).first()
         is not None
@@ -138,7 +141,30 @@ def grant_site_access(db: Session, *, player: models.Player, username: str) -> s
     return temp_password
 
 
+def ensure_not_last_site_admin(db: Session, *, player: models.Player) -> None:
+    """Не дать снять права с ПОСЛЕДНЕГО админа сайта.
+
+    Эндпоинта «сделать себя админом» нет намеренно (см. ARCHITECTURE.md,
+    раздел 14): первый доступ выдаётся только скриптом на сервере. Обратная
+    сторона -- снять с себя доступ или удалить свою учётку админ мог, и если
+    он был единственным, войти в /mafia/admin становилось нечем: ни кнопки,
+    ни ручки, только `python -m app.scripts.create_admin` по SSH.
+    """
+    if not player.is_site_admin:
+        return
+    others = (
+        db.query(models.Player.id)
+        .filter(models.Player.is_site_admin.is_(True), models.Player.id != player.id)
+        .first()
+    )
+    if others is None:
+        raise PlayerValidationError(
+            "Это единственный администратор сайта — сначала выдайте доступ кому-то ещё"
+        )
+
+
 def revoke_site_access(db: Session, *, player: models.Player) -> None:
+    ensure_not_last_site_admin(db, player=player)
     player.site_username = None
     player.site_password_hash = None
     player.is_site_admin = False

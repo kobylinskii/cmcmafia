@@ -21,9 +21,14 @@ export const dynamic = "force-dynamic";
 
 async function getGame(gameId: string): Promise<GameOut | null> {
   try {
-    return await serverGet<GameOut>(`/api/games/${gameId}`);
+    return await serverGet<GameOut>(`/api/games/${encodeURIComponent(gameId)}`);
   } catch (err) {
-    if (err instanceof ApiError && err.status === 404) return null;
+    // Любой 4xx -- это «такой игры нет», а не поломка сайта. Ловили только
+    // 404, и /mafia/games/abc (422 от бэкенда) вместе с номером, не влезающим
+    // в integer, отдавали посетителю жёсткую 500 -- достаточно было битой
+    // ссылки из чата или краулера. Тот же разбор, что у limit/offset в
+    // lib/search-params.ts.
+    if (err instanceof ApiError && err.status >= 400 && err.status < 500) return null;
     throw err;
   }
 }

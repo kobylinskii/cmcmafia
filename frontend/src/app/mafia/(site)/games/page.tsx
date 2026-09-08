@@ -5,7 +5,9 @@ import type { GameListOut, TournamentListItem } from "@/types/api";
 import { Container } from "@/components/ui/container";
 import { GamesFilterBar } from "@/components/games/filter-bar";
 import { GameCard } from "@/components/games/game-card";
-import { firstParam, intParam } from "@/lib/search-params";
+import { firstParam, intParam, isoDate, oneOf } from "@/lib/search-params";
+
+const GAME_TYPES = ["tournament", "funky", "training"] as const;
 
 export const metadata: Metadata = { title: "Игры" };
 // Рендер на каждый запрос, а не пререндер при сборке. Кеширование живёт
@@ -24,10 +26,14 @@ export default async function GamesPage({
   // как есть, бэкенд отвечал 422 -- и страница падала в 500.
   const limit = intParam(params, "limit", { def: 10, min: 1, max: 100 });
   const offset = intParam(params, "offset", { def: 0, min: 0, max: 100_000 });
-  const game_type = firstParam(params, "game_type");
+  // Фильтры уходили в API как есть, а он на мусор отвечает 422 -- страница
+  // падала в 500 ровно так же, как раньше от limit/offset. Неизвестное
+  // значение здесь просто отбрасывается: «фильтра нет» -- честный ответ на
+  // битую ссылку, а 500 нет.
+  const game_type = oneOf(firstParam(params, "game_type"), GAME_TYPES);
   const tournament_slug = firstParam(params, "tournament_slug");
-  const date_from = firstParam(params, "date_from");
-  const date_to = firstParam(params, "date_to");
+  const date_from = isoDate(firstParam(params, "date_from"));
+  const date_to = isoDate(firstParam(params, "date_to"));
 
   const [data, tournaments] = await Promise.all([
     serverGet<GameListOut>("/api/games", {

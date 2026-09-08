@@ -6,7 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import models, serializers
@@ -14,6 +14,10 @@ from app.errors import ServiceError
 
 HOST_LIMIT = 1
 JUDGE_LIMIT = 2
+
+# Статусы, после которых состав игры -- уже факт, а не намерение: игра
+# проведена (ждёт оценки) или оценена. Отменять запись здесь поздно.
+SETTLED_STATUSES = ("played", "rated")
 
 
 class RegistrationError(ServiceError):
@@ -101,6 +105,21 @@ def my_roles(db: Session, *, player_id: int) -> dict[int, str]:
     return roles
 
 
+def lock_game(db: Session, *, game_id: int) -> None:
+    """Взять строку игры под блокировку до конца транзакции.
+
+    Проверка «есть ли ещё место» и вставка записи -- два отдельных запроса, и
+    между ними влезает такой же параллельный запрос от другого игрока: восемь
+    одновременных нажатий на стол из двух мест сажали за него четверых. Бот
+    ходит в API конкурентно (это asyncio), а uvicorn держит пул воркеров, так
+    что сериализовать эти две операции нечем, кроме блокировки.
+
+    Блокируется именно игра, а не таблица записей: соперничают только те, кто
+    записывается на ОДИН стол, и запись на соседний слот при этом не ждёт.
+    """
+    db.execute(select(models.Game.id).where(models.Game.id == game_id).with_for_update())
+
+
 def register(
     db: Session,
     *,
@@ -112,6 +131,8 @@ def register(
 ) -> models.Registration:
     if role not in ("host", "judge", "player"):
         raise RegistrationError("Неизвестная роль")
+
+    lock_game(db, game_id=game.id)
 
     existing = (
         db.query(models.Registration)
@@ -210,6 +231,11 @@ def reserve_position(db: Session, *, game_id: int) -> int:
 
 
 def add_to_reserve(db: Session, *, game_id: int, player_id: int) -> models.Reserve:
+    # Та же гонка, что и в register: проверка «уже записан / уже в резерве» и
+    # вставка -- разные запросы. Блокировка та же и берётся на ту же игру,
+    # поэтому повторный вызов внутри register_for_kind ничего не стоит.
+    lock_game(db, game_id=game_id)
+
     existing_reg = (
         db.query(models.Registration)
         .filter(models.Registration.game_id == game_id, models.Registration.player_id == player_id)
@@ -248,7 +274,22 @@ def remove_from_reserve(db: Session, *, game_id: int, player_id: int) -> bool:
 def unregister(db: Session, *, game_id: int, player_id: int) -> models.Player | None:
     """Отменяет запись игрока (из основного состава или резерва). Если освободилось
     место в основном составе — продвигает первого из резерва (FIFO) и возвращает его,
-    чтобы вызывающий код (бот) отправил ему уведомление."""
+    чтобы вызывающий код (бот) отправил ему уведомление.
+
+    После того как игру отметили проведённой, отмена запрещена: состав уже
+    факт. Без этой проверки кнопка «отменить запись» продолжала работать и на
+    прошедшей игре -- человек вычёркивался из состава, которым форма оценки
+    подставляет участников, а на его место молча поднимался кто-то из резерва,
+    вообще за столом не сидевший.
+    """
+    game = db.get(models.Game, game_id)
+    if game is None:
+        raise RegistrationError("Игра не найдена", reason="not_found")
+    if game.status in SETTLED_STATUSES:
+        raise RegistrationError(
+            "Игра уже прошла — состав больше не меняется", reason="game_settled"
+        )
+    lock_game(db, game_id=game_id)
 
     reg = (
         db.query(models.Registration)

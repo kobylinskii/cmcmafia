@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from app.ids import DbId
 from app import models
 from app.database import get_db
 from app.deps import require_site_admin
@@ -153,7 +154,7 @@ def games_pending_review(request: Request, db: Session = Depends(get_db)) -> lis
 
 @router.get("/games/{game_id}", response_model=GameOut)
 @limiter.limit("30/minute")
-def get_game(request: Request, game_id: int, db: Session = Depends(get_db)) -> GameOut:
+def get_game(request: Request, game_id: DbId, db: Session = Depends(get_db)) -> GameOut:
     game = db.get(models.Game, game_id)
     if game is None:
         raise HTTPException(404, "Игра не найдена")
@@ -162,7 +163,7 @@ def get_game(request: Request, game_id: int, db: Session = Depends(get_db)) -> G
 
 @router.put("/games/{game_id}", response_model=GameOut)
 @limiter.limit("30/minute")
-def update_game(request: Request, game_id: int, data: GameUpdate, db: Session = Depends(get_db)) -> GameOut:
+def update_game(request: Request, game_id: DbId, data: GameUpdate, db: Session = Depends(get_db)) -> GameOut:
     game = db.get(models.Game, game_id)
     if game is None:
         raise HTTPException(404, "Игра не найдена")
@@ -192,7 +193,7 @@ def update_game(request: Request, game_id: int, data: GameUpdate, db: Session = 
 
 @router.delete("/games/{game_id}")
 @limiter.limit("30/minute")
-def delete_game(request: Request, game_id: int, db: Session = Depends(get_db)) -> dict:
+def delete_game(request: Request, game_id: DbId, db: Session = Depends(get_db)) -> dict:
     game = db.get(models.Game, game_id)
     if game is None:
         raise HTTPException(404, "Игра не найдена")
@@ -246,7 +247,7 @@ def suggest_tournament_slug(request: Request, name: str, db: Session = Depends(g
 
 @router.get("/tournaments/{tournament_id}", response_model=TournamentAdminOut)
 @limiter.limit("30/minute")
-def get_tournament(request: Request, tournament_id: int, db: Session = Depends(get_db)) -> TournamentAdminOut:
+def get_tournament(request: Request, tournament_id: DbId, db: Session = Depends(get_db)) -> TournamentAdminOut:
     tournament = db.get(models.Tournament, tournament_id)
     if tournament is None:
         raise HTTPException(404, "Турнир не найден")
@@ -256,7 +257,7 @@ def get_tournament(request: Request, tournament_id: int, db: Session = Depends(g
 @router.put("/tournaments/{tournament_id}", response_model=TournamentAdminOut)
 @limiter.limit("30/minute")
 def update_tournament(
-    request: Request, tournament_id: int, data: TournamentUpdate, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, data: TournamentUpdate, db: Session = Depends(get_db)
 ) -> TournamentAdminOut:
     tournament = db.get(models.Tournament, tournament_id)
     if tournament is None:
@@ -275,7 +276,7 @@ def update_tournament(
 
 @router.delete("/tournaments/{tournament_id}")
 @limiter.limit("30/minute")
-def delete_tournament(request: Request, tournament_id: int, db: Session = Depends(get_db)) -> dict:
+def delete_tournament(request: Request, tournament_id: DbId, db: Session = Depends(get_db)) -> dict:
     tournament = db.get(models.Tournament, tournament_id)
     if tournament is None:
         raise HTTPException(404, "Турнир не найден")
@@ -293,7 +294,7 @@ def delete_tournament(request: Request, tournament_id: int, db: Session = Depend
 @router.get("/tournaments/{tournament_id}/games", response_model=list[TournamentStageGameOut])
 @limiter.limit("30/minute")
 def list_flat_tournament_games(
-    request: Request, tournament_id: int, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, db: Session = Depends(get_db)
 ) -> list[TournamentStageGameOut]:
     """Слоты турнира без этапа -- для простого турнира (≤10 участников) без
     сетки. Как только у турнира завели этап, новые игры создаются уже там
@@ -308,7 +309,7 @@ def list_flat_tournament_games(
 @limiter.limit("30/minute")
 def add_flat_tournament_games(
     request: Request,
-    tournament_id: int,
+    tournament_id: DbId,
     data: AddStageGamesIn,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(require_site_admin),
@@ -347,7 +348,7 @@ def _stage_to_out(stage: models.TournamentStage, games_count: int = 0) -> Tourna
 
 @router.get("/tournaments/{tournament_id}/stages", response_model=list[TournamentStageOut])
 @limiter.limit("30/minute")
-def list_tournament_stages(request: Request, tournament_id: int, db: Session = Depends(get_db)) -> list[TournamentStageOut]:
+def list_tournament_stages(request: Request, tournament_id: DbId, db: Session = Depends(get_db)) -> list[TournamentStageOut]:
     _get_tournament_or_404(db, tournament_id)
     stages = tournament_service.list_stages(db, tournament_id=tournament_id)
     counts: dict[int, int] = {}
@@ -362,7 +363,7 @@ def list_tournament_stages(request: Request, tournament_id: int, db: Session = D
 @limiter.limit("30/minute")
 def create_tournament_stage(
     request: Request,
-    tournament_id: int,
+    tournament_id: DbId,
     data: TournamentStageCreate,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(require_site_admin),
@@ -385,7 +386,7 @@ def create_tournament_stage(
 @router.put("/tournaments/{tournament_id}/stages/{stage_id}", response_model=TournamentStageOut)
 @limiter.limit("30/minute")
 def update_tournament_stage(
-    request: Request, tournament_id: int, stage_id: int, data: TournamentStageUpdate, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, stage_id: DbId, data: TournamentStageUpdate, db: Session = Depends(get_db)
 ) -> TournamentStageOut:
     stage = _get_stage_or_404(db, tournament_id, stage_id)
     try:
@@ -401,7 +402,7 @@ def update_tournament_stage(
 
 @router.delete("/tournaments/{tournament_id}/stages/{stage_id}")
 @limiter.limit("30/minute")
-def delete_tournament_stage(request: Request, tournament_id: int, stage_id: int, db: Session = Depends(get_db)) -> dict:
+def delete_tournament_stage(request: Request, tournament_id: DbId, stage_id: DbId, db: Session = Depends(get_db)) -> dict:
     stage = _get_stage_or_404(db, tournament_id, stage_id)
     try:
         tournament_service.delete_stage(db, stage=stage)
@@ -420,7 +421,7 @@ def delete_tournament_stage(request: Request, tournament_id: int, stage_id: int,
 )
 @limiter.limit("30/minute")
 def list_stage_games(
-    request: Request, tournament_id: int, stage_id: int, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, stage_id: DbId, db: Session = Depends(get_db)
 ) -> list[TournamentStageGameOut]:
     """Список игровых слотов этапа для панели админки: и уже оценённые
     (status='rated', есть result), и ещё пустые -- их оценивают через общую
@@ -437,8 +438,8 @@ def list_stage_games(
 @limiter.limit("30/minute")
 def add_stage_games(
     request: Request,
-    tournament_id: int,
-    stage_id: int,
+    tournament_id: DbId,
+    stage_id: DbId,
     data: AddStageGamesIn,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(require_site_admin),
@@ -459,7 +460,7 @@ def add_stage_games(
 )
 @limiter.limit("30/minute")
 def get_stage_standings(
-    request: Request, tournament_id: int, stage_id: int, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, stage_id: DbId, db: Session = Depends(get_db)
 ) -> list[TournamentStandingOut]:
     """Сводная таблица этапа для админки -- то же, что видно на публичной
     странице турнира, плюс уже проставленные отметки прохода (чтобы форма
@@ -473,7 +474,7 @@ def get_stage_standings(
 @router.put("/tournaments/{tournament_id}/stages/{stage_id}/advances", response_model=TournamentStageAdvancesOut)
 @limiter.limit("30/minute")
 def set_stage_advances(
-    request: Request, tournament_id: int, stage_id: int, data: TournamentStageAdvancesIn, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, stage_id: DbId, data: TournamentStageAdvancesIn, db: Session = Depends(get_db)
 ) -> TournamentStageAdvancesOut:
     """Заменяет разом весь список прошедших дальше по итогам этапа. Никакого
     автоматического правила прохода нет -- список выбирает администратор
@@ -496,7 +497,7 @@ def set_stage_advances(
 @router.get("/tournaments/{tournament_id}/awards", response_model=TournamentAwardsOut)
 @limiter.limit("30/minute")
 def get_tournament_awards(
-    request: Request, tournament_id: int, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, db: Session = Depends(get_db)
 ) -> TournamentAwardsOut:
     """Предпросмотр номинаций: посчитанные победители плюс полный список
     кандидатов по каждой -- из него админ и выбирает замену вручную."""
@@ -513,7 +514,7 @@ def get_tournament_awards(
 @router.put("/tournaments/{tournament_id}/awards", response_model=TournamentAwardsOut)
 @limiter.limit("30/minute")
 def update_tournament_awards(
-    request: Request, tournament_id: int, data: TournamentAwardsIn, db: Session = Depends(get_db)
+    request: Request, tournament_id: DbId, data: TournamentAwardsIn, db: Session = Depends(get_db)
 ) -> TournamentAwardsOut:
     """Публикация блока на сайте и/или ручная замена победителей.
 
@@ -579,7 +580,7 @@ def list_pending_players(request: Request, db: Session = Depends(get_db)) -> lis
 
 @router.post("/players/{player_id}/confirm", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
-def confirm_player(request: Request, player_id: int, db: Session = Depends(get_db)) -> models.Player:
+def confirm_player(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> models.Player:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
@@ -596,7 +597,7 @@ def confirm_player(request: Request, player_id: int, db: Session = Depends(get_d
 @router.post("/players/{player_id}/reject", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
 def reject_player(
-    request: Request, player_id: int, data: PlayerRejectIn, db: Session = Depends(get_db)
+    request: Request, player_id: DbId, data: PlayerRejectIn, db: Session = Depends(get_db)
 ) -> models.Player:
     player = db.get(models.Player, player_id)
     if player is None:
@@ -638,7 +639,7 @@ def list_profile_changes(request: Request, db: Session = Depends(get_db)) -> lis
 
 @router.post("/players/profile-changes/{change_id}/apply", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
-def apply_profile_change(request: Request, change_id: int, db: Session = Depends(get_db)) -> models.Player:
+def apply_profile_change(request: Request, change_id: DbId, db: Session = Depends(get_db)) -> models.Player:
     change = db.get(models.PlayerProfileChange, change_id)
     if change is None:
         raise HTTPException(404, "Правка не найдена")
@@ -655,7 +656,7 @@ def apply_profile_change(request: Request, change_id: int, db: Session = Depends
 @router.post("/players/profile-changes/{change_id}/reject", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
 def reject_profile_change(
-    request: Request, change_id: int, data: ProfileChangeRejectIn, db: Session = Depends(get_db)
+    request: Request, change_id: DbId, data: ProfileChangeRejectIn, db: Session = Depends(get_db)
 ) -> models.Player:
     change = db.get(models.PlayerProfileChange, change_id)
     if change is None:
@@ -672,7 +673,7 @@ def reject_profile_change(
 
 @router.get("/players/{player_id}", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
-def get_player(request: Request, player_id: int, db: Session = Depends(get_db)) -> models.Player:
+def get_player(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> models.Player:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
@@ -681,7 +682,7 @@ def get_player(request: Request, player_id: int, db: Session = Depends(get_db)) 
 
 @router.put("/players/{player_id}", response_model=PlayerAdminOut)
 @limiter.limit("30/minute")
-def update_player(request: Request, player_id: int, data: PlayerUpdate, db: Session = Depends(get_db)) -> models.Player:
+def update_player(request: Request, player_id: DbId, data: PlayerUpdate, db: Session = Depends(get_db)) -> models.Player:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
@@ -700,18 +701,22 @@ def update_player(request: Request, player_id: int, data: PlayerUpdate, db: Sess
 
 @router.delete("/players/{player_id}")
 @limiter.limit("30/minute")
-def delete_player(request: Request, player_id: int, db: Session = Depends(get_db)) -> dict:
+def delete_player(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> dict:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
-    status_ = player_service.delete_player(db, player=player)
-    db.commit()
+    try:
+        status_ = player_service.delete_player(db, player=player)
+        db.commit()
+    except PlayerValidationError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
     return {"status": status_}
 
 
 @router.post("/players/{player_id}/photo")
 @limiter.limit("30/minute")
-async def upload_photo(request: Request, player_id: int, file: UploadFile, db: Session = Depends(get_db)) -> dict:
+async def upload_photo(request: Request, player_id: DbId, file: UploadFile, db: Session = Depends(get_db)) -> dict:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
@@ -727,7 +732,7 @@ async def upload_photo(request: Request, player_id: int, file: UploadFile, db: S
 
 @router.post("/players/{player_id}/site-access", response_model=SiteAccessGrantOut)
 @limiter.limit("30/minute")
-def grant_site_access(request: Request, player_id: int, username: str, db: Session = Depends(get_db)) -> SiteAccessGrantOut:
+def grant_site_access(request: Request, player_id: DbId, username: str, db: Session = Depends(get_db)) -> SiteAccessGrantOut:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
@@ -742,12 +747,16 @@ def grant_site_access(request: Request, player_id: int, username: str, db: Sessi
 
 @router.delete("/players/{player_id}/site-access")
 @limiter.limit("30/minute")
-def revoke_site_access(request: Request, player_id: int, db: Session = Depends(get_db)) -> dict:
+def revoke_site_access(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> dict:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
-    player_service.revoke_site_access(db, player=player)
-    db.commit()
+    try:
+        player_service.revoke_site_access(db, player=player)
+        db.commit()
+    except PlayerValidationError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
     return {"ok": True}
 
 
@@ -770,7 +779,7 @@ def add_bot_admin(
 
 @router.delete("/bot-admins/{player_id}")
 @limiter.limit("30/minute")
-def remove_bot_admin(request: Request, player_id: int, db: Session = Depends(get_db)) -> dict:
+def remove_bot_admin(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> dict:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")

@@ -15,6 +15,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from app.ids import DbId
 from app import models, serializers
 from app.database import get_db
 from app.deps import require_site_admin
@@ -138,14 +139,14 @@ def recent_locations(request: Request, db: Session = Depends(get_db)) -> list[st
 
 @router.get("/sessions/{session_id}", response_model=ScheduleSessionOut)
 @limiter.limit("60/minute")
-def get_session(request: Request, session_id: int, db: Session = Depends(get_db)) -> ScheduleSessionOut:
+def get_session(request: Request, session_id: DbId, db: Session = Depends(get_db)) -> ScheduleSessionOut:
     return _session_out(_get_session_or_404(db, session_id))
 
 
 @router.put("/sessions/{session_id}", response_model=ScheduleSessionOut)
 @limiter.limit("30/minute")
 def update_session(
-    request: Request, session_id: int, data: ScheduleSessionUpdateIn, db: Session = Depends(get_db)
+    request: Request, session_id: DbId, data: ScheduleSessionUpdateIn, db: Session = Depends(get_db)
 ) -> ScheduleSessionOut:
     game = _get_session_or_404(db, session_id)
     if game.status == "rated":
@@ -189,7 +190,7 @@ def update_session(
 
 @router.delete("/sessions/{session_id}")
 @limiter.limit("30/minute")
-def delete_session(request: Request, session_id: int, db: Session = Depends(get_db)) -> dict:
+def delete_session(request: Request, session_id: DbId, db: Session = Depends(get_db)) -> dict:
     game = _get_session_or_404(db, session_id)
     game_service.delete_game(db, game=game)
     db.commit()
@@ -200,7 +201,7 @@ def delete_session(request: Request, session_id: int, db: Session = Depends(get_
 
 @router.post("/sessions/{session_id}/played", response_model=ScheduleSessionOut)
 @limiter.limit("30/minute")
-def mark_played(request: Request, session_id: int, db: Session = Depends(get_db)) -> ScheduleSessionOut:
+def mark_played(request: Request, session_id: DbId, db: Session = Depends(get_db)) -> ScheduleSessionOut:
     """«Игра проведена» -- единственный вход сессии в «Ждут оценки».
 
     Фоновой задачи, делавшей это самой, больше нет (см. app/main.py), а кнопка

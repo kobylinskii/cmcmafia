@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
+from app.ids import DbId, TelegramId
 from app import models
 from app.database import get_db
 from app.deps import get_bot_actor, require_bot_service, require_club_admin_actor
@@ -485,7 +486,7 @@ def ack_day_reminders(
 @limiter.limit("30/minute")
 def list_moderation_queue(
     request: Request,
-    telegram_id: int,
+    telegram_id: TelegramId,
     db: Session = Depends(get_db),
     _: models.Player = Depends(require_club_admin_actor),
 ) -> BotModerationQueueOut:
@@ -509,8 +510,8 @@ def list_moderation_queue(
 @limiter.limit("60/minute")
 def moderate_confirm_registration(
     request: Request,
-    player_id: int,
-    telegram_id: int,
+    player_id: DbId,
+    telegram_id: TelegramId,
     db: Session = Depends(get_db),
     _: models.Player = Depends(require_club_admin_actor),
 ) -> dict:
@@ -530,8 +531,8 @@ def moderate_confirm_registration(
 @limiter.limit("60/minute")
 def moderate_reject_registration(
     request: Request,
-    player_id: int,
-    telegram_id: int,
+    player_id: DbId,
+    telegram_id: TelegramId,
     data: PlayerRejectIn,
     db: Session = Depends(get_db),
     _: models.Player = Depends(require_club_admin_actor),
@@ -552,8 +553,8 @@ def moderate_reject_registration(
 @limiter.limit("60/minute")
 def moderate_apply_profile_change(
     request: Request,
-    change_id: int,
-    telegram_id: int,
+    change_id: DbId,
+    telegram_id: TelegramId,
     db: Session = Depends(get_db),
     _: models.Player = Depends(require_club_admin_actor),
 ) -> dict:
@@ -580,8 +581,8 @@ def moderate_apply_profile_change(
 @limiter.limit("60/minute")
 def moderate_reject_profile_change(
     request: Request,
-    change_id: int,
-    telegram_id: int,
+    change_id: DbId,
+    telegram_id: TelegramId,
     data: ProfileChangeRejectIn,
     db: Session = Depends(get_db),
     _: models.Player = Depends(require_club_admin_actor),
@@ -609,7 +610,7 @@ def moderate_reject_profile_change(
 @limiter.limit("20/minute")
 def list_game_days(
     request: Request,
-    telegram_id: int,
+    telegram_id: TelegramId,
     game_type: str | None = None,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
@@ -622,7 +623,7 @@ def list_game_days(
 @limiter.limit("20/minute")
 def list_open_sessions(
     request: Request,
-    telegram_id: int,
+    telegram_id: TelegramId,
     game_type: str | None = None,
     day: str | None = None,
     db: Session = Depends(get_db),
@@ -638,7 +639,7 @@ def list_open_sessions(
 @router.get("/sessions/{session_id}", response_model=SessionOut)
 @limiter.limit("20/minute")
 def get_session(
-    request: Request, session_id: int, telegram_id: int, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
+    request: Request, session_id: DbId, telegram_id: TelegramId, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
 ) -> SessionOut:
     game = db.get(models.Game, session_id)
     if game is None:
@@ -650,7 +651,7 @@ def get_session(
 @router.post("/sessions/{session_id}/register", response_model=RegistrationOut)
 @limiter.limit("20/minute")
 def register_for_session(
-    request: Request, session_id: int, data: RegisterIn, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
+    request: Request, session_id: DbId, data: RegisterIn, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
 ) -> RegistrationOut:
     actor = db.query(models.Player).filter(models.Player.telegram_id == data.telegram_id).one_or_none()
     if actor is None:
@@ -696,7 +697,7 @@ def register_for_session(
 @router.post("/sessions/{session_id}/reserve", response_model=RegistrationOut)
 @limiter.limit("20/minute")
 def reserve_for_session(
-    request: Request, session_id: int, data: ReserveIn, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
+    request: Request, session_id: DbId, data: ReserveIn, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
 ) -> RegistrationOut:
     """Явная постановка в очередь.
 
@@ -725,7 +726,7 @@ def reserve_for_session(
 @router.get("/sessions/{session_id}/roster", response_model=RosterOut)
 @limiter.limit("20/minute")
 def get_session_roster(
-    request: Request, session_id: int, telegram_id: int, db: Session = Depends(get_db), _: models.Player = Depends(get_bot_actor)
+    request: Request, session_id: DbId, telegram_id: TelegramId, db: Session = Depends(get_db), _: models.Player = Depends(get_bot_actor)
 ) -> RosterOut:
     game = db.get(models.Game, session_id)
     if game is None:
@@ -736,10 +737,16 @@ def get_session_roster(
 @router.delete("/sessions/{session_id}/registration", response_model=RegistrationOut)
 @limiter.limit("20/minute")
 def cancel_registration(
-    request: Request, session_id: int, telegram_id: int, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
+    request: Request, session_id: DbId, telegram_id: TelegramId, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
 ) -> RegistrationOut:
-    promoted = registration_service.unregister(db, game_id=session_id, player_id=actor.id)
-    db.commit()
+    try:
+        promoted = registration_service.unregister(db, game_id=session_id, player_id=actor.id)
+        db.commit()
+    except RegistrationError as exc:
+        # Отменять нечего или уже поздно (игра проведена). Отказ отдаётся тем
+        # же ok=false, что и у записи: бот показывает message как есть.
+        db.rollback()
+        return RegistrationOut(ok=False, message=exc.message, reason=exc.reason)
     if promoted:
         db.refresh(promoted)
         return RegistrationOut(
@@ -754,7 +761,7 @@ def cancel_registration(
 @router.get("/registrations/mine", response_model=list[MyRegistrationOut])
 @limiter.limit("20/minute")
 def my_registrations(
-    request: Request, telegram_id: int, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
+    request: Request, telegram_id: TelegramId, db: Session = Depends(get_db), actor: models.Player = Depends(get_bot_actor)
 ) -> list[MyRegistrationOut]:
     return _actor_registrations(db, actor.id)
 
