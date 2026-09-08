@@ -100,7 +100,6 @@ def admin_registration_text(item: dict) -> str:
         lines.append(f"Проход: {affiliation}")
     if item.get("telegram_username"):
         lines.append(f"Telegram: @{item['telegram_username']}")
-    lines.append("\nРешите кнопками ниже.")
     return "\n".join(lines)
 
 
@@ -116,14 +115,12 @@ def admin_profile_change_text(item: dict) -> str:
         # прикреплена к этому же сообщению.
         return (
             f"✏️ {nickname} просит поправить профиль — фото\n"
-            "Новое фото — в этом сообщении, прежнее остаётся до решения.\n\n"
-            "Решите кнопками ниже."
+            "Новое фото — в этом сообщении, прежнее остаётся до решения.\n"
         )
     return (
         f"✏️ {nickname} просит поправить профиль — {field}\n"
         f"сейчас: {current}\n"
         f"станет: {new_value}\n\n"
-        "Решите кнопками ниже."
     )
 
 
