@@ -31,6 +31,7 @@ from aiogram.types import (
     CallbackQuery,
     Chat,
     Contact,
+    Document,
     InlineKeyboardMarkup,
     Message,
     PhotoSize,
@@ -232,6 +233,12 @@ class FakeApi:
         self.profile["photo_url"] = url
         return {"photo_url": url, "pending": False}
 
+    async def delete_photo(self, tg_id: int) -> dict:
+        withdrawn = self.profile["pending_changes"].pop("photo_url", None) is not None
+        deleted = self.profile["photo_url"] is not None
+        self.profile["photo_url"] = None
+        return {"deleted": deleted, "withdrawn": withdrawn}
+
     async def fetch_media(self, path: str) -> bytes:
         self.fetched_media.append(path)
         return b"jpeg bytes of " + path.encode()
@@ -411,6 +418,27 @@ def _photo_message() -> Update:
                 PhotoSize(file_id="small", file_unique_id="u1", width=90, height=90),
                 PhotoSize(file_id="big", file_unique_id="u2", width=1280, height=1280),
             ],
+        ),
+    )
+
+
+def _document_message(mime_type: str | None, file_size: int = 1024) -> Update:
+    """Картинка, отправленная «файлом»: Telegram её не сжимает, и это
+    единственный способ получить исходник."""
+    _update_id[0] += 1
+    return Update(
+        update_id=_update_id[0],
+        message=Message(
+            message_id=_update_id[0],
+            date=datetime.now(),
+            chat=Chat(id=CHAT_ID, type="private"),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Тест"),
+            document=Document(
+                file_id="doc",
+                file_unique_id="ud",
+                mime_type=mime_type,
+                file_size=file_size,
+            ),
         ),
     )
 
@@ -655,7 +683,9 @@ async def test_player_uploads_an_avatar_from_the_chat(stack):
     assert "pf:field:photo" in bot.last_inline()
 
     await dp.feed_update(bot, _callback("pf:field:photo"))
-    assert "картинкой, а не файлом" in bot.last_text
+    assert "Пришлите фотографию" in bot.last_text
+    # Удалять пока нечего -- кнопки нет.
+    assert "pf:photo:delete" not in bot.last_inline()
 
     # Не картинка -- экран остаётся на том же шаге, а не проваливается молча.
     await dp.feed_update(bot, _message("вот моё фото"))
@@ -670,6 +700,80 @@ async def test_player_uploads_an_avatar_from_the_chat(stack):
     assert api.profile["pending_changes"] == {"photo_url": "/media/players/fake1.jpg"}
     assert "отправлено на проверку" in bot.last_text.lower()
     assert "⏳ новое фото на проверке" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_photo_sent_as_a_file_is_accepted_uncompressed(stack):
+    """Telegram жмёт обычное фото до того, как его увидит бот, и вернуть это
+    качество нечем. Файл он не трогает -- значит принимать надо и его."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+
+    await dp.feed_update(bot, _document_message("image/jpeg"))
+    assert bot.downloaded == ["doc"]
+    assert api.uploaded_photos == [b"\xff\xd8\xff fake jpeg"]
+    assert api.profile["photo_url"] == "/media/players/fake1.jpg"
+
+
+@pytest.mark.asyncio
+async def test_wrong_kind_of_file_does_not_reach_the_backend(stack):
+    dp, bot, api = stack
+    await _register(dp, bot)
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+
+    await dp.feed_update(bot, _document_message("application/pdf"))
+    assert "Это не похоже на фотографию" in bot.last_text
+
+    await dp.feed_update(bot, _document_message("image/png", file_size=9 * 1024 * 1024))
+    assert "больше 5 МБ" in bot.last_text
+
+    assert not bot.downloaded, "лишний файл незачем даже скачивать"
+    assert not api.uploaded_photos
+
+
+@pytest.mark.asyncio
+async def test_player_deletes_own_photo(stack):
+    """Кнопка появляется только когда есть что убирать, и убирает без админа."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+    await dp.feed_update(bot, _photo_message())
+    assert api.profile["photo_url"] == "/media/players/fake1.jpg"
+
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+    assert "pf:photo:delete" in bot.last_inline()
+
+    await dp.feed_update(bot, _callback("pf:photo:delete"))
+    assert api.profile["photo_url"] is None
+    assert "Фото: —" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_deleting_withdraws_a_photo_still_on_review(stack):
+    """«Удалить» сразу после «отправлено на проверку» обязано снять правку:
+    иначе фото всё равно появилось бы, как только админ дойдёт до карточки."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["confirmation_status"] = "confirmed"
+
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+    await dp.feed_update(bot, _photo_message())
+    assert api.profile["pending_changes"] == {"photo_url": "/media/players/fake1.jpg"}
+
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+    assert "pf:photo:delete" in bot.last_inline(), "снять с проверки тоже нужно уметь"
+
+    await dp.feed_update(bot, _callback("pf:photo:delete"))
+    assert api.profile["pending_changes"] == {}
+    assert "⏳ новое фото на проверке" not in bot.last_text
 
 
 @pytest.mark.asyncio

@@ -168,6 +168,12 @@ class ApiClient:
         )
         return resp.json()
 
+    async def delete_photo(self, tg_id: int) -> dict:
+        resp = await self._request(
+            "DELETE", "/api/bot/players/me/photo", params={"telegram_id": tg_id}
+        )
+        return resp.json()
+
     async def fetch_media(self, path: str) -> bytes:
         """Скачать медиа-файл с бэкенда -- нужен, чтобы показать админу
         аватарку, ждущую проверки. /media/players отдаётся статикой и токена

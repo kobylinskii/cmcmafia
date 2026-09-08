@@ -21,6 +21,10 @@ const isLocalApiHost = publicApiHostname === "localhost" || publicApiHostname ==
 const nextConfig: NextConfig = {
   output: "standalone",
   images: {
+    // 90 -- для фото игрока в его карточке (см. app/mafia/(site)/[slug]).
+    // С Next 16 список обязателен, и значения вне его округляются к
+    // ближайшему разрешённому.
+    qualities: [75, 90],
     remotePatterns: publicApiUrl
       ? [
           {

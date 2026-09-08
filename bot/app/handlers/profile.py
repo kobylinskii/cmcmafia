@@ -23,6 +23,7 @@ from app.keyboards.inline import (
     affiliation_keyboard,
     cancel_input_keyboard,
     favorite_role_keyboard,
+    photo_keyboard,
     preferred_roles_keyboard,
     profile_fields_keyboard,
     profile_keyboard,
@@ -64,7 +65,15 @@ TEXT_FIELDS: dict[str, tuple[str, str]] = {
 }
 
 
-PHOTO_PROMPT = "Пришлите фотографию для страницы на сайте — картинкой, а не файлом."
+# Телеграм сжимает картинку сам, ещё до того как её увидит бот, и вернуть это
+# качество потом нечем -- отсюда второй, неочевидный для человека способ.
+PHOTO_PROMPT = (
+    "Пришлите фотографию для страницы на сайте.\n"
+    "Картинкой — проще; файлом («без сжатия») — качество заметно лучше, до 5 МБ."
+)
+# Столько же, сколько settings.max_photo_bytes на бэкенде: не гонять по сети
+# то, что там всё равно будет отвергнуто.
+MAX_PHOTO_BYTES = 5 * 1024 * 1024
 
 
 def moderation_note(user: dict) -> str:
@@ -237,9 +246,12 @@ async def open_field(callback: CallbackQuery, state: FSMContext, api: ApiClient)
         return
 
     if field == "photo":
+        # Удалять нечего, если фото нет ни в профиле, ни на проверке.
+        can_delete = bool(user.get("photo_url") or "photo_url" in (user.get("pending_changes") or {}))
         await state.set_state(ProfileStates.waiting_for_photo)
+        await state.update_data(pf_can_delete=can_delete)
         await edit_screen(
-            callback, state, PHOTO_PROMPT + moderation_note(user), cancel_input_keyboard("pf:edit")
+            callback, state, PHOTO_PROMPT + moderation_note(user), photo_keyboard(can_delete=can_delete)
         )
         return
 
@@ -312,6 +324,18 @@ async def clear_field(callback: CallbackQuery, state: FSMContext, api: ApiClient
     await _show_card(callback, state, api, alert="Поле очищено")
 
 
+@router.callback_query(F.data == "pf:photo:delete")
+async def delete_photo(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    """Убрать фото со страницы. Проверки админа здесь нет: модерация сторожит
+    то, что на сайте появляется, а не то, что с него уходит."""
+    try:
+        await api.delete_photo(callback.from_user.id)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await _show_card(callback, state, api, alert="Фото удалено")
+
+
 @router.callback_query(F.data == "pf:resubmit")
 async def resubmit(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
     try:
@@ -361,21 +385,49 @@ async def save_text_value(message: Message, state: FSMContext, api: ApiClient) -
     await _show_card_after_input(message, state, api, headline)
 
 
-@router.message(ProfileStates.waiting_for_photo, F.photo)
-async def save_photo(message: Message, state: FSMContext, api: ApiClient) -> None:
-    """Аватарка из чата.
+def _photo_file_id(message: Message) -> tuple[str | None, str]:
+    """Что именно прислали: (file_id, объяснение отказа).
 
-    Берём самый крупный из присланных Telegram размеров: мельче он сожмёт
-    сам, а на сайте фото стоит в карточке игрока крупным планом. Скачиваем ДО
-    consume_input -- сообщение с вложением после удаления уже не наше."""
-    buffer = await message.bot.download(message.photo[-1].file_id)
+    Два способа прислать картинку, и оба рабочие. Обычное фото Telegram жмёт
+    сам -- берём самый крупный из его размеров. Файл он не трогает вовсе, и
+    это единственный путь получить исходник; проверяем только тип и размер,
+    остальное скажет бэкенд, разобрав сами байты.
+    """
+    if message.photo:
+        return message.photo[-1].file_id, ""
+    document = message.document
+    if document is None or not (document.mime_type or "").startswith("image/"):
+        return None, "Это не похоже на фотографию."
+    if (document.file_size or 0) > MAX_PHOTO_BYTES:
+        return None, "Файл больше 5 МБ — пришлите поменьше или обычной картинкой."
+    return document.file_id, ""
+
+
+@router.message(ProfileStates.waiting_for_photo)
+async def save_photo(message: Message, state: FSMContext, api: ApiClient) -> None:
+    """Аватарка из чата -- картинкой или файлом.
+
+    Скачиваем ДО consume_input: сообщение с вложением после удаления уже не
+    наше.
+    """
+    data = await state.get_data()
+    keyboard = photo_keyboard(can_delete=bool(data.get("pf_can_delete")))
+
+    file_id, problem = _photo_file_id(message)
+    if file_id is None:
+        # Текст, стикер, документ не той природы -- экран остаётся на том же
+        # шаге, а не проваливается молча мимо всех фильтров.
+        await consume_input(message)
+        await open_screen(message, state, f"{problem}\n\n{PHOTO_PROMPT}", keyboard)
+        return
+
+    buffer = await message.bot.download(file_id)
     await consume_input(message)
     try:
         result = await api.upload_photo(message.from_user.id, buffer.read())
     except ApiError as exc:
         await open_screen(
-            message, state, f"Не удалось сохранить: {exc.message}\n\n{PHOTO_PROMPT}",
-            cancel_input_keyboard("pf:edit"),
+            message, state, f"Не удалось сохранить: {exc.message}\n\n{PHOTO_PROMPT}", keyboard
         )
         return
     # У подтверждённого игрока фото ждёт админа наравне с ФИО и ником, и
@@ -386,20 +438,6 @@ async def save_photo(message: Message, state: FSMContext, api: ApiClient) -> Non
         else "Фото обновлено ✅"
     )
     await _show_card_after_input(message, state, api, headline)
-
-
-@router.message(ProfileStates.waiting_for_photo)
-async def reject_non_photo(message: Message, state: FSMContext) -> None:
-    """Всё, что не картинка: текст, стикер, документ (в том числе картинка,
-    отправленная «как файл» -- у неё нет message.photo). Без этой ветки такое
-    сообщение молча проваливалось мимо всех фильтров, и экран не менялся."""
-    await consume_input(message)
-    await open_screen(
-        message,
-        state,
-        f"Это не похоже на фотографию.\n\n{PHOTO_PROMPT}",
-        cancel_input_keyboard("pf:edit"),
-    )
 
 
 async def _show_card_after_input(

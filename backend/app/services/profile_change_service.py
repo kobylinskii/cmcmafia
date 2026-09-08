@@ -139,6 +139,27 @@ def _ensure_nickname_free(db: Session, *, player: models.Player, nickname: str) 
         raise ProfileChangeError("Ник уже занят")
 
 
+def withdraw(db: Session, *, player: models.Player, field: str) -> bool:
+    """Забрать правку обратно, пока админ её не рассмотрел.
+
+    Нужно одному случаю: игрок отправил фото на проверку и тут же нажал
+    «Удалить». Оставить строку в очереди значило бы, что снятое фото всё
+    равно встанет в профиль, как только админ дойдёт до карточки.
+
+    Строка удаляется, а не отклоняется: решения по ней не было, и в истории
+    ей делать нечего. Карточка, уже разосланная админам, после этого честно
+    ответит «Правка не найдена».
+    """
+    change = pending_for_field(db, player_id=player.id, field=field)
+    if change is None:
+        return False
+    if field == PHOTO_FIELD:
+        delete_photo_file(change.new_value)
+    db.delete(change)
+    db.flush()
+    return True
+
+
 def pending_for_field(db: Session, *, player_id: int, field: str) -> models.PlayerProfileChange | None:
     return (
         db.query(models.PlayerProfileChange)

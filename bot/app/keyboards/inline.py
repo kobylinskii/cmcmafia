@@ -133,6 +133,18 @@ def profile_fields_keyboard() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def photo_keyboard(*, can_delete: bool) -> InlineKeyboardMarkup:
+    """Экран ожидания фотографии. Удаление живёт здесь, а не в общем
+    «🗑️ Очистить» (CLEARABLE_FIELDS): то шлёт значение через PUT профиля, а у
+    фото своя ручка -- файл надо ещё и убрать с диска."""
+    kb = InlineKeyboardBuilder()
+    if can_delete:
+        kb.button(text="🗑️ Удалить фото", callback_data="pf:photo:delete")
+        kb.adjust(1)
+    kb.row(InlineKeyboardButton(text=CANCEL, callback_data="pf:edit"))
+    return kb.as_markup()
+
+
 def profile_value_keyboard(field: str, inner: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
     """Клавиатура выбора значения + «Очистить» для необязательных полей."""
     kb = InlineKeyboardBuilder()

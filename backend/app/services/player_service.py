@@ -5,7 +5,7 @@ import logging
 import os
 import uuid
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app import models, security
@@ -147,6 +147,19 @@ def revoke_site_access(db: Session, *, player: models.Player) -> None:
 
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
 
+# Перекодировать фото приходится в любом случае -- это и есть защита от
+# метаданных и полиглот-контента, -- поэтому цена ошибки в этих трёх числах
+# видна на каждом аватаре, и подобраны они под то, как фото показывается.
+#
+# 1024, а не 800: на странице игрока фото занимает 160 CSS-пикселей, то есть
+# до 480 физических на телефоне с DPR 3, и оптимизатор Next пережимает наш
+# файл ещё раз. Чем меньше запас над этими 480, тем заметнее второй проход.
+# Апскейла не бывает: thumbnail только уменьшает.
+PHOTO_BOX = (1024, 1024)
+# 92 вместо 85 стоит примерно вдвое больше байт (150 КБ против 80) и снимает
+# ровно ту «замыленность», на которую жаловались: файл один на игрока.
+PHOTO_QUALITY = 92
+
 
 def store_photo_file(raw_bytes: bytes, *, owner_id: int | None = None) -> str:
     """Валидирует и переconvert'ит фото (снимает потенциальные вредоносные
@@ -174,13 +187,22 @@ def store_photo_file(raw_bytes: bytes, *, owner_id: int | None = None) -> str:
     # Раньше любое из этого улетало наружу как голый 500 без единого слова
     # о причине -- админ видел просто "не работает".
     try:
+        # Ориентация из EXIF -- до всего остального: снятое телефоном боком
+        # фото хранит поворот отдельным тегом, а мы этот тег как раз срезаем,
+        # и без transpose аватар ложился набок.
+        image = ImageOps.exif_transpose(image)
         image = image.convert("RGB")
-        image.thumbnail((800, 800))
+        # LANCZOS вместо умолчания: на уменьшении в разы он заметно чётче.
+        image.thumbnail(PHOTO_BOX, Image.Resampling.LANCZOS)
 
         os.makedirs(settings.media_root, exist_ok=True)
         filename = f"{uuid.uuid4().hex}.jpg"
         path = os.path.join(settings.media_root, filename)
-        image.save(path, format="JPEG", quality=85)
+        # subsampling=0 -- цветовые каналы в полном разрешении. На дефолтном
+        # 4:2:0 у лица на аватаре 32px расползаются границы и краснеет кожа.
+        image.save(
+            path, format="JPEG", quality=PHOTO_QUALITY, subsampling=0, optimize=True
+        )
     except Exception as exc:
         logger.exception("Не удалось обработать фото для игрока id=%s", owner_id)
         raise PlayerValidationError(

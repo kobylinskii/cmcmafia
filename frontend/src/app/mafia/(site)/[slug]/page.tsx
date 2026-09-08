@@ -81,6 +81,13 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
               alt={player.nickname}
               fill
               sizes="(min-width: 640px) 160px, 128px"
+              // Оптимизатор Next пережимает фото ВТОРОЙ раз после нашего же
+              // JPEG (backend/app/services/player_service.py), и на дефолтных
+              // 75 лицо в карточке заметно мылится. 90 стоит десяток лишних
+              // килобайт на одну картинку страницы. Значение обязано быть в
+              // images.qualities -- иначе Next 16 округлит его к ближайшему
+              // разрешённому, то есть молча вернёт те же 75.
+              quality={90}
               className="object-cover"
             />
           ) : (

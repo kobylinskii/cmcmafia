@@ -236,6 +236,28 @@ async def upload_my_photo(
     return {"photo_url": photo_url, "pending": pending}
 
 
+@router.delete("/players/me/photo")
+@limiter.limit("20/minute")
+def delete_my_photo(
+    request: Request,
+    db: Session = Depends(get_db),
+    actor: models.Player = Depends(get_bot_actor),
+) -> dict:
+    """Убрать своё фото со страницы.
+
+    Проверки админа тут нет, в отличие от загрузки: модерация сторожит то,
+    что появляется на сайте, а пустое место сторожить не от чего. Заодно
+    снимается с проверки ещё не рассмотренное фото -- «удалить» после
+    «отправлено на проверку» иначе означало бы, что оно всё равно появится.
+    """
+    withdrawn = profile_change_service.withdraw(db, player=actor, field="photo_url")
+    previous = actor.photo_url
+    actor.photo_url = None
+    db.commit()
+    player_service.delete_photo_file(previous)
+    return {"deleted": bool(previous), "withdrawn": withdrawn}
+
+
 @router.get("/players/me/stats", response_model=BotPlayerStatsOut)
 @limiter.limit("20/minute")
 def get_my_stats(

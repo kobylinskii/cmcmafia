@@ -301,3 +301,78 @@ def test_unconfirmed_player_photo_applies_at_once(admin):
     resp = _bot_upload(client, 820005, _jpeg_bytes())
     assert resp.json()["pending"] is False
     assert _bot_profile(client, 820005)["photo_url"] == resp.json()["photo_url"]
+
+
+# ------------------------------------------------------------ удаление фото
+def _bot_delete(client, telegram_id: int):
+    return client.delete(
+        "/api/bot/players/me/photo", headers=BOT_HEADERS, params={"telegram_id": telegram_id}
+    )
+
+
+def test_player_deletes_own_photo_without_asking_the_admin(admin):
+    """Модерация сторожит то, что появляется на сайте; пустое место сторожить
+    не от чего."""
+    client, headers = admin
+    player_id = _confirmed_bot_player(client, headers, 830001, "Стирающий")
+    url = _upload(client, headers, player_id, _jpeg_bytes()).json()["photo_url"]
+
+    resp = _bot_delete(client, 830001)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"deleted": True, "withdrawn": False}
+    assert _bot_profile(client, 830001)["photo_url"] is None
+    assert not _file_exists(url)
+    assert client.get("/api/admin/players/profile-changes", headers=headers).json() == []
+
+
+def test_deleting_also_withdraws_a_photo_still_waiting_for_the_admin(admin):
+    """Иначе «удалить» сразу после «отправлено на проверку» ничего бы не
+    значило: фото всё равно встало бы в профиль, как только админ дойдёт."""
+    client, headers = admin
+    _confirmed_bot_player(client, headers, 830002, "Передумавший")
+    pending_url = _bot_upload(client, 830002, _jpeg_bytes()).json()["photo_url"]
+
+    assert _bot_delete(client, 830002).json() == {"deleted": False, "withdrawn": True}
+    assert client.get("/api/admin/players/profile-changes", headers=headers).json() == []
+    assert not _file_exists(pending_url)
+    assert _bot_profile(client, 830002)["pending_changes"] == {}
+
+
+def test_deleting_a_missing_photo_is_not_an_error(admin):
+    """Кнопки удаления без фото в боте нет, но ручка не должна падать, если
+    её всё-таки позвали дважды."""
+    client, headers = admin
+    _confirmed_bot_player(client, headers, 830003, "Пустой")
+    assert _bot_delete(client, 830003).json() == {"deleted": False, "withdrawn": False}
+
+
+def test_uploaded_photo_keeps_orientation_and_full_colour_detail(admin):
+    """Качество: EXIF-поворот применяется (тег мы срезаем, и без transpose
+    аватар лёг бы набок), а картинка не ужимается сильнее коробки."""
+    client, headers = admin
+    player = client.post(
+        "/api/admin/players", json={"nickname": "Резкий", "slug": "rezkij"}, headers=headers
+    ).json()
+
+    # Портрет 600x900, помеченный EXIF'ом как повёрнутый на 90°.
+    buf = io.BytesIO()
+    source = Image.new("RGB", (600, 900), (200, 40, 40))
+    exif = Image.Exif()
+    exif[274] = 6  # Orientation: rotate 90 CW
+    source.save(buf, format="JPEG", exif=exif)
+
+    url = _upload(client, headers, player["id"], buf.getvalue()).json()["photo_url"]
+    saved = Image.open(os.path.join(player_service.settings.media_root, url.removeprefix("/media/players/")))
+    assert saved.size == (900, 600), "поворот из EXIF должен быть применён"
+    assert max(saved.size) <= max(player_service.PHOTO_BOX)
+
+
+def test_small_photo_is_not_upscaled(admin):
+    client, headers = admin
+    player = client.post(
+        "/api/admin/players", json={"nickname": "Мелкий", "slug": "melkij"}, headers=headers
+    ).json()
+
+    url = _upload(client, headers, player["id"], _jpeg_bytes(size=(120, 120))).json()["photo_url"]
+    saved = Image.open(os.path.join(player_service.settings.media_root, url.removeprefix("/media/players/")))
+    assert saved.size == (120, 120)
