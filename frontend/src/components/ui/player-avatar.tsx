@@ -21,9 +21,13 @@ export function PlayerAvatar({
       )}
     >
       {src ? (
-        // Без sizes Next подставляет 100vw и тянет самый крупный кандидат
-        // srcset -- в таблице их до полусотни на экран.
-        <Image src={src} alt={nickname} fill sizes="32px" className="object-cover" />
+        // sizes -- вдвое больше реальных 32px, и quality=90 вместо дефолтных
+        // 75: в кружок 32px фото 605x800 ужимается в двадцать раз, и на этом
+        // масштабе и низкое качество, и попадание ровно в 1x видны как мыло.
+        // Даёт ~3 КБ на аватар вместо ~1 КБ -- на полсотни строк рейтинга это
+        // сотня килобайт, зато лицо перестаёт быть пятном. Без sizes Next
+        // подставил бы 100vw и тянул самый крупный кандидат srcset.
+        <Image src={src} alt={nickname} fill sizes="64px" quality={90} className="object-cover" />
       ) : (
         <span className="flex h-full w-full items-center justify-center text-xs text-ink-300">
           {nickname.slice(0, 1).toUpperCase()}

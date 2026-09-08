@@ -189,7 +189,19 @@ class RatingRow:
     avg_bonus: float | None
 
 
-def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: int = 0) -> tuple[list[RatingRow], int]:
+# Чем можно отсортировать таблицу рейтинга. Ключи -- значения параметра sort
+# у GET /api/rating; «rating» это порядок по умолчанию, то есть по месту.
+RATING_SORTS = ("rating", "win_rate", "avg_bonus")
+
+
+def rating_table(
+    db: Session,
+    *,
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    sort: str = "rating",
+) -> tuple[list[RatingRow], int]:
     # Обучающие игры исключены ровно там же, где их исключает реплей рейтинга
     # (rating_service.UNRATED_GAME_TYPES). Без этого средний доп. балл считался
     # по большему числу игр, чем показывает соседняя колонка «Игр»: она берётся
@@ -251,12 +263,21 @@ def rating_table(db: Session, *, q: str | None = None, limit: int = 50, offset: 
         )
 
     total = query.count()
+    # Сортировка меняет только ПОРЯДОК строк: колонка «#» всё равно показывает
+    # место в клубе по рейтингу (rank_subq), а не номер строки в выдаче -- при
+    # сортировке по проценту побед иначе выходило бы, что у человека «первое
+    # место в рейтинге», хотя рейтинг у него десятый.
+    win_rate_expr = models.PlayerRating.wins * 1.0 / func.nullif(models.PlayerRating.games_count, 0)
+    order_by = {
+        "win_rate": nullslast(win_rate_expr.desc()),
+        "avg_bonus": nullslast(avg_bonus_subq.c.avg_bonus.desc()),
+    }.get(sort, nullslast(rank_subq.c.rank.asc()))
     # Player.id -- уникальный тай-брейкер. Без него порядок строк с одинаковым
     # рейтингом не определён, и OFFSET/LIMIT резал набор в разных порядках:
     # одни игроки попадали на две страницы сразу, другие не попадали никуда.
     # nullslast: ненумерованным (ещё не игравшим) место в конце выдачи.
     rows = (
-        query.order_by(nullslast(rank_subq.c.rank.asc()), models.Player.id.asc())
+        query.order_by(order_by, models.Player.id.asc())
         .offset(offset)
         .limit(limit)
         .all()

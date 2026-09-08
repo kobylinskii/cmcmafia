@@ -179,6 +179,11 @@ def award_candidate_to_out(candidate) -> AwardCandidateOut:
         win_rate=(candidate.wins / candidate.games_count) if candidate.games_count else None,
         points_judge=candidate.points_judge,
         lh_points=candidate.lh_points,
+        avg_bonus=(
+            round((candidate.points_judge + candidate.lh_points) / candidate.games_count, 2)
+            if candidate.games_count
+            else None
+        ),
         score=candidate.score,
         total_score=candidate.total_score,
     )

@@ -156,6 +156,10 @@ class AwardCandidateOut(BaseModel):
     win_rate: float | None
     points_judge: float
     lh_points: float
+    # Средний дополнительный балл за игру (судейские + ЛХ). У ролевых
+    # номинаций и MVP совпадает со score, у мест турнира -- нет: там зачётная
+    # величина это сумма баллов таблицы.
+    avg_bonus: float | None
     # Зачётная величина номинации: средний балл за игру (ролевые + MVP) или
     # сумма баллов таблицы (места турнира).
     score: float

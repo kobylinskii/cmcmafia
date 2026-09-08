@@ -132,3 +132,39 @@ def test_search_still_hides_an_unconfirmed_newcomer(admin):
     client, _ = admin
     register_bot_player(client, 9401, "Неизвестный")
     assert _rating(client, q="Неизвестный")["total"] == 0
+
+
+def test_sort_changes_order_but_not_the_rank(admin):
+    """Сортировка по проценту побед и по среднему доп. баллу меняет ПОРЯДОК
+    строк, а место в колонке «#» остаётся клубным -- местом по рейтингу."""
+    client, headers = admin
+    ids = make_players(client, headers, 10)
+    tid = make_tournament(client, headers)
+    # Мафия выигрывает: у чёрных (места 1--3) 100% побед, у красных 0%.
+    # Судейские получает один красный -- он и лучший по среднему доп. баллу.
+    make_tournament_game(
+        client, headers, tournament_id=tid, starts_at="2026-02-01T18:00:00Z",
+        result="mafia_win",
+        participants=[
+            {"player_id": pid, "seat_number": seat, "role": role,
+             **({"points_judge": 3.0} if pid == ids[9] else {})}
+            for seat, (pid, role) in enumerate(zip(ids, ROLES), start=1)
+        ],
+    )
+
+    by_rating = _rating(client, limit=50, sort="rating")["items"]
+    ranks = {it["slug"]: it["rank"] for it in by_rating}
+
+    by_win_rate = _rating(client, limit=50, sort="win_rate")["items"]
+    assert by_win_rate[0]["win_rate"] == 1.0
+    assert [it["win_rate"] for it in by_win_rate] == sorted(
+        (it["win_rate"] for it in by_win_rate), reverse=True
+    )
+
+    by_bonus = _rating(client, limit=50, sort="avg_bonus")["items"]
+    assert by_bonus[0]["slug"] == "player10"
+
+    # Порядок поменялся, места -- нет.
+    assert [it["slug"] for it in by_win_rate] != [it["slug"] for it in by_rating]
+    for row in by_win_rate + by_bonus:
+        assert row["rank"] == ranks[row["slug"]]

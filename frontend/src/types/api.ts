@@ -144,6 +144,10 @@ export interface SchedulePlanPreviewOut {
   conflicts: string[];
 }
 
+/** Чем можно отсортировать таблицу рейтинга (параметр sort у /api/rating).
+ * Зеркалит stats_service.RATING_SORTS. */
+export type RatingSort = "rating" | "win_rate" | "avg_bonus";
+
 export interface RatingRowOut {
   /** null у найденного поиском игрока без единой сыгранной игры: места в
    * рейтинге у него ещё нет. В таблице рисуется прочерком. */
@@ -422,6 +426,8 @@ export interface AwardCandidateOut {
   win_rate: number | null;
   points_judge: number;
   lh_points: number;
+  /** Средний доп. балл за игру (судейские + ЛХ) в зачёте номинации. */
+  avg_bonus: number | null;
   /** Зачётная величина номинации: балл за игру (ролевые + MVP) или сумма
    * баллов таблицы (места турнира). */
   score: number;

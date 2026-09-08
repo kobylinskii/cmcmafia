@@ -67,7 +67,11 @@ function PhotoUploader({ player, onUpdated }: { player: PlayerAdminOut; onUpdate
             src={photo}
             alt={player.nickname}
             fill
-            sizes="128px"
+            // Блок ровно 160px (h-40), а стояло 128 -- браузер брал кандидат
+            // мельче, чем рисует. Качество -- как на публичной странице игрока:
+            // дефолтные 75 заметно мылят уже пережатый нами JPEG.
+            sizes="160px"
+            quality={90}
             className="object-cover"
           />
         ) : (

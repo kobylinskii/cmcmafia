@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { serverGet } from "@/lib/api-server";
-import type { RatingFormulaOut, RatingTableOut } from "@/types/api";
+import type { RatingFormulaOut, RatingSort, RatingTableOut } from "@/types/api";
 import { Container } from "@/components/ui/container";
 import { RatingTable } from "@/components/rating/rating-table";
 import { RatingFormula } from "@/components/rating/rating-formula";
@@ -26,19 +26,28 @@ export default async function RatingPage({ searchParams }: PageProps<"/mafia/rat
   // просто переставал существовать для сайта.
   const limit = 50;
   const offset = Math.max(0, Number(firstParam(params, "offset") ?? 0) || 0);
+  // Мусор в ?sort= роняет ручку 422, поэтому неизвестное значение просто
+  // считается сортировкой по умолчанию.
+  const rawSort = firstParam(params, "sort");
+  const sort: RatingSort =
+    rawSort === "win_rate" || rawSort === "avg_bonus" ? rawSort : "rating";
 
   const [rating, formula] = await Promise.all([
-    serverGet<RatingTableOut>("/api/rating", { q, limit, offset }),
+    serverGet<RatingTableOut>("/api/rating", { q, limit, offset, sort }),
     serverGet<RatingFormulaOut>("/api/rating/formula"),
   ]);
 
-  const buildUrl = (nextOffset: number) => {
+  const buildUrl = (nextOffset: number, nextSort: RatingSort = sort) => {
     const p = new URLSearchParams();
     if (q) p.set("q", q);
     if (nextOffset > 0) p.set("offset", String(nextOffset));
+    if (nextSort !== "rating") p.set("sort", nextSort);
     const qs = p.toString();
     return qs ? `/mafia/rating?${qs}` : "/mafia/rating";
   };
+  // Смена сортировки всегда возвращает на первую страницу: 51-я строка
+  // прежнего порядка в новом не значит ничего.
+  const buildSortUrl = (nextSort: RatingSort) => buildUrl(0, nextSort);
 
   return (
     <Container className="py-14">
@@ -60,7 +69,7 @@ export default async function RatingPage({ searchParams }: PageProps<"/mafia/rat
       </div>
 
       <div className="mt-4">
-        <RatingTable rows={rating.items} />
+        <RatingTable rows={rating.items} sort={sort} sortUrl={buildSortUrl} />
       </div>
 
       {rating.total > limit && (
