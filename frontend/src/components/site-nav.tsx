@@ -58,7 +58,7 @@ export function SiteNav() {
           ref={buttonRef}
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="md:hidden inline-flex h-10 w-10 items-center justify-center rounded-pill text-ink-100 hover:bg-ink-850"
+          className="md:hidden inline-flex h-11 w-11 items-center justify-center rounded-pill text-ink-100 hover:bg-ink-850"
           aria-label={open ? "Закрыть меню" : "Открыть меню"}
           aria-expanded={open}
           aria-controls="mobile-nav"

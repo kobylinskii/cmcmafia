@@ -67,7 +67,7 @@ export function TournamentStageAccordion({ stages }: { stages: TournamentStageDe
 
             {open && (
               <div className="border-t border-ink-800 px-5 py-5">
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <p className="text-sm text-ink-500">
                     Сумма баллов и штрафов по играм этого этапа, от большего к меньшему.
                     {stage.standings.some((r) => r.advanced) && " Отмечены прошедшие дальше."}

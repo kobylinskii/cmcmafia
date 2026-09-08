@@ -24,7 +24,10 @@ export function Badge({
         // плашка читалась как служебная метка, хотя формат игры и её исход
         // это главные данные строки. Поднято на шаг, до одного уровня с
         // сопровождающим текстом.
-        "inline-flex items-center rounded-pill px-3.5 py-1.5 text-sm font-medium tracking-wide",
+        // w-fit: в родителе flex-col (карточка игры, шапка профиля на мобилке)
+        // inline-flex всё равно растягивается по поперечной оси на всю ширину,
+        // и плашка «Победа мафии» превращалась в кнопку во весь экран.
+        "inline-flex w-fit items-center rounded-pill px-3.5 py-1.5 text-sm font-medium tracking-wide",
         tones[tone],
         className
       )}

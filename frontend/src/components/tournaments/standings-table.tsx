@@ -78,7 +78,7 @@ export function TournamentStandingsTable({
               <td className="px-4 py-3">
                 <Link
                   href={`/mafia/${row.slug}`}
-                  className="flex items-center gap-3 font-medium text-ink-50 hover:text-brand-400"
+                  className="-my-2 flex items-center gap-3 py-2 font-medium text-ink-50 hover:text-brand-400"
                 >
                   <PlayerAvatar photoUrl={row.photo_url} nickname={row.nickname} />
                   {row.nickname}

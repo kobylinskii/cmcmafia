@@ -30,7 +30,7 @@ export function SiteFooter() {
               rel="noopener noreferrer"
               aria-label={label}
               title={label}
-              className="inline-flex h-9 w-9 items-center justify-center rounded-pill border border-ink-700 hover:border-brand-500/60 hover:text-brand-300"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-pill border border-ink-700 hover:border-brand-500/60 hover:text-brand-300"
             >
               {Icon ? <Icon size={16} weight="fill" /> : <span className="text-[11px] font-semibold">VK</span>}
             </a>
