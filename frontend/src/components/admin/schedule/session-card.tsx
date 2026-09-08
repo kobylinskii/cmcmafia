@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { ArrowLeft, CheckCircle, Prohibit, Trash } from "@phosphor-icons/react/dist/ssr";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { DateTimeField } from "@/components/ui/date-field";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useConfirmable } from "@/lib/use-confirmable";
@@ -65,10 +67,9 @@ export function SessionCard({
     onBack();
   }, "Не удалось удалить игру");
 
-  // Неконтролируемое поле: <input type="datetime-local"> отдаёт "" для любого
-  // не до конца заполненного значения, и при controlled value набранная дата
-  // стиралась бы на каждом промежуточном onChange (см. game-form.tsx).
-  const startsAtRef = useRef<HTMLInputElement>(null);
+  // «ГГГГ-ММ-ДДTЧЧ:ММ», как отдавал бы datetime-local: формат значения при
+  // переходе на свой DateTimeField не изменился.
+  const [startsAt, setStartsAt] = useState("");
   const [location, setLocation] = useState("");
   const [gameType, setGameType] = useState<ScheduleGameType>("funky");
   const [needsRating, setNeedsRating] = useState(true);
@@ -78,7 +79,7 @@ export function SessionCard({
     setLocation(next.location ?? "");
     setGameType(next.game_type === "tournament" ? "funky" : next.game_type);
     setNeedsRating(next.needs_rating);
-    if (startsAtRef.current) startsAtRef.current.value = toDatetimeLocalValue(next.starts_at);
+    setStartsAt(toDatetimeLocalValue(next.starts_at));
   }
 
   useEffect(() => {
@@ -89,14 +90,19 @@ export function SessionCard({
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
-    setSaving(true);
     setError(null);
     setSaved(null);
+    // Своё поле не умеет required: пустую или недозаполненную дату отсекаем тут.
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(startsAt)) {
+      setError("Укажите дату и время игры");
+      return;
+    }
+    setSaving(true);
     try {
       const next = await clientFetch<ScheduleSessionOut>(`/api/admin/schedule/sessions/${sessionId}`, {
         method: "PUT",
         body: JSON.stringify({
-          starts_at: fromClubDatetimeLocal(startsAtRef.current!.value),
+          starts_at: fromClubDatetimeLocal(startsAt),
           location: location.trim(),
           game_type: gameType,
           needs_rating: needsRating,
@@ -188,17 +194,7 @@ export function SessionCard({
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
           <label className={label}>
             Дата и время
-            {/* defaultValue, а не присваивание через ref: форма монтируется
-                только после загрузки слота, и к моменту первого apply() ref
-                ещё пуст -- поле оставалось незаполненным. Последующие apply
-                (после сохранения) ref уже находят и обновляют значение. */}
-            <input
-              ref={startsAtRef}
-              type="datetime-local"
-              className={field}
-              defaultValue={toDatetimeLocalValue(session.starts_at)}
-              required
-            />
+            <DateTimeField className={field} value={startsAt} onChange={setStartsAt} />
             <span className="font-normal text-ink-500">
               О переносе записавшихся предупредите сами: бот об изменениях не пишет.
             </span>
@@ -221,17 +217,12 @@ export function SessionCard({
           </label>
           <label className={label}>
             Формат
-            <select
+            <Select
               className={field}
               value={gameType}
-              onChange={(e) => setGameType(e.target.value as ScheduleGameType)}
-            >
-              {SCHEDULE_GAME_TYPES.map((value) => (
-                <option key={value} value={value}>
-                  {GAME_TYPE_LABELS[value]}
-                </option>
-              ))}
-            </select>
+              onChange={setGameType}
+              options={SCHEDULE_GAME_TYPES.map((value) => ({ value, label: GAME_TYPE_LABELS[value] }))}
+            />
           </label>
         </div>
 

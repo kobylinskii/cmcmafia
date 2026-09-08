@@ -27,9 +27,13 @@ export function RatingFormula({ formula }: { formula: RatingFormulaOut }) {
 
       {/* Формула -- главный визуальный акцент блока: крупно, моноширинным
           шрифтом, в отдельной панели, а не растворена в тексте абзаца. */}
-      <div className="mt-6 overflow-x-auto rounded-card border border-ink-800 bg-ink-900 px-6 py-8 text-center">
-        <p className="whitespace-nowrap font-mono text-2xl tracking-wide text-ink-50 sm:text-3xl">
-          {formula.formula}
+      <div className="mt-6 rounded-card border border-ink-800 bg-ink-900 px-4 py-8 text-center sm:px-6">
+        {/* На узком экране формула переносится по пробелам, а не уезжает в
+            горизонтальную прокрутку: строку целиком там всё равно не увидеть.
+            Внутри скобок пробелы неразрывные, чтобы перенос не рвал скобочную
+            группу пополам. */}
+        <p className="font-mono text-xl leading-relaxed tracking-wide text-balance text-ink-50 sm:whitespace-nowrap sm:text-3xl">
+          {formula.formula.replace(/\([^)]*\)/g, (group) => group.replace(/ /g, "\u00a0"))}
         </p>
       </div>
 

@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { DateField, TimeField } from "@/components/ui/date-field";
 import { fromClubDatetimeLocal, formatTime, plural } from "@/lib/format";
 import { fieldDense as field, fieldLabel as label } from "@/lib/ui";
 import type { ScheduleGameType, SchedulePlanPreviewOut, SessionOut } from "@/types/api";
@@ -135,37 +137,20 @@ export function PlanForm({
       <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <label className={label}>
           Формат
-          <select
+          <Select
             className={field}
             value={gameType}
-            onChange={(e) => setGameType(e.target.value as ScheduleGameType)}
-          >
-            {SCHEDULE_GAME_TYPES.map((value) => (
-              <option key={value} value={value}>
-                {GAME_TYPE_LABELS[value]}
-              </option>
-            ))}
-          </select>
+            onChange={setGameType}
+            options={SCHEDULE_GAME_TYPES.map((value) => ({ value, label: GAME_TYPE_LABELS[value] }))}
+          />
         </label>
         <label className={label}>
           Дата
-          <input
-            type="date"
-            className={field}
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            required
-          />
+          <DateField className={field} value={date} onChange={setDate} />
         </label>
         <label className={label}>
           Начало первой игры
-          <input
-            type="time"
-            className={field}
-            value={time}
-            onChange={(e) => setTime(e.target.value)}
-            required
-          />
+          <TimeField className={field} value={time} onChange={setTime} />
         </label>
         <label className={label}>
           Сколько игр

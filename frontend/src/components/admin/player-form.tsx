@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
 import { field, fieldLabel as label } from "@/lib/ui";
 import { useSlugSuggestion } from "@/lib/use-slug-suggestion";
 import { SlugSuggestion } from "@/components/admin/slug-suggestion";
@@ -129,18 +130,12 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
         </label>
         <label className={label}>
           Любимая роль
-          <select
+          <Select
             className={field}
             value={favoriteRole}
-            onChange={(e) => setFavoriteRole(e.target.value as InGameRole | "")}
-          >
-            <option value="">Не указана</option>
-            {ROLE_OPTIONS.map((r) => (
-              <option key={r.value} value={r.value}>
-                {r.label}
-              </option>
-            ))}
-          </select>
+            onChange={setFavoriteRole}
+            options={[{ value: "" as InGameRole | "", label: "Не указана" }, ...ROLE_OPTIONS]}
+          />
         </label>
       </div>
 

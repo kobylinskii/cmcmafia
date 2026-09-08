@@ -3,6 +3,8 @@
 import { useSearchParams } from "next/navigation";
 import { useUpdateParams } from "@/lib/nav";
 import { SegmentedControl } from "@/components/ui/segmented-control";
+import { Select } from "@/components/ui/select";
+import { DateField } from "@/components/ui/date-field";
 import { GAME_TYPE_LABELS, type TournamentListItem } from "@/types/api";
 
 const PAGE_SIZES = ["10", "25", "50", "100"].map((n) => ({ value: n, label: n }));
@@ -31,52 +33,50 @@ export function GamesFilterBar({ tournaments }: { tournaments: TournamentListIte
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <label className={fieldLabel}>
           Формат
-          <select value={gameType} onChange={(e) => update({ game_type: e.target.value })} className={control}>
-            <option value="">Все форматы</option>
-            {Object.entries(GAME_TYPE_LABELS).map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
-            ))}
-          </select>
+          <Select
+            value={gameType}
+            onChange={(game_type) => update({ game_type })}
+            className={control}
+            options={[
+              { value: "", label: "Все форматы" },
+              ...Object.entries(GAME_TYPE_LABELS).map(([value, label]) => ({ value, label })),
+            ]}
+          />
         </label>
 
         <label className={fieldLabel}>
           Турнир
-          <select
+          <Select
             value={tournamentSlug}
-            onChange={(e) => update({ tournament_slug: e.target.value })}
+            onChange={(tournament_slug) => update({ tournament_slug })}
             className={control}
             disabled={tournaments.length === 0}
-          >
-            <option value="">{tournaments.length ? "Все турниры" : "Турниров нет"}</option>
-            {tournaments.map((tournament) => (
-              <option key={tournament.slug} value={tournament.slug}>
-                {tournament.name}
-              </option>
-            ))}
-          </select>
+            options={[
+              { value: "", label: tournaments.length ? "Все турниры" : "Турниров нет" },
+              ...tournaments.map((t) => ({ value: t.slug, label: t.name })),
+            ]}
+          />
         </label>
 
         <label className={fieldLabel}>
           Дата с
-          <input
-            type="date"
+          <DateField
             value={dateFrom}
             max={dateTo || undefined}
-            onChange={(e) => update({ date_from: e.target.value })}
+            onChange={(date_from) => update({ date_from })}
             className={control}
+            clearable
           />
         </label>
 
         <label className={fieldLabel}>
           Дата по
-          <input
-            type="date"
+          <DateField
             value={dateTo}
             min={dateFrom || undefined}
-            onChange={(e) => update({ date_to: e.target.value })}
+            onChange={(date_to) => update({ date_to })}
             className={control}
+            clearable
           />
         </label>
       </div>

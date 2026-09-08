@@ -6,6 +6,8 @@ import { ApiError, clientFetch } from "@/lib/api";
 import { useResource } from "@/lib/use-resource";
 import { formatDateTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { TimeField } from "@/components/ui/date-field";
 import { Badge } from "@/components/ui/badge";
 import {
   GAME_TYPE_LABELS,
@@ -194,24 +196,18 @@ function RolloverForm({
     <div className="mt-4 flex flex-wrap items-end gap-3 border-t border-ink-800 pt-4">
       <label className="flex flex-col gap-1.5 text-xs text-ink-400">
         День обновления
-        <select
-          value={weekday}
-          onChange={(e) => setWeekday(Number(e.target.value))}
+        <Select
+          value={String(weekday)}
+          onChange={(v) => setWeekday(Number(v))}
           className="rounded-lg border border-ink-700 bg-ink-950 px-3.5 py-2.5 text-sm text-ink-50 focus:border-brand-500 focus:outline-none"
-        >
-          {WEEKDAY_LABELS.map((label, index) => (
-            <option key={label} value={index}>
-              {label}
-            </option>
-          ))}
-        </select>
+          options={WEEKDAY_LABELS.map((label, index) => ({ value: String(index), label }))}
+        />
       </label>
       <label className="flex flex-col gap-1.5 text-xs text-ink-400">
         Время
-        <input
-          type="time"
+        <TimeField
           value={time}
-          onChange={(e) => setTime(e.target.value)}
+          onChange={setTime}
           className="rounded-lg border border-ink-700 bg-ink-950 px-3.5 py-2.5 text-sm text-ink-50 focus:border-brand-500 focus:outline-none"
         />
       </label>

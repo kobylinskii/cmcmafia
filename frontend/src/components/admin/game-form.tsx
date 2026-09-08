@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { Select } from "@/components/ui/select";
+import { DateTimeField } from "@/components/ui/date-field";
 import { fromClubDatetimeLocal, toDatetimeLocalValue } from "@/lib/format";
 import { fieldDense as field, fieldLabel as label } from "@/lib/ui";
 import type {
@@ -130,13 +132,11 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
   const isTournamentGame = game?.game_type === "tournament";
 
   const [players, setPlayers] = useState<SelectablePlayer[]>([]);
-  // Некотролируемое поле, а не useState: <input type="datetime-local"> отдаёт
-  // e.target.value === "" для ЛЮБОГО ещё не полностью заполненного значения
-  // (спека HTML -- .value валиден только когда указаны И дата, И время). При
-  // controlled value это означало постоянный сброс: набрал дату, время ещё не
-  // тронуто -> onChange приходит с "" -> React перерисовывает поле пустым,
-  // стирая уже введённую дату -- выбрать время было буквально невозможно.
-  const startsAtRef = useRef<HTMLInputElement>(null);
+  // Дата и время хранятся строкой «ГГГГ-ММ-ДДTЧЧ:ММ», как отдавал бы
+  // datetime-local. Само поле теперь своё (DateTimeField): нативное держали
+  // неконтролируемым, потому что оно отдаёт "" для любого не до конца
+  // заполненного значения и стирало набранную дату на каждом onChange.
+  const [startsAt, setStartsAt] = useState(game ? toDatetimeLocalValue(game.starts_at) : "");
   const [location, setLocation] = useState(game?.location ?? "");
   const [gameType, setGameType] = useState<Exclude<GameType, "tournament">>(
     game && game.game_type !== "tournament" ? game.game_type : "funky"
@@ -265,6 +265,12 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
     e.preventDefault();
     setError(null);
 
+    // Раньше пустое время отсекал required у datetime-local; свой компонент
+    // браузерной валидации не имеет, проверяем сами.
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(startsAt)) {
+      setError("Укажите дату и время игры");
+      return;
+    }
     if (!result) {
       setError("Укажите исход игры");
       return;
@@ -334,7 +340,7 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
       // читать его надо тоже как клубное. new Date("2026-08-26T18:00")
       // трактует строку как локальное время браузера -- админ не из
       // Москвы сдвигал время игры каждым сохранением.
-      starts_at: fromClubDatetimeLocal(startsAtRef.current!.value),
+      starts_at: fromClubDatetimeLocal(startsAt),
       location: location || null,
       // Турнирную игру формат не меняет: привязка к турниру/этапу
       // зафиксирована при создании слота и через эту форму не трогается
@@ -385,13 +391,7 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <label className={label}>
           Дата и время
-          <input
-            ref={startsAtRef}
-            type="datetime-local"
-            className={field}
-            defaultValue={game ? toDatetimeLocalValue(game.starts_at) : undefined}
-            required
-          />
+          <DateTimeField className={field} value={startsAt} onChange={setStartsAt} />
         </label>
         <label className={label}>
           Место
@@ -411,34 +411,25 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
         ) : (
           <label className={label}>
             Формат
-            <select
+            <Select
               className={field}
               value={gameType}
-              onChange={(e) => setGameType(e.target.value as Exclude<GameType, "tournament">)}
-            >
-              {SCHEDULE_GAME_TYPES.map((v) => (
-                <option key={v} value={v}>
-                  {GAME_TYPE_LABELS[v]}
-                </option>
-              ))}
-            </select>
+              onChange={setGameType}
+              options={SCHEDULE_GAME_TYPES.map((v) => ({ value: v, label: GAME_TYPE_LABELS[v] }))}
+            />
           </label>
         )}
         <label className={label}>
           Исход
-          <select
+          <Select
             className={field}
             value={result}
-            onChange={(e) => applyResult(e.target.value as GameResult | "")}
-            required
-          >
-            <option value="">Не выбран</option>
-            {Object.entries(RESULT_LABELS).map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
+            onChange={applyResult}
+            options={[
+              { value: "" as GameResult | "", label: "Не выбран" },
+              ...Object.entries(RESULT_LABELS).map(([v, l]) => ({ value: v as GameResult, label: l })),
+            ]}
+          />
         </label>
       </div>
 
@@ -492,18 +483,16 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                   />
                 </td>
                 <td className="px-2 py-1.5">
-                  <select
+                  <Select
                     aria-label={`Место ${row.seat_number}: роль`}
                     className={field}
                     value={row.role}
-                    onChange={(e) => changeRole(i, e.target.value as InGameRole)}
-                  >
-                    {Object.entries(ROLE_LABELS).map(([v, l]) => (
-                      <option key={v} value={v}>
-                        {l}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(role) => changeRole(i, role)}
+                    options={Object.entries(ROLE_LABELS).map(([v, l]) => ({
+                      value: v as InGameRole,
+                      label: l,
+                    }))}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
                   <ScoreInput
@@ -530,20 +519,17 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                   {/* Попадания, а не баллы: судья считает «сколько из трёх
                       названных оказались чёрными». Свободное число 0..1.5
                       читалось как баллы и путало. */}
-                  <select
+                  <Select
                     aria-label={`Место ${row.seat_number}: ЛХ, попаданий из трёх`}
                     className={field}
                     value={row.lh}
                     disabled={row.ppk}
-                    onChange={(e) => updateRow(i, { lh: e.target.value })}
-                  >
-                    <option value="">—</option>
-                    {LH_SCALE.map((step) => (
-                      <option key={step.raw} value={String(step.raw)}>
-                        {step.hits}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(lh) => updateRow(i, { lh })}
+                    options={[
+                      { value: "", label: "—" },
+                      ...LH_SCALE.map((step) => ({ value: String(step.raw), label: step.hits })),
+                    ]}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
                   <ScoreInput
@@ -554,19 +540,19 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
                   />
                 </td>
                 <td className="px-2 py-1.5">
-                  <select
+                  <Select
                     aria-label={`Место ${row.seat_number}: инфо`}
                     className={field}
                     value={row.info}
-                    onChange={(e) => updateRow(i, { info: e.target.value as ParticipantInfo | "" })}
-                  >
-                    <option value="">—</option>
-                    {Object.entries(INFO_LABELS).map(([v, l]) => (
-                      <option key={v} value={v}>
-                        {l}
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(info) => updateRow(i, { info })}
+                    options={[
+                      { value: "" as ParticipantInfo | "", label: "—" },
+                      ...Object.entries(INFO_LABELS).map(([v, l]) => ({
+                        value: v as ParticipantInfo,
+                        label: l,
+                      })),
+                    ]}
+                  />
                 </td>
                 <td className="px-2 py-1.5">
                   <ScoreInput

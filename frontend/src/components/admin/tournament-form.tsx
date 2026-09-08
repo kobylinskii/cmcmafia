@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import { DateField } from "@/components/ui/date-field";
 import { toDateValue, fromClubDateValue } from "@/lib/format";
 import { fieldLarge as field, fieldLabelLg as label } from "@/lib/ui";
 import { useSlugSuggestion } from "@/lib/use-slug-suggestion";
@@ -37,6 +38,12 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
     e.preventDefault();
     setError(null);
     setSaved(false);
+    // Раньше пустые даты отсекал required у <input type="date">; у своего
+    // календаря браузерной валидации нет, проверяем сами.
+    if (!startsAt || !endsAt) {
+      setError("Укажите даты начала и окончания турнира.");
+      return;
+    }
     setLoading(true);
     const payload = {
       name,
@@ -122,22 +129,18 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
       <div className="grid grid-cols-1 gap-4 @md:grid-cols-2">
         <label className={label}>
           Начало турнира
-          <input
-            type="date"
+          <DateField
             className={field}
             value={startsAt}
-            onChange={(e) => setStartsAt(e.target.value)}
-            required
+            onChange={setStartsAt}
           />
         </label>
         <label className={label}>
           Окончание турнира
-          <input
-            type="date"
+          <DateField
             className={field}
             value={endsAt}
-            onChange={(e) => setEndsAt(e.target.value)}
-            required
+            onChange={setEndsAt}
           />
           <span className="font-normal text-ink-500">
             Плейсхолдер для дат игр — точную дату каждой игры выставляют отдельно.
