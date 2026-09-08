@@ -156,6 +156,25 @@ class ApiClient:
         resp = await self._request("PUT", f"/api/bot/players/me?telegram_id={tg_id}", json=fields)
         return resp.json()
 
+    async def upload_photo(self, tg_id: int, content: bytes) -> dict:
+        """Аватарка из Telegram. multipart, а не json: файл на той стороне
+        принимает UploadFile. Имя и тип условные -- бэкенд смотрит на сами
+        байты и пересобирает картинку заново."""
+        resp = await self._request(
+            "POST",
+            "/api/bot/players/me/photo",
+            params={"telegram_id": tg_id},
+            files={"file": ("avatar.jpg", content, "image/jpeg")},
+        )
+        return resp.json()
+
+    async def fetch_media(self, path: str) -> bytes:
+        """Скачать медиа-файл с бэкенда -- нужен, чтобы показать админу
+        аватарку, ждущую проверки. /media/players отдаётся статикой и токена
+        не требует, но ходим тем же клиентом: адрес API у бота один."""
+        resp = await self._request("GET", path)
+        return resp.content
+
     async def my_stats(self, tg_id: int) -> dict:
         resp = await self._request("GET", "/api/bot/players/me/stats", params={"telegram_id": tg_id})
         return resp.json()

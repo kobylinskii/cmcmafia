@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from app import models
 from app.errors import ServiceError
+from app.services.player_service import delete_photo_file
 from app.textmatch import ci_equals
 
 STATUS_PENDING = models.ProfileChangeStatus.pending.value
@@ -32,7 +33,9 @@ STATUS_REJECTED = models.ProfileChangeStatus.rejected.value
 # Поля, которые игрок вводит текстом. Значения хранятся строкой независимо от
 # типа колонки -- в очереди лежит ровно то, что человек написал, а приведение
 # к типу происходит в момент применения (_coerce).
-MODERATED_FIELDS: tuple[str, ...] = ("full_name", "nickname", "age", "experience", "bio")
+MODERATED_FIELDS: tuple[str, ...] = (
+    "full_name", "nickname", "age", "experience", "bio", "photo_url",
+)
 
 FIELD_LABELS: dict[str, str] = {
     "full_name": "ФИО",
@@ -40,7 +43,15 @@ FIELD_LABELS: dict[str, str] = {
     "age": "возраст",
     "experience": "опыт",
     "bio": "о себе",
+    "photo_url": "фото",
 }
+
+# Единственное поле, чьё значение в очереди -- не то, что человек написал, а
+# адрес уже записанного на диск файла (боту он нужен, чтобы показать админу
+# саму картинку). Отсюда особенность: у отклонённой и у вытесненной правки
+# после решения остаётся файл, на который никто не ссылается, и его надо
+# убрать -- иначе волюм растёт на каждую непринятую аватарку.
+PHOTO_FIELD = "photo_url"
 
 
 class ProfileChangeError(ServiceError):
@@ -101,6 +112,8 @@ def submit(
     # подтвердить можно только последнюю правку.
     existing = pending_for_field(db, player_id=player.id, field=field)
     if existing is not None:
+        if field == PHOTO_FIELD:
+            delete_photo_file(existing.new_value)
         existing.new_value = new_value
         # Значение поменялось -- админам нужно написать заново (старое
         # сообщение показывает уже неактуальное «станет»).
@@ -177,7 +190,10 @@ def apply(db: Session, *, change: models.PlayerProfileChange) -> models.PlayerPr
     if change.field == "nickname" and change.new_value is not None:
         _ensure_nickname_free(db, player=player, nickname=change.new_value)
 
+    previous_photo = player.photo_url if change.field == PHOTO_FIELD else None
     setattr(player, change.field, _coerce(change.field, change.new_value))
+    if previous_photo:
+        delete_photo_file(previous_photo)
     change.status = STATUS_APPLIED
     change.decided_at = datetime.now(timezone.utc)
     change.notified_at = None
@@ -193,6 +209,8 @@ def reject(db: Session, *, change: models.PlayerProfileChange, reason: str) -> m
         # Причина -- единственное, что игрок увидит в боте: без неё отказ
         # выглядит как поломка (та же логика, что и у отказа по заявке).
         raise ProfileChangeError("Нужно указать причину отклонения")
+    if change.field == PHOTO_FIELD:
+        delete_photo_file(change.new_value)
     change.status = STATUS_REJECTED
     change.rejection_reason = reason
     change.decided_at = datetime.now(timezone.utc)

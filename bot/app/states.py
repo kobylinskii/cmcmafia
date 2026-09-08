@@ -30,6 +30,9 @@ class ProfileStates(StatesGroup):
     """
 
     waiting_for_value = State()
+    # Отдельное состояние, а не поле в waiting_for_value: там ждут текст, а
+    # тут -- вложение, и фильтры у обработчиков разные.
+    waiting_for_photo = State()
 
 
 class AdminStates(StatesGroup):

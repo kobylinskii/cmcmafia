@@ -88,6 +88,7 @@ class BotProfileChangeNotificationOut(BaseModel):
 
     change_id: int
     telegram_id: int
+    field: str
     field_label: str
     new_value: str | None
     status: str
@@ -174,6 +175,9 @@ class AdminProfileChangeNoticeOut(BaseModel):
     change_id: int
     player_nickname: str
     telegram_username: str | None
+    # Не только подпись: по имени поля бот решает, чем показать правку --
+    # строкой или самой картинкой (photo_url).
+    field: str
     field_label: str
     current_value: str | None
     new_value: str | None

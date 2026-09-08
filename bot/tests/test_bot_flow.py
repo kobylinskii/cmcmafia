@@ -11,6 +11,7 @@ callback_data, которую никто не слушает.
 from __future__ import annotations
 
 import importlib
+import io
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -20,8 +21,10 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.methods import (
     AnswerCallbackQuery,
     DeleteMessage,
+    EditMessageCaption,
     EditMessageText,
     SendMessage,
+    SendPhoto,
     TelegramMethod,
 )
 from aiogram.types import (
@@ -30,6 +33,7 @@ from aiogram.types import (
     Contact,
     InlineKeyboardMarkup,
     Message,
+    PhotoSize,
     ReplyKeyboardMarkup,
     Update,
     User,
@@ -41,6 +45,7 @@ USER_ID = 424242
 CHAT_ID = 424242
 
 # Те же поля, что и в profile_change_service.MODERATED_FIELDS на бэкенде.
+# photo_url приходит не текстом, а отдельной ручкой (см. FakeApi.upload_photo).
 MODERATED_FIELDS = ("full_name", "nickname", "age", "experience", "bio")
 
 
@@ -51,6 +56,7 @@ class MockedBot(Bot):
     def __init__(self) -> None:
         super().__init__(token="42:TEST")
         self.calls: list[TelegramMethod] = []
+        self.downloaded: list[str] = []
         self._next_message_id = 1000
 
     async def __call__(self, method: TelegramMethod, request_timeout: int | None = None) -> Any:
@@ -70,14 +76,34 @@ class MockedBot(Bot):
                 chat=Chat(id=CHAT_ID, type="private"),
                 text=method.text,
             )
-        if isinstance(method, (DeleteMessage, AnswerCallbackQuery)):
+        if isinstance(method, SendPhoto):
+            self._next_message_id += 1
+            return Message(
+                message_id=self._next_message_id,
+                date=datetime.now(),
+                chat=Chat(id=CHAT_ID, type="private"),
+                caption=method.caption,
+                photo=[PhotoSize(file_id="sent", file_unique_id="us", width=90, height=90)],
+            )
+        if isinstance(method, (DeleteMessage, AnswerCallbackQuery, EditMessageCaption)):
             return True
         return True
+
+    async def download(self, file, *args: Any, **kwargs: Any) -> io.BytesIO:
+        """Скачивание файла идёт мимо __call__ (get_file + stream по сети),
+        поэтому подменяется целиком: обработчику важны байты, а не откуда они."""
+        self.downloaded.append(file)
+        return io.BytesIO(b"\xff\xd8\xff fake jpeg")
 
     # ---- удобные срезы записанного
     @property
     def texts(self) -> list[str]:
-        return [c.text for c in self.calls if isinstance(c, (SendMessage, EditMessageText))]
+        """Текст сообщения или подпись картинки -- для экрана это одно и то же."""
+        return [
+            c.text if isinstance(c, (SendMessage, EditMessageText)) else c.caption
+            for c in self.calls
+            if isinstance(c, (SendMessage, EditMessageText, SendPhoto, EditMessageCaption))
+        ]
 
     @property
     def last_text(self) -> str:
@@ -141,6 +167,10 @@ class FakeApi:
         self.moderation_error: Exception | None = None
         self.pending_registrations: list[dict] = []
         self.pending_changes: list[dict] = []
+        self.uploaded_photos: list[bytes] = []
+        self.fetched_media: list[str] = []
+        self.admin_recipients: list[int] = []
+        self.acked_admin_notifications: tuple[list[int], list[int]] | None = None
         soon = datetime.now(LOCAL_TZ) + timedelta(days=1)
         self.session = _session(7, soon.replace(hour=18, minute=0, second=0, microsecond=0))
         # Ещё игры того же дня -- ими проверяется экран выбора формата, который
@@ -174,6 +204,7 @@ class FakeApi:
             "favorite_role": None,
             "experience": None,
             "bio": None,
+            "photo_url": None,
             "confirmation_status": "pending",
             "rejection_reason": None,
             "pending_changes": {},
@@ -189,6 +220,21 @@ class FakeApi:
                 continue
             self.profile[field] = value
         return self.profile
+
+    async def upload_photo(self, tg_id: int, content: bytes) -> dict:
+        """Повторяет правило бэкенда: файл пишется сразу, но в профиль
+        подтверждённого игрока встаёт только после решения админа."""
+        self.uploaded_photos.append(content)
+        url = f"/media/players/fake{len(self.uploaded_photos)}.jpg"
+        if self.profile["confirmation_status"] == "confirmed":
+            self.profile["pending_changes"]["photo_url"] = url
+            return {"photo_url": url, "pending": True}
+        self.profile["photo_url"] = url
+        return {"photo_url": url, "pending": False}
+
+    async def fetch_media(self, path: str) -> bytes:
+        self.fetched_media.append(path)
+        return b"jpeg bytes of " + path.encode()
 
     async def my_stats(self, tg_id: int) -> dict:
         return {"total_games": 0, "wins": 0, "win_rate": None, "rating": None,
@@ -255,6 +301,20 @@ class FakeApi:
         }
 
     # ---- модерация из сообщения и из раздела «На проверке»
+    async def admin_notifications(self) -> dict:
+        """Очередь оповещения админов -- то же, что ждёт решения, но с адресатами."""
+        return {
+            "recipients": self.admin_recipients,
+            "registrations": self.pending_registrations,
+            "profile_changes": self.pending_changes,
+        }
+
+    async def ack_admin_notifications(
+        self, *, registration_player_ids: list[int], profile_change_ids: list[int]
+    ) -> dict:
+        self.acked_admin_notifications = (registration_player_ids, profile_change_ids)
+        return {"marked": len(registration_player_ids) + len(profile_change_ids)}
+
     async def moderation_queue(self, tg_id: int) -> dict:
         return {
             "registrations": self.pending_registrations,
@@ -333,6 +393,24 @@ def _message(text: str | None = None, contact: Contact | None = None) -> Update:
             from_user=User(id=USER_ID, is_bot=False, first_name="Тест"),
             text=text,
             contact=contact,
+        ),
+    )
+
+
+def _photo_message() -> Update:
+    """Сообщение с картинкой в двух размерах -- обработчик обязан взять больший."""
+    _update_id[0] += 1
+    return Update(
+        update_id=_update_id[0],
+        message=Message(
+            message_id=_update_id[0],
+            date=datetime.now(),
+            chat=Chat(id=CHAT_ID, type="private"),
+            from_user=User(id=USER_ID, is_bot=False, first_name="Тест"),
+            photo=[
+                PhotoSize(file_id="small", file_unique_id="u1", width=90, height=90),
+                PhotoSize(file_id="big", file_unique_id="u2", width=1280, height=1280),
+            ],
         ),
     )
 
@@ -565,6 +643,93 @@ async def test_confirmed_player_edit_waits_for_the_admin(stack):
     assert "Отправлено на проверку" in bot.last_text
     assert "⏳ на проверке: Играю с 2015 года" in bot.last_text
     assert "Сохранено ✅" not in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_player_uploads_an_avatar_from_the_chat(stack):
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["confirmation_status"] = "confirmed"
+
+    await dp.feed_update(bot, _callback("pf:edit"))
+    assert "pf:field:photo" in bot.last_inline()
+
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+    assert "картинкой, а не файлом" in bot.last_text
+
+    # Не картинка -- экран остаётся на том же шаге, а не проваливается молча.
+    await dp.feed_update(bot, _message("вот моё фото"))
+    assert "Это не похоже на фотографию" in bot.last_text
+    assert not api.uploaded_photos
+
+    await dp.feed_update(bot, _photo_message())
+    assert bot.downloaded == ["big"], "нужен самый крупный размер"
+    assert api.uploaded_photos == [b"\xff\xd8\xff fake jpeg"]
+    # Фото подтверждённого игрока ждёт админа наравне с ФИО и ником.
+    assert api.profile["photo_url"] is None, "до решения фото в профиль не встаёт"
+    assert api.profile["pending_changes"] == {"photo_url": "/media/players/fake1.jpg"}
+    assert "отправлено на проверку" in bot.last_text.lower()
+    assert "⏳ новое фото на проверке" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_player_photo_applies_at_once(stack):
+    """У неподтверждённого на проверке весь профиль целиком -- отдельная
+    очередь по фото сделала бы отказ «пришлите другое» тупиком."""
+    dp, bot, api = stack
+    await _register(dp, bot)  # статус остаётся pending
+
+    await dp.feed_update(bot, _callback("pf:edit"))
+    await dp.feed_update(bot, _callback("pf:field:photo"))
+    assert "проверки администратора" not in bot.last_text
+
+    await dp.feed_update(bot, _photo_message())
+    assert api.profile["photo_url"] == "/media/players/fake1.jpg"
+    assert "Фото обновлено ✅" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_admin_sees_the_photo_itself_in_the_pending_card(stack):
+    """Решать по правке фото, не видя фото, нельзя: карточка в разделе
+    «На проверке» -- сама картинка, а не путь к файлу."""
+    dp, bot, api = stack
+    api.pending_changes = [_pending_photo_change(9)]
+    await _open_admin(dp, bot, api)
+
+    await dp.feed_update(bot, _callback("md:queue"))
+    bot.reset()
+    await dp.feed_update(bot, _callback("md:card:c:9:q"))
+
+    photos = [c for c in bot.calls if isinstance(c, SendPhoto)]
+    assert photos, "карточка правки фото должна быть картинкой"
+    assert api.fetched_media == ["/media/players/pending.jpg"]
+    assert "фото" in (photos[0].caption or "")
+    # Экран остался один: текстовый удалён, кнопки решения под картинкой.
+    assert any(isinstance(c, DeleteMessage) for c in bot.calls)
+    assert bot.last_inline() == ["md:ok:c:9:q", "md:no:c:9:q", "md:queue"]
+
+    await dp.feed_update(bot, _callback("md:ok:c:9:q"))
+    assert api.moderated == [("change", 9, None)]
+
+
+@pytest.mark.asyncio
+async def test_admin_notification_about_a_photo_carries_the_picture(stack):
+    """Уведомление админам -- то же самое: кнопки решения под самой картинкой."""
+    from app.notifier import deliver_admin_notifications_once
+
+    dp, bot, api = stack
+    api.pending_changes = [_pending_photo_change(9)]
+    api.admin_recipients = [USER_ID]
+
+    sent = await deliver_admin_notifications_once(bot, api)
+    assert sent == 1
+    photos = [c for c in bot.calls if isinstance(c, SendPhoto)]
+    assert len(photos) == 1
+    assert photos[0].caption and "просит поправить профиль" in photos[0].caption
+    assert [b.callback_data for row in photos[0].reply_markup.inline_keyboard for b in row] == [
+        "md:ok:c:9",
+        "md:no:c:9",
+    ]
 
 
 @pytest.mark.asyncio
@@ -915,10 +1080,23 @@ def _pending_change(change_id: int) -> dict:
         "change_id": change_id,
         "player_nickname": "Шериф",
         "telegram_username": None,
+        "field": "nickname",
         "field_label": "никнейм",
         "current_value": "Шериф",
         "new_value": "Комиссар",
         "created_at": "2026-09-07T12:00:00Z",
+    }
+
+
+def _pending_photo_change(change_id: int) -> dict:
+    """У правки фото в new_value лежит адрес файла, а не текст: смотреть надо
+    на картинку, и бот обязан её показать."""
+    return {
+        **_pending_change(change_id),
+        "field": "photo_url",
+        "field_label": "фото",
+        "current_value": None,
+        "new_value": "/media/players/pending.jpg",
     }
 
 

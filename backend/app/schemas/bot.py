@@ -48,12 +48,14 @@ class BotPlayerProfileOut(BaseModel):
     can_play: bool
     can_staff: bool
     is_bot_admin: bool
-    # Анкетные поля с сайта -- бот показывает их в профиле и даёт заполнить
-    # всё, кроме фото.
+    # Анкетные поля с сайта -- бот показывает их в профиле и даёт заполнить.
     age: int | None
     favorite_role: str | None
     experience: str | None
     bio: str | None
+    # Само фото загружается отдельной ручкой (multipart), здесь только адрес --
+    # боту он нужен, чтобы показать в карточке «Фото: загружено», а не гадать.
+    photo_url: str | None
     # Модерация регистрации (models.ConfirmationStatus): бот показывает статус
     # в профиле и предлагает отклонённому отправиться на повторную проверку.
     confirmation_status: str

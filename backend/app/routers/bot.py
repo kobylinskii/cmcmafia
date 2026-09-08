@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app import models
@@ -43,11 +43,13 @@ from app.services import (
     day_reminder_service,
     player_confirmation_service,
     profile_change_service,
+    player_service,
     registration_service,
     slug_service,
     stats_service,
 )
 from app.services.player_confirmation_service import ConfirmationError
+from app.services.player_service import PlayerValidationError
 from app.services.profile_change_service import ProfileChangeError
 from app.services.registration_service import RegistrationError
 
@@ -187,6 +189,53 @@ def update_my_profile(
     return _profile_out(db, actor)
 
 
+@router.post("/players/me/photo")
+# Лимит жёстче соседних ручек профиля: тут не JSON на пару килобайт, а картинка
+# с перекодированием на нашей стороне.
+@limiter.limit("10/minute")
+async def upload_my_photo(
+    request: Request,
+    file: UploadFile,
+    db: Session = Depends(get_db),
+    actor: models.Player = Depends(get_bot_actor),
+) -> dict:
+    """Аватарка из бота.
+
+    Фото подтверждённого игрока проходит проверку админа наравне с текстовыми
+    полями (раздел 3.8): на странице игрока это такая же публичная часть
+    профиля, как ник и ФИО. Файл при этом записывается сразу и до решения
+    лежит ничей -- иначе админу нечего было бы показать, кроме имени файла;
+    непринятый убирает за собой profile_change_service.
+
+    Содержимое не принимается на веру ни в одном из случаев: store_photo_file
+    пересобирает изображение заново, срезая метаданные и полиглот-контент.
+    """
+    raw = await file.read()
+    try:
+        photo_url = player_service.store_photo_file(raw, owner_id=actor.id)
+    except PlayerValidationError as exc:
+        raise HTTPException(422, exc.message) from exc
+
+    pending = profile_change_service.requires_moderation(actor, "photo_url")
+    previous = actor.photo_url
+    try:
+        if pending:
+            profile_change_service.submit(db, player=actor, field="photo_url", value=photo_url)
+        else:
+            actor.photo_url = photo_url
+        db.commit()
+    except ProfileChangeError as exc:
+        db.rollback()
+        # Файл уже на диске, а ссылаться на него теперь некому.
+        player_service.delete_photo_file(photo_url)
+        raise HTTPException(409, exc.message) from exc
+    if not pending:
+        # Только после удачного commit: иначе упавшая запись оставила бы игрока
+        # со ссылкой на удалённый файл.
+        player_service.delete_photo_file(previous)
+    return {"photo_url": photo_url, "pending": pending}
+
+
 @router.get("/players/me/stats", response_model=BotPlayerStatsOut)
 @limiter.limit("20/minute")
 def get_my_stats(
@@ -266,6 +315,7 @@ def list_profile_change_notifications(
         BotProfileChangeNotificationOut(
             change_id=change.id,
             telegram_id=change.player.telegram_id,
+            field=change.field,
             field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
             new_value=change.new_value,
             status=change.status,
@@ -304,6 +354,7 @@ def _profile_change_notice(change: models.PlayerProfileChange) -> AdminProfileCh
         change_id=change.id,
         player_nickname=change.player.nickname,
         telegram_username=change.player.telegram_username,
+        field=change.field,
         field_label=profile_change_service.FIELD_LABELS.get(change.field, change.field),
         current_value=profile_change_service.current_value(change.player, change.field),
         new_value=change.new_value,
@@ -495,6 +546,9 @@ def moderate_apply_profile_change(
         raise HTTPException(409, exc.message) from exc
     return {
         "nickname": change.player.nickname,
+        # Имя поля -- боту: у фото в new_value лежит путь к файлу, и показывать
+        # его в итоге решения незачем (см. handlers/moderation._verdict).
+        "field": change.field,
         "field_label": profile_change_service.FIELD_LABELS.get(change.field, change.field),
         "new_value": change.new_value,
     }
@@ -521,6 +575,9 @@ def moderate_reject_profile_change(
         raise HTTPException(409, exc.message) from exc
     return {
         "nickname": change.player.nickname,
+        # Имя поля -- боту: у фото в new_value лежит путь к файлу, и показывать
+        # его в итоге решения незачем (см. handlers/moderation._verdict).
+        "field": change.field,
         "field_label": profile_change_service.FIELD_LABELS.get(change.field, change.field),
         "new_value": change.new_value,
     }

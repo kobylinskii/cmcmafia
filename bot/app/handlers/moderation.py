@@ -43,9 +43,14 @@ from app.keyboards.inline import (
     moderation_keyboard,
     moderation_queue_keyboard,
 )
-from app.notifier import admin_profile_change_text, admin_registration_text
+from app.notifier import (
+    PHOTO_FIELD,
+    admin_profile_change_text,
+    admin_registration_text,
+    change_photo,
+)
 from app.states import ModerationStates
-from app.ui import consume_input, edit_screen, screen_message
+from app.ui import consume_input, edit_screen, open_photo_screen, open_screen, screen_message
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +83,11 @@ def _verdict(kind: str, result: dict, reason: str | None) -> str:
             return f"✅ Заявка {who} подтверждена."
         return f"⛔ Заявка {who} отклонена: {reason}"
     field = result.get("field_label") or "поле"
-    value = result.get("new_value") or "пусто"
+    # У фото значение -- путь к файлу: в итоге решения от него никакого толку.
+    value = "" if result.get("field") == PHOTO_FIELD else f" → {result.get('new_value') or 'пусто'}"
     if reason is None:
-        return f"✅ Применено: {who}, {field} → {value}"
-    return f"⛔ Отклонено: {who}, {field} → {value}\nПричина: {reason}"
+        return f"✅ Применено: {who}, {field}{value}"
+    return f"⛔ Отклонено: {who}, {field}{value}\nПричина: {reason}"
 
 
 def _strip_tail(text: str) -> str:
@@ -89,10 +95,25 @@ def _strip_tail(text: str) -> str:
     return text.split(f"\n\n{ASK_REASON}")[0]
 
 
+def _body(message: Message) -> str:
+    """Текст карточки. У правки фото карточка -- это картинка, и весь текст
+    лежит в подписи: message.text у неё None."""
+    return _strip_tail(message.text or message.caption or "")
+
+
+async def _rewrite(message: Message, text: str, keyboard: InlineKeyboardMarkup | None = None) -> None:
+    """Перерисовать карточку, чем бы она ни была. Подпись у фото правится
+    отдельным методом -- edit_text на нём отвечает «нет текста для правки»."""
+    if message.photo:
+        await message.edit_caption(caption=text, reply_markup=keyboard)
+    else:
+        await message.edit_text(text, reply_markup=keyboard)
+
+
 async def _finish(message: Message, text: str) -> None:
     """Дописать итог в уведомление и снять с него кнопки."""
     with suppress(TelegramBadRequest):
-        await message.edit_text(f"{_strip_tail(message.text or '')}\n\n{text}")
+        await _rewrite(message, f"{_body(message)}\n\n{text}")
 
 
 # ------------------------------------------------------------ «На проверке»
@@ -141,7 +162,20 @@ async def show_card(callback: CallbackQuery, state: FSMContext, api: ApiClient) 
         await show_queue(callback, state, api)
         await callback.answer("Это уже рассмотрели.", show_alert=True)
         return
-    await edit_screen(callback, state, text, moderation_keyboard(kind, item_id, from_queue=True))
+
+    keyboard = moderation_keyboard(kind, item_id, from_queue=True)
+    photo = await change_photo(api, item) if kind != KIND_REGISTRATION else None
+    if photo is not None:
+        # Смысл карточки правки фото -- увидеть фото. Экран при этом остаётся
+        # один: open_photo_screen убирает текстовый и присылает картинку.
+        message = screen_message(callback)
+        if message is None:
+            await callback.answer("Это сообщение слишком старое, откройте /admin.", show_alert=True)
+            return
+        await open_photo_screen(message, state, photo, text, keyboard)
+        await callback.answer()
+        return
+    await edit_screen(callback, state, text, keyboard)
 
 
 # ------------------------------------------------------------------ решение
@@ -195,12 +229,16 @@ async def ask_reason(callback: CallbackQuery, state: FSMContext) -> None:
         md_from_queue=from_queue,
         md_chat_id=message.chat.id,
         md_message_id=message.message_id,
-        md_text=_strip_tail(message.text or ""),
+        md_text=_body(message),
+        # Итог дописывается уже без самого сообщения, по chat_id/message_id, --
+        # а метод правки у картинки и у текста разный.
+        md_is_photo=bool(message.photo),
     )
     with suppress(TelegramBadRequest):
-        await message.edit_text(
-            f"{_strip_tail(message.text or '')}\n\n{ASK_REASON}",
-            reply_markup=moderation_cancel_keyboard(kind, item_id, from_queue=from_queue),
+        await _rewrite(
+            message,
+            f"{_body(message)}\n\n{ASK_REASON}",
+            moderation_cancel_keyboard(kind, item_id, from_queue=from_queue),
         )
     await callback.answer()
 
@@ -212,9 +250,10 @@ async def cancel_reason(callback: CallbackQuery, state: FSMContext) -> None:
     message = screen_message(callback)
     if message is not None:
         with suppress(TelegramBadRequest):
-            await message.edit_text(
-                _strip_tail(message.text or ""),
-                reply_markup=moderation_keyboard(kind, item_id, from_queue=from_queue),
+            await _rewrite(
+                message,
+                _body(message),
+                moderation_keyboard(kind, item_id, from_queue=from_queue),
             )
     await callback.answer()
 
@@ -243,7 +282,7 @@ async def reason_received(message: Message, state: FSMContext, api: ApiClient) -
     await state.set_state(None)
     await state.update_data(
         md_kind=None, md_id=None, md_from_queue=None, md_chat_id=None, md_message_id=None,
-        md_text=None,
+        md_text=None, md_is_photo=None,
     )
 
     chat_id, message_id = data.get("md_chat_id"), data.get("md_message_id")
@@ -259,15 +298,25 @@ async def reason_received(message: Message, state: FSMContext, api: ApiClient) -
             text, keyboard = verdict, None
         else:
             text = f"{verdict}\n\n{text}"
+        if data.get("md_is_photo"):
+            # Карточку-картинку текстом не заменить: убираем её и присылаем
+            # список заново -- ровно то, что делает open_screen.
+            await open_screen(message, state, text, keyboard)
+            return
     else:
         # Итог дописывается в само уведомление, кнопки снимаются: решать
         # второй раз нечем, и в чате не появляется отдельного сообщения.
         text, keyboard = f"{data.get('md_text') or ''}\n\n{verdict}".strip(), None
 
     try:
-        await message.bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard
-        )
+        if data.get("md_is_photo") and not data.get("md_from_queue"):
+            await message.bot.edit_message_caption(
+                chat_id=chat_id, message_id=message_id, caption=text, reply_markup=keyboard
+            )
+        else:
+            await message.bot.edit_message_text(
+                chat_id=chat_id, message_id=message_id, text=text, reply_markup=keyboard
+            )
     except TelegramBadRequest:
         logger.info("Не удалось дописать итог в сообщение %s", message_id)
         await message.answer(verdict)

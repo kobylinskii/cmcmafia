@@ -1,7 +1,7 @@
 """Профиль игрока: карточка, редактирование и повторная заявка.
 
-Это же место закрывает и «анкету для сайта» -- возраст, любимую роль, опыт и
-рассказ о себе. Всё, кроме фотографии: её загрузка остаётся на сайте.
+Это же место закрывает и «анкету для сайта» -- возраст, любимую роль, опыт,
+рассказ о себе и фотографию.
 
 Экран всегда один и тот же, он перерисовывается по шагам (карточка -> список
 полей -> ввод значения -> карточка). Раньше редактирование профиля жило на
@@ -64,10 +64,13 @@ TEXT_FIELDS: dict[str, tuple[str, str]] = {
 }
 
 
+PHOTO_PROMPT = "Пришлите фотографию для страницы на сайте — картинкой, а не файлом."
+
+
 def moderation_note(user: dict) -> str:
-    """Предупреждение перед вводом. Все поля этого раздела -- текстовые, и у
-    подтверждённого игрока каждое из них проходит проверку админа (бэкенд,
-    profile_change_service.MODERATED_FIELDS). Молча принять текст и не
+    """Предупреждение перед вводом. Каждое поле этого раздела -- и текстовые,
+    и фото -- у подтверждённого игрока проходит проверку админа (бэкенд,
+    profile_change_service.MODERATED_FIELDS). Молча принять значение и не
     показать его в профиле означало бы выглядеть сломанным."""
     if user.get("confirmation_status") != "confirmed":
         return ""
@@ -113,6 +116,8 @@ def _profile_text(user: dict, stats: dict | None) -> str:
         f"• Любимая роль: {texts.FAVORITE_ROLES.get(user.get('favorite_role') or '', '—')}",
         f"• Опыт: {user.get('experience') or '—'}{_pending_note(user, 'experience')}",
         f"• О себе: {user.get('bio') or '—'}{_pending_note(user, 'bio')}",
+        f"• Фото: {'загружено' if user.get('photo_url') else '—'}"
+        + ("\n   ⏳ новое фото на проверке" if "photo_url" in (user.get("pending_changes") or {}) else ""),
         "",
         _stats_line(stats),
     ]
@@ -231,6 +236,13 @@ async def open_field(callback: CallbackQuery, state: FSMContext, api: ApiClient)
         )
         return
 
+    if field == "photo":
+        await state.set_state(ProfileStates.waiting_for_photo)
+        await edit_screen(
+            callback, state, PHOTO_PROMPT + moderation_note(user), cancel_input_keyboard("pf:edit")
+        )
+        return
+
     prompt = TEXT_FIELDS.get(field)
     if prompt is None:
         await callback.answer("Это поле нельзя изменить в боте.", show_alert=True)
@@ -338,11 +350,6 @@ async def save_text_value(message: Message, state: FSMContext, api: ApiClient) -
         await open_screen(message, state, f"Не удалось сохранить: {exc.message}", profile_fields_keyboard())
         return
 
-    await state.set_state(None)
-    card = await _load_card(api, message.from_user.id)
-    if card is None:
-        return
-    user, text = card
     # Текстовые поля подтверждённого игрока сохраняются не сразу: они уходят
     # админу на проверку, и обещать «сохранено» в этом случае нельзя.
     queued = field in (updated.get("pending_changes") or {})
@@ -351,6 +358,59 @@ async def save_text_value(message: Message, state: FSMContext, api: ApiClient) -
         if queued
         else "Сохранено ✅"
     )
+    await _show_card_after_input(message, state, api, headline)
+
+
+@router.message(ProfileStates.waiting_for_photo, F.photo)
+async def save_photo(message: Message, state: FSMContext, api: ApiClient) -> None:
+    """Аватарка из чата.
+
+    Берём самый крупный из присланных Telegram размеров: мельче он сожмёт
+    сам, а на сайте фото стоит в карточке игрока крупным планом. Скачиваем ДО
+    consume_input -- сообщение с вложением после удаления уже не наше."""
+    buffer = await message.bot.download(message.photo[-1].file_id)
+    await consume_input(message)
+    try:
+        result = await api.upload_photo(message.from_user.id, buffer.read())
+    except ApiError as exc:
+        await open_screen(
+            message, state, f"Не удалось сохранить: {exc.message}\n\n{PHOTO_PROMPT}",
+            cancel_input_keyboard("pf:edit"),
+        )
+        return
+    # У подтверждённого игрока фото ждёт админа наравне с ФИО и ником, и
+    # обещать «обновлено» в этом случае нельзя: на сайте пока прежнее.
+    headline = (
+        "⏳ Фото отправлено на проверку администратору.\nПока на сайте прежнее."
+        if result.get("pending")
+        else "Фото обновлено ✅"
+    )
+    await _show_card_after_input(message, state, api, headline)
+
+
+@router.message(ProfileStates.waiting_for_photo)
+async def reject_non_photo(message: Message, state: FSMContext) -> None:
+    """Всё, что не картинка: текст, стикер, документ (в том числе картинка,
+    отправленная «как файл» -- у неё нет message.photo). Без этой ветки такое
+    сообщение молча проваливалось мимо всех фильтров, и экран не менялся."""
+    await consume_input(message)
+    await open_screen(
+        message,
+        state,
+        f"Это не похоже на фотографию.\n\n{PHOTO_PROMPT}",
+        cancel_input_keyboard("pf:edit"),
+    )
+
+
+async def _show_card_after_input(
+    message: Message, state: FSMContext, api: ApiClient, headline: str
+) -> None:
+    """Вернуть человека в карточку профиля после ручного ввода."""
+    await state.set_state(None)
+    card = await _load_card(api, message.from_user.id)
+    if card is None:
+        return
+    user, text = card
     await open_screen(
         message,
         state,

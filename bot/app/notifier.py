@@ -22,10 +22,10 @@ import logging
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramNotFound
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from app import texts
-from app.api_client import ApiClient, format_time
+from app.api_client import ApiClient, ApiError, format_time
 from app.keyboards.inline import KIND_CHANGE, KIND_REGISTRATION, moderation_keyboard
 
 logger = logging.getLogger(__name__)
@@ -61,11 +61,24 @@ def rejected_text(reason: str | None) -> str:
     )
 
 
+# Поле, чьё значение -- адрес файла, а не текст: показывать его человеку
+# бессмысленно, показывать надо саму картинку.
+PHOTO_FIELD = "photo_url"
+
+
 def profile_change_text(item: dict) -> str:
     """Решение по правке профиля. Значение показывается целиком: человек мог
     отправить её давно и уже не помнить, что именно менял."""
     field = item.get("field_label") or "поле"
     value = item.get("new_value")
+    if item.get("field") == PHOTO_FIELD:
+        if item.get("status") == "applied":
+            return "✅ Новое фото принято — оно уже на вашей странице."
+        return (
+            "⛔ Новое фото отклонено.\n\n"
+            f"Причина: {item.get('rejection_reason') or 'не указана'}\n\n"
+            "Пришлите другое в разделе «👤 Профиль»."
+        )
     shown = f"«{value}»" if value else "пустое значение"
     if item.get("status") == "applied":
         return f"✅ Изменение принято: {field} — теперь {shown}."
@@ -98,6 +111,14 @@ def admin_profile_change_text(item: dict) -> str:
     nickname = item.get("player_nickname") or "игрок"
     current = item.get("current_value") or "пусто"
     new_value = item.get("new_value") or "пусто"
+    if item.get("field") == PHOTO_FIELD:
+        # Пути к файлам вместо «сейчас/станет»: смотреть надо на картинку, она
+        # прикреплена к этому же сообщению.
+        return (
+            f"✏️ {nickname} просит поправить профиль — фото\n"
+            "Новое фото — в этом сообщении, прежнее остаётся до решения.\n\n"
+            "Решите кнопками ниже."
+        )
     return (
         f"✏️ {nickname} просит поправить профиль — {field}\n"
         f"сейчас: {current}\n"
@@ -125,7 +146,11 @@ def day_reminder_text(item: dict) -> str:
 
 
 async def _deliver(
-    bot: Bot, telegram_id: int, text: str, keyboard: InlineKeyboardMarkup | None = None
+    bot: Bot,
+    telegram_id: int,
+    text: str,
+    keyboard: InlineKeyboardMarkup | None = None,
+    photo: bytes | None = None,
 ) -> bool | None:
     """Отправить одно сообщение (общее для всех очередей: игроку и админу).
 
@@ -134,7 +159,17 @@ async def _deliver(
     None -- временная ошибка, строка остаётся в очереди до следующего прохода.
     """
     try:
-        await bot.send_message(telegram_id, text, reply_markup=keyboard)
+        if photo is None:
+            await bot.send_message(telegram_id, text, reply_markup=keyboard)
+        else:
+            # Подпись, а не отдельное сообщение: кнопки решения должны быть под
+            # той самой картинкой, которую админ смотрит.
+            await bot.send_photo(
+                telegram_id,
+                BufferedInputFile(photo, "photo.jpg"),
+                caption=text,
+                reply_markup=keyboard,
+            )
     except (TelegramForbiddenError, TelegramNotFound):
         # Адресат заблокировал бота или удалил аккаунт.
         logger.info("Чат %s недоступен, пропускаем", telegram_id)
@@ -199,7 +234,11 @@ async def deliver_profile_changes_once(bot: Bot, api: ApiClient) -> int:
 
 
 async def _deliver_to_admins(
-    bot: Bot, recipients: list[int], text: str, keyboard: InlineKeyboardMarkup
+    bot: Bot,
+    recipients: list[int],
+    text: str,
+    keyboard: InlineKeyboardMarkup,
+    photo: bytes | None = None,
 ) -> bool:
     """Разослать одно уведомление всем админам сразу.
 
@@ -211,9 +250,24 @@ async def _deliver_to_admins(
     """
     resolved = True
     for telegram_id in recipients:
-        if await _deliver(bot, telegram_id, text, keyboard) is None:
+        if await _deliver(bot, telegram_id, text, keyboard, photo) is None:
             resolved = False
     return resolved
+
+
+async def change_photo(api: ApiClient, item: dict) -> bytes | None:
+    """Картинка правки, если правка про фото.
+
+    Недоступный файл не должен задерживать очередь: карточка уйдёт текстом,
+    решение по ней всё равно принимается кнопками.
+    """
+    if item.get("field") != PHOTO_FIELD or not item.get("new_value"):
+        return None
+    try:
+        return await api.fetch_media(item["new_value"])
+    except ApiError:
+        logger.warning("Не удалось забрать фото %s", item.get("new_value"), exc_info=True)
+        return None
 
 
 async def deliver_admin_notifications_once(bot: Bot, api: ApiClient) -> int:
@@ -241,16 +295,16 @@ async def deliver_admin_notifications_once(bot: Bot, api: ApiClient) -> int:
             moderation_keyboard(KIND_REGISTRATION, item["player_id"]),
         )
     ]
-    acked_changes = [
-        item["change_id"]
-        for item in profile_changes
+    acked_changes = []
+    for item in profile_changes:
         if await _deliver_to_admins(
             bot,
             recipients,
             admin_profile_change_text(item),
             moderation_keyboard(KIND_CHANGE, item["change_id"]),
-        )
-    ]
+            await change_photo(api, item),
+        ):
+            acked_changes.append(item["change_id"])
 
     if acked_registrations or acked_changes:
         await api.ack_admin_notifications(

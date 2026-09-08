@@ -472,7 +472,7 @@ class PlayerProfileChange(Base):
             name="ck_profile_changes_status_enum",
         ),
         CheckConstraint(
-            "field IN ('full_name','nickname','age','experience','bio')",
+            "field IN ('full_name','nickname','age','experience','bio','photo_url')",
             name="ck_profile_changes_field_enum",
         ),
         CheckConstraint(

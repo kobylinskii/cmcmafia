@@ -148,9 +148,12 @@ def revoke_site_access(db: Session, *, player: models.Player) -> None:
 ALLOWED_IMAGE_FORMATS = {"JPEG", "PNG", "WEBP"}
 
 
-def save_player_photo(db: Session, *, player: models.Player, raw_bytes: bytes) -> str:
+def store_photo_file(raw_bytes: bytes, *, owner_id: int | None = None) -> str:
     """Валидирует и переconvert'ит фото (снимает потенциальные вредоносные
-    метаданные/полиглот-контент), сохраняет под случайным именем."""
+    метаданные/полиглот-контент), сохраняет под случайным именем и отдаёт
+    адрес. Игрока не трогает: у фото из бота между записью на диск и
+    появлением в профиле стоит проверка админа (profile_change_service), и
+    файл на это время лежит ничей."""
     if len(raw_bytes) > settings.max_photo_bytes:
         raise PlayerValidationError("Файл слишком большой")
 
@@ -179,19 +182,25 @@ def save_player_photo(db: Session, *, player: models.Player, raw_bytes: bytes) -
         path = os.path.join(settings.media_root, filename)
         image.save(path, format="JPEG", quality=85)
     except Exception as exc:
-        logger.exception("Не удалось обработать фото для игрока id=%s", player.id)
+        logger.exception("Не удалось обработать фото для игрока id=%s", owner_id)
         raise PlayerValidationError(
             "Не удалось обработать изображение — попробуйте другой файл"
         ) from exc
 
+    return f"/media/players/{filename}"
+
+
+def save_player_photo(db: Session, *, player: models.Player, raw_bytes: bytes) -> str:
+    """Записать фото и сразу поставить его в профиль (админка сайта)."""
+    photo_url = store_photo_file(raw_bytes, owner_id=player.id)
     previous = player.photo_url
-    player.photo_url = f"/media/players/{filename}"
+    player.photo_url = photo_url
     db.flush()
-    _delete_photo_file(previous)
-    return player.photo_url
+    delete_photo_file(previous)
+    return photo_url
 
 
-def _delete_photo_file(photo_url: str | None) -> None:
+def delete_photo_file(photo_url: str | None) -> None:
     """Убрать с диска файл, на который больше никто не ссылается.
 
     Каждая перезагрузка фото писала новый uuid4().hex.jpg и только

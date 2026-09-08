@@ -32,6 +32,7 @@ from contextlib import suppress
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
+    BufferedInputFile,
     CallbackQuery,
     InaccessibleMessage,
     InlineKeyboardMarkup,
@@ -73,6 +74,36 @@ async def open_screen(
         with suppress(TelegramBadRequest):
             await message.bot.delete_message(chat_id=message.chat.id, message_id=int(previous))
     sent = await message.answer(text, reply_markup=keyboard)
+    await state.update_data(**{SCREEN_KEY: sent.message_id})
+    return sent
+
+
+async def open_photo_screen(
+    message: Message,
+    state: FSMContext,
+    photo: bytes,
+    text: str,
+    keyboard: InlineKeyboardMarkup | None = None,
+) -> Message:
+    """То же, что open_screen, но экран -- картинка с подписью.
+
+    Нужен ровно одному месту: карточке правки фото в разделе «На проверке».
+    Смысл карточки в том, чтобы посмотреть на фото, а текстовое сообщение
+    заменить картинкой Telegram не даёт -- только удалить и прислать заново,
+    что open_screen и делает.
+
+    Обратный переход (назад к списку) отдельной поддержки не требует:
+    edit_screen попробует edit_text, получит от Telegram отказ и сам пришлёт
+    текстовый экран взамен этого.
+    """
+    data = await state.get_data()
+    previous = data.get(SCREEN_KEY)
+    if previous:
+        with suppress(TelegramBadRequest):
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=int(previous))
+    sent = await message.answer_photo(
+        BufferedInputFile(photo, "photo.jpg"), caption=text, reply_markup=keyboard
+    )
     await state.update_data(**{SCREEN_KEY: sent.message_id})
     return sent
 
