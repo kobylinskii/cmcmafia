@@ -277,9 +277,20 @@ class Tournament(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
+    # Показывать ли на публичной странице блок «Номинации и победители».
+    # Сами номинации -- чистая производная от оценённых игр финального стола
+    # (см. awards_service), считаются всегда; публикует их админ вручную:
+    # пока турнир идёт, промежуточный «лучший дон» не значит ничего.
+    awards_published: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+
     games: Mapped[list[Game]] = relationship(back_populates="tournament")
     stages: Mapped[list[TournamentStage]] = relationship(
         back_populates="tournament", cascade="all, delete-orphan", order_by="TournamentStage.order"
+    )
+    awards: Mapped[list[TournamentAward]] = relationship(
+        back_populates="tournament", cascade="all, delete-orphan"
     )
 
     __table_args__ = (
@@ -288,6 +299,41 @@ class Tournament(Base):
             name="ck_tournaments_slug_format",
         ),
         CheckConstraint("ends_at >= starts_at", name="ck_tournaments_ends_after_starts"),
+    )
+
+
+class TournamentAward(Base):
+    """Ручная правка победителя номинации.
+
+    Строка появляется ТОЛЬКО там, где админ не согласился с расчётом: пустая
+    таблица означает «все номинации присуждены автоматически». Хранить
+    посчитанных победителей незачем -- они пересчитываются из игр финального
+    стола на каждый запрос (awards_service.compute_awards) и обязаны меняться
+    вслед за правкой оценки игры.
+    """
+
+    __tablename__ = "tournament_awards"
+
+    tournament_id: Mapped[int] = mapped_column(
+        ForeignKey("tournaments.id", ondelete="CASCADE"), primary_key=True
+    )
+    nomination: Mapped[str] = mapped_column(String(20), primary_key=True)
+    player_id: Mapped[int] = mapped_column(
+        ForeignKey("players.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    tournament: Mapped[Tournament] = relationship(back_populates="awards")
+    player: Mapped[Player] = relationship()
+
+    __table_args__ = (
+        # Список зеркалит awards_service.NOMINATIONS -- новая номинация требует
+        # миграции ровно так же, как новая роль или новый статус игры.
+        CheckConstraint(
+            "nomination IN ('best_citizen','best_mafia','best_don','best_sheriff','mvp',"
+            "'first_place','second_place','third_place')",
+            name="ck_tournament_awards_nomination_enum",
+        ),
     )
 
 

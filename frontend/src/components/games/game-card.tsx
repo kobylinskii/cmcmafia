@@ -15,6 +15,10 @@ export function GameCard({ game }: { game: GameListItem }) {
       className="flex flex-col gap-3 rounded-card border border-ink-800 bg-ink-900 p-5 transition-colors hover:border-brand-600/60 lg:flex-row lg:items-center lg:justify-between"
     >
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-4">
+        {/* Номер игры -- это её id: игры пронумерованы подряд по дате
+            (game_service.resequence_game_ids), и именно так игра называется в
+            карточке и в URL. См. ARCHITECTURE.md, раздел 5.2. */}
+        <span className="font-mono text-base text-ink-500">№{game.id}</span>
         <span className="inline-flex items-center gap-1.5 text-base text-ink-200">
           <CalendarBlank size={16} className="text-ink-400" />
           {formatDate(game.starts_at)}

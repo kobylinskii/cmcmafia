@@ -36,7 +36,9 @@ class ParticipantIn(BaseModel):
     # Судейские баллы -- от 0 до 5 с шагом 0.25 (регламент клуба).
     points_judge: float = Field(default=0, ge=0, le=5)
     lh: float | None = Field(default=None, ge=0, le=1.5)
-    ci: float | None = Field(default=None, ge=-20, le=20)
+    # Ci -- компенсация, отрицательной не бывает: штрафы вычитаются
+    # отдельными полями (zk/sk/removals/ppk), см. stats_service._PENALTY_SQL.
+    ci: float | None = Field(default=None, ge=0, le=20)
     info: ParticipantInfoT | None = None
     removals: int | None = Field(default=None, ge=0, le=10)
     ppk: bool = False

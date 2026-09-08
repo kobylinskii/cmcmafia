@@ -54,6 +54,21 @@ _SCORE_SQL = (
 # это компенсация, а не заработанный игроком дополнительный балл.
 _BONUS_SQL = models.GameParticipant.points_judge + _LH_POINTS_SQL
 
+# Победа/поражение участника: исход игры, сопоставленный с цветом его роли.
+# Ничья не считается ни тем, ни другим.
+_RED = tuple(sorted(rating_service.RED_ROLES))
+_BLACK = tuple(sorted(rating_service.BLACK_ROLES))
+_WIN_SQL = or_(
+    and_(models.Game.result == "city_win", models.GameParticipant.role.in_(_RED)),
+    and_(models.Game.result == "mafia_win", models.GameParticipant.role.in_(_BLACK)),
+)
+_LOSS_SQL = or_(
+    and_(models.Game.result == "mafia_win", models.GameParticipant.role.in_(_RED)),
+    and_(models.Game.result == "city_win", models.GameParticipant.role.in_(_BLACK)),
+)
+# «Активные роли» регламента -- те, у кого в игре есть собственный ночной ход.
+_ACTIVE_SQL = models.GameParticipant.role.in_(("don", "sheriff"))
+
 def _score(value) -> float:
     """Numeric из БД -> float для JSON, округлённый до сотых.
 
@@ -280,58 +295,62 @@ class TournamentStandingRow:
     zk: float
     sk: float
     total_score: float
+    # Не показываются в таблице отдельными колонками -- нужны как тай-брейк
+    # мест (см. _standing_sort_key) и как статистика номинаций (awards_service).
+    wins: int = 0
+    losses: int = 0
+    active_wins: int = 0
+    active_losses: int = 0
 
 
-def tournament_standings(
-    db: Session, *, tournament_id: int, stage_id: int | None = None
-) -> list[TournamentStandingRow]:
-    """Турнирная таблица: суммы игровых колонок по оценённым играм турнира,
-    один игрок -- одна строка, отсортировано по total_score.
+def _standing_columns() -> list:
+    """Агрегаты одной строки турнирной таблицы. Общие для таблицы одного этапа
+    и для сводного запроса по всем этапам сразу -- иначе колонки приходится
+    добавлять в двух местах и они расходятся."""
+    return [
+        func.count().label("games_count"),
+        func.sum(models.GameParticipant.points_win).label("points_win"),
+        func.sum(models.GameParticipant.points_judge).label("points_judge"),
+        func.sum(_LH_POINTS_SQL).label("lh_points"),
+        func.sum(func.coalesce(models.GameParticipant.ci, 0)).label("ci"),
+        func.sum(func.coalesce(models.GameParticipant.removals, 0)).label("removals"),
+        func.count().filter(models.GameParticipant.ppk.is_(True)).label("ppk_count"),
+        func.sum(func.coalesce(models.GameParticipant.zk, 0)).label("zk"),
+        func.sum(func.coalesce(models.GameParticipant.sk, 0)).label("sk"),
+        func.sum(_SCORE_SQL).label("total_score"),
+        func.count().filter(_WIN_SQL).label("wins"),
+        func.count().filter(_LOSS_SQL).label("losses"),
+        func.count().filter(and_(_WIN_SQL, _ACTIVE_SQL)).label("active_wins"),
+        func.count().filter(and_(_LOSS_SQL, _ACTIVE_SQL)).label("active_losses"),
+    ]
 
-    stage_id фильтрует по конкретному этапу. stage_id=None -- НЕ "без
-    фильтра", а "игры без этапа" (Game.stage_id IS NULL): для турнира без
-    сеток это ровно все его игры (game_service принудительно держит там
-    stage_id=NULL), так что вызывающему коду не нужно различать "турнир с
-    сетками" и "турнир без сеток" -- обычный турнир просто эквивалентен
-    турниру с сетками, но без единого зарегистрированного этапа.
 
-    total_score считается суммой той же _SCORE_SQL, что и колонка «Итог» в
-    карточке отдельной игры (stats_service.get_rated_game) -- сумма итогов по
-    играм турнира равна итогу от суммы колонок, формула линейна по каждому
-    слагаемому, так что переносить её сюда отдельной строкой не нужно.
+def _standing_sort_key(r) -> tuple:
+    """Порядок мест в турнирной таблице. Сортировка одна на все таблицы:
+    по ней же присуждаются места турнира и разрешаются равенства в номинациях
+    (awards_service), так что жить она должна в одном месте.
+
+    При равной сумме баллов приоритет по регламенту клуба: баллы от судей ->
+    больше побед -> больше побед на активных ролях (дон, шериф) -> меньше
+    поражений на активных ролях. Больше -- лучше у всех элементов, поэтому
+    поражения входят со знаком минус, а сортировка идёт reverse=True.
     """
-    rows = (
-        db.query(
-            models.GameParticipant.player_id,
-            func.count().label("games_count"),
-            func.sum(models.GameParticipant.points_win).label("points_win"),
-            func.sum(models.GameParticipant.points_judge).label("points_judge"),
-            func.sum(_LH_POINTS_SQL).label("lh_points"),
-            func.sum(func.coalesce(models.GameParticipant.ci, 0)).label("ci"),
-            func.sum(func.coalesce(models.GameParticipant.removals, 0)).label("removals"),
-            func.count().filter(models.GameParticipant.ppk.is_(True)).label("ppk_count"),
-            func.sum(func.coalesce(models.GameParticipant.zk, 0)).label("zk"),
-            func.sum(func.coalesce(models.GameParticipant.sk, 0)).label("sk"),
-            func.sum(_SCORE_SQL).label("total_score"),
-        )
-        .join(models.Game, models.Game.id == models.GameParticipant.game_id)
-        .filter(
-            models.Game.tournament_id == tournament_id,
-            models.Game.stage_id == stage_id,
-            models.Game.status == "rated",
-        )
-        .group_by(models.GameParticipant.player_id)
-        .order_by(func.sum(_SCORE_SQL).desc())
-        .all()
+    return (
+        _score(r.total_score),
+        _score(r.points_judge),
+        r.wins,
+        r.active_wins,
+        -r.active_losses,
     )
-    if not rows:
-        return []
 
-    players = {
-        p.id: p
-        for p in db.query(models.Player).filter(models.Player.id.in_([r.player_id for r in rows])).all()
-    }
 
+def _to_standing_rows(rows: list, players: dict[int, models.Player]) -> list[TournamentStandingRow]:
+    """Сырые строки агрегата -> отсортированная таблица с проставленными местами.
+
+    Сортировка в Python, а не в SQL: тай-брейк -- составной, а сводный запрос
+    по всем этапам сразу всё равно нумеруется каждой таблицей со своей
+    единицы. Строк тут десятки, не тысячи.
+    """
     return [
         TournamentStandingRow(
             player=players[r.player_id],
@@ -346,9 +365,55 @@ def tournament_standings(
             zk=_score(r.zk),
             sk=_score(r.sk),
             total_score=_score(r.total_score),
+            wins=int(r.wins),
+            losses=int(r.losses),
+            active_wins=int(r.active_wins),
+            active_losses=int(r.active_losses),
         )
-        for idx, r in enumerate(rows, start=1)
+        for idx, r in enumerate(
+            sorted(rows, key=_standing_sort_key, reverse=True), start=1
+        )
     ]
+
+
+def tournament_standings(
+    db: Session, *, tournament_id: int, stage_id: int | None = None
+) -> list[TournamentStandingRow]:
+    """Турнирная таблица: суммы игровых колонок по оценённым играм турнира,
+    один игрок -- одна строка, отсортировано по total_score (равные суммы
+    разводит тай-брейк регламента, см. _standing_sort_key).
+
+    stage_id фильтрует по конкретному этапу. stage_id=None -- НЕ "без
+    фильтра", а "игры без этапа" (Game.stage_id IS NULL): для турнира без
+    сеток это ровно все его игры (game_service принудительно держит там
+    stage_id=NULL), так что вызывающему коду не нужно различать "турнир с
+    сетками" и "турнир без сеток" -- обычный турнир просто эквивалентен
+    турниру с сетками, но без единого зарегистрированного этапа.
+
+    total_score считается суммой той же _SCORE_SQL, что и колонка «Итог» в
+    карточке отдельной игры (stats_service.get_rated_game) -- сумма итогов по
+    играм турнира равна итогу от суммы колонок, формула линейна по каждому
+    слагаемому, так что переносить её сюда отдельной строкой не нужно.
+    """
+    rows = (
+        db.query(models.GameParticipant.player_id, *_standing_columns())
+        .join(models.Game, models.Game.id == models.GameParticipant.game_id)
+        .filter(
+            models.Game.tournament_id == tournament_id,
+            models.Game.stage_id == stage_id,
+            models.Game.status == "rated",
+        )
+        .group_by(models.GameParticipant.player_id)
+        .all()
+    )
+    if not rows:
+        return []
+
+    players = {
+        p.id: p
+        for p in db.query(models.Player).filter(models.Player.id.in_([r.player_id for r in rows])).all()
+    }
+    return _to_standing_rows(rows, players)
 
 
 def tournament_standings_all(
@@ -367,16 +432,7 @@ def tournament_standings_all(
         db.query(
             models.Game.stage_id.label("stage_id"),
             models.GameParticipant.player_id,
-            func.count().label("games_count"),
-            func.sum(models.GameParticipant.points_win).label("points_win"),
-            func.sum(models.GameParticipant.points_judge).label("points_judge"),
-            func.sum(_LH_POINTS_SQL).label("lh_points"),
-            func.sum(func.coalesce(models.GameParticipant.ci, 0)).label("ci"),
-            func.sum(func.coalesce(models.GameParticipant.removals, 0)).label("removals"),
-            func.count().filter(models.GameParticipant.ppk.is_(True)).label("ppk_count"),
-            func.sum(func.coalesce(models.GameParticipant.zk, 0)).label("zk"),
-            func.sum(func.coalesce(models.GameParticipant.sk, 0)).label("sk"),
-            func.sum(_SCORE_SQL).label("total_score"),
+            *_standing_columns(),
         )
         .join(models.Game, models.Game.id == models.GameParticipant.game_id)
         .filter(
@@ -400,30 +456,65 @@ def tournament_standings_all(
     for r in rows:
         by_stage[r.stage_id].append(r)
 
-    result: dict[int | None, list[TournamentStandingRow]] = {}
-    for stage_id, stage_rows in by_stage.items():
-        # Сортировка в Python, а не в SQL: одним запросом на весь турнир
-        # ORDER BY дал бы общий порядок, а таблицы этапов нумеруются каждая
-        # со своей единицы. Строк тут десятки, не тысячи.
-        stage_rows.sort(key=lambda r: _score(r.total_score), reverse=True)
-        result[stage_id] = [
-            TournamentStandingRow(
-                player=players[r.player_id],
-                rank=idx,
-                games_count=r.games_count,
-                points_win=_score(r.points_win),
-                points_judge=_score(r.points_judge),
-                lh_points=_score(r.lh_points),
-                ci=_score(r.ci),
-                removals=int(r.removals),
-                ppk_count=int(r.ppk_count),
-                zk=_score(r.zk),
-                sk=_score(r.sk),
-                total_score=_score(r.total_score),
-            )
-            for idx, r in enumerate(stage_rows, start=1)
-        ]
-    return result
+    return {
+        stage_id: _to_standing_rows(stage_rows, players)
+        for stage_id, stage_rows in by_stage.items()
+    }
+
+
+@dataclass
+class TournamentRoleStatsRow:
+    """Статистика одного игрока на одной роли внутри турнирной таблицы --
+    сырьё для ролевых номинаций (awards_service)."""
+
+    player_id: int
+    role: str
+    games_count: int
+    wins: int
+    losses: int
+    points_judge: float
+    lh_points: float
+
+
+def tournament_role_stats(
+    db: Session, *, tournament_id: int, stage_id: int | None = None
+) -> list[TournamentRoleStatsRow]:
+    """Разрез той же таблицы по ролям: одна строка на (игрок, роль).
+
+    stage_id понимается ровно как в tournament_standings -- None означает
+    «игры без этапа», что для турнира без сеток и есть все его игры.
+    """
+    rows = (
+        db.query(
+            models.GameParticipant.player_id,
+            models.GameParticipant.role,
+            func.count().label("games_count"),
+            func.count().filter(_WIN_SQL).label("wins"),
+            func.count().filter(_LOSS_SQL).label("losses"),
+            func.sum(models.GameParticipant.points_judge).label("points_judge"),
+            func.sum(_LH_POINTS_SQL).label("lh_points"),
+        )
+        .join(models.Game, models.Game.id == models.GameParticipant.game_id)
+        .filter(
+            models.Game.tournament_id == tournament_id,
+            models.Game.stage_id == stage_id,
+            models.Game.status == "rated",
+        )
+        .group_by(models.GameParticipant.player_id, models.GameParticipant.role)
+        .all()
+    )
+    return [
+        TournamentRoleStatsRow(
+            player_id=r.player_id,
+            role=r.role,
+            games_count=int(r.games_count),
+            wins=int(r.wins),
+            losses=int(r.losses),
+            points_judge=_score(r.points_judge),
+            lh_points=_score(r.lh_points),
+        )
+        for r in rows
+    ]
 
 
 @dataclass

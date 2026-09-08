@@ -142,6 +142,62 @@ class TournamentStageDetailOut(BaseModel):
     games: list[TournamentStagePublicGameOut] = []
 
 
+class AwardCandidateOut(BaseModel):
+    """Один кандидат номинации со своей статистикой по финальному столу."""
+
+    slug: str
+    nickname: str
+    photo_url: str | None
+    # Место в таблице финального стола -- оно же разрешает равенство баллов.
+    rank: int
+    games_count: int
+    wins: int
+    losses: int
+    win_rate: float | None
+    points_judge: float
+    lh_points: float
+    # Зачётная величина номинации: средний балл за игру (ролевые + MVP) или
+    # сумма баллов таблицы (места турнира).
+    score: float
+    total_score: float
+
+
+class TournamentAwardOut(BaseModel):
+    nomination: str
+    title: str
+    formula: str
+    stats_label: str
+    winner: AwardCandidateOut | None
+    # Победителя выбрал админ вручную, а не расчёт.
+    manual: bool
+    # Заполняется только в админском ответе: публичной странице нужен
+    # победитель со своей статистикой, а не весь список кандидатов.
+    candidates: list[AwardCandidateOut] = []
+
+
+class TournamentAwardsOut(BaseModel):
+    """Блок номинаций целиком -- то, что видит админ в предпросмотре."""
+
+    published: bool
+    # Стол, по которому всё посчитано. None -- турнир без сеток.
+    table_name: str | None
+    # Почему считать не по чему (нет финального этапа, нет оценённых игр).
+    problem: str | None
+    items: list[TournamentAwardOut]
+
+
+class TournamentAwardsIn(BaseModel):
+    """Частичное обновление: приходит только то, что админ трогал.
+
+    winners: номинация -> slug игрока, либо null -- «вернуть расчёт». Slug, а
+    не числовой id: кандидаты приезжают в админку тем же AwardCandidateOut,
+    что и на публичную страницу, а он числовых id игроков не несёт.
+    """
+
+    published: bool | None = None
+    winners: dict[str, str | None] | None = None
+
+
 class TournamentDetailOut(BaseModel):
     tournament: TournamentPublic
     games_count: int
@@ -153,6 +209,11 @@ class TournamentDetailOut(BaseModel):
     # игру ещё не разнесли по этапам) попадают в псевдо-этап "Без этапа".
     standings: list[TournamentStandingOut]
     stages: list[TournamentStageDetailOut] = []
+    # Номинации и победители. Пусто, пока админ не опубликовал блок
+    # (tournaments.awards_published) -- см. awards_service.
+    awards: list[TournamentAwardOut] = []
+    # Название стола, по которому посчитаны номинации (None -- турнир без сеток).
+    awards_table_name: str | None = None
 
 
 class TournamentCreate(BaseModel):

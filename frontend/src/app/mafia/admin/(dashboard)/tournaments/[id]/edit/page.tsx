@@ -7,6 +7,7 @@ import { clientFetch, ApiError } from "@/lib/api";
 import type { TournamentAdminOut } from "@/types/api";
 import { TournamentForm } from "@/components/admin/tournament-form";
 import { TournamentStagesManager } from "@/components/admin/tournament-stages-manager";
+import { TournamentAwardsPanel } from "@/components/admin/tournament-awards-panel";
 import { formatDate, withCount } from "@/lib/format";
 
 /**
@@ -95,8 +96,9 @@ export default function EditTournamentPage({ params }: { params: Promise<{ id: s
             </div>
           </aside>
 
-          <div className="min-w-0">
+          <div className="min-w-0 flex flex-col gap-10">
             <TournamentStagesManager tournamentId={tournament.id} />
+            <TournamentAwardsPanel tournamentId={tournament.id} />
           </div>
         </div>
       )}

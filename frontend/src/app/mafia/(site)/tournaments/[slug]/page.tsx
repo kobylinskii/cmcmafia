@@ -9,6 +9,7 @@ import { Container } from "@/components/ui/container";
 import { GameCard } from "@/components/games/game-card";
 import { TournamentStandingsTable } from "@/components/tournaments/standings-table";
 import { TournamentStageAccordion } from "@/components/tournaments/stage-accordion";
+import { TournamentAwardsSection } from "@/components/tournaments/awards-section";
 import { plural } from "@/lib/format";
 
 // Рендер на каждый запрос, а не пререндер при сборке. Кеширование живёт
@@ -45,7 +46,7 @@ export default async function TournamentPage({ params }: PageProps<"/mafia/tourn
   const data = await getTournament(slug);
   if (!data) notFound();
 
-  const { tournament, games_count, standings, stages } = data;
+  const { tournament, games_count, standings, stages, awards, awards_table_name } = data;
   const games = await serverGet<GameListOut>("/api/games", {
     tournament_slug: slug,
     limit: 200,
@@ -122,6 +123,8 @@ export default async function TournamentPage({ params }: PageProps<"/mafia/tourn
           </div>
         </section>
       )}
+
+      <TournamentAwardsSection awards={awards} tableName={awards_table_name} />
 
       <section className="mt-10">
         <h2 className="font-display text-xl text-ink-50">Партии турнира</h2>

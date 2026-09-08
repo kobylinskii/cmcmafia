@@ -9,6 +9,8 @@ from app.schemas.game import GameCreate, GameListItem, GameListOut, GameOut, Gam
 from app.schemas.tournament import (
     AddStageGamesIn,
     TournamentAdminOut,
+    TournamentAwardsIn,
+    TournamentAwardsOut,
     TournamentCreate,
     TournamentStageAdvancesIn,
     TournamentStageAdvancesOut,
@@ -39,6 +41,7 @@ from app.schemas.club import (
 from app import serializers
 from app.services import (
     admin_grant,
+    awards_service,
     game_service,
     pass_list_service,
     player_confirmation_service,
@@ -485,6 +488,55 @@ def set_stage_advances(
     tournament_service.set_stage_advances(db, stage_id=stage.id, player_ids=valid_ids)
     db.commit()
     return TournamentStageAdvancesOut(player_ids=sorted(valid_ids))
+
+
+# ===================== Номинации турнира =====================
+
+
+@router.get("/tournaments/{tournament_id}/awards", response_model=TournamentAwardsOut)
+@limiter.limit("30/minute")
+def get_tournament_awards(
+    request: Request, tournament_id: int, db: Session = Depends(get_db)
+) -> TournamentAwardsOut:
+    """Предпросмотр номинаций: посчитанные победители плюс полный список
+    кандидатов по каждой -- из него админ и выбирает замену вручную."""
+    tournament = _get_tournament_or_404(db, tournament_id)
+    result = awards_service.compute_awards(db, tournament=tournament)
+    return TournamentAwardsOut(
+        published=result.published,
+        table_name=result.table_name,
+        problem=result.problem,
+        items=serializers.awards_to_out(result.awards, with_candidates=True),
+    )
+
+
+@router.put("/tournaments/{tournament_id}/awards", response_model=TournamentAwardsOut)
+@limiter.limit("30/minute")
+def update_tournament_awards(
+    request: Request, tournament_id: int, data: TournamentAwardsIn, db: Session = Depends(get_db)
+) -> TournamentAwardsOut:
+    """Публикация блока на сайте и/или ручная замена победителей.
+
+    Приходит только то, что админ трогал: winners[номинация] = id игрока либо
+    null («вернуть расчёт»).
+    """
+    tournament = _get_tournament_or_404(db, tournament_id)
+    try:
+        awards_service.set_awards(
+            db, tournament=tournament, published=data.published, winners=data.winners
+        )
+        db.commit()
+    except TournamentValidationError as exc:
+        db.rollback()
+        raise HTTPException(422, exc.message) from exc
+    db.refresh(tournament)
+    result = awards_service.compute_awards(db, tournament=tournament)
+    return TournamentAwardsOut(
+        published=result.published,
+        table_name=result.table_name,
+        problem=result.problem,
+        items=serializers.awards_to_out(result.awards, with_candidates=True),
+    )
 
 
 @router.get("/players", response_model=list[PlayerAdminOut])

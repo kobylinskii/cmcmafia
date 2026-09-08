@@ -18,7 +18,7 @@ from app.schemas.tournament import (
     TournamentStagePublicGameOut,
 )
 from app import serializers
-from app.services import rating_service, stats_service, tournament_service, visibility
+from app.services import awards_service, rating_service, stats_service, tournament_service, visibility
 
 router = APIRouter(prefix="/api", tags=["public"])
 
@@ -135,6 +135,14 @@ def get_tournament(request: Request, slug: str, db: Session = Depends(get_db)) -
     # пусто, но не теряется, если такие всё же есть.
     unstaged = standings_by_stage.get(None, [])
 
+    # Номинации показываются только после того, как админ опубликовал блок:
+    # пока турнир идёт, промежуточный «лучший дон» не значит ничего.
+    awards = (
+        awards_service.compute_awards(db, tournament=tournament)
+        if tournament.awards_published
+        else None
+    )
+
     return TournamentDetailOut(
         tournament=TournamentPublic.model_validate(tournament),
         games_count=tournament_service.games_count_for(db, tournament_id=tournament.id),
@@ -158,6 +166,8 @@ def get_tournament(request: Request, slug: str, db: Session = Depends(get_db)) -
             )
             for stage in stages
         ],
+        awards=serializers.awards_to_out(awards.awards) if awards else [],
+        awards_table_name=awards.table_name if awards else None,
     )
 
 

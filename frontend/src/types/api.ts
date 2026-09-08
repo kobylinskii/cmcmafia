@@ -408,6 +408,49 @@ export interface TournamentStageDetailOut {
   games: TournamentStagePublicGameOut[];
 }
 
+/** Кандидат номинации со статистикой по финальному столу. Зеркалит
+ * backend/app/schemas/tournament.py::AwardCandidateOut. */
+export interface AwardCandidateOut {
+  slug: string;
+  nickname: string;
+  photo_url: string | null;
+  /** Место в таблице финального стола -- им же разрешается равенство баллов. */
+  rank: number;
+  games_count: number;
+  wins: number;
+  losses: number;
+  win_rate: number | null;
+  points_judge: number;
+  lh_points: number;
+  /** Зачётная величина номинации: балл за игру (ролевые + MVP) или сумма
+   * баллов таблицы (места турнира). */
+  score: number;
+  total_score: number;
+}
+
+export interface TournamentAwardOut {
+  nomination: string;
+  title: string;
+  formula: string;
+  stats_label: string;
+  winner: AwardCandidateOut | null;
+  /** Победителя выбрал админ вручную, а не расчёт. */
+  manual: boolean;
+  /** Приходит только в админской ручке -- на публичной странице пуст. */
+  candidates: AwardCandidateOut[];
+}
+
+/** Ответ админской ручки предпросмотра номинаций. */
+export interface TournamentAwardsOut {
+  published: boolean;
+  table_name: string | null;
+  problem: string | null;
+  items: TournamentAwardOut[];
+}
+
+/** Номинации-места турнира -- показываются отдельным блоком «Призёры». */
+export const PLACE_NOMINATIONS = ["first_place", "second_place", "third_place"];
+
 export interface TournamentDetailOut {
   tournament: TournamentPublic;
   games_count: number;
@@ -416,6 +459,10 @@ export interface TournamentDetailOut {
   // разнесённые по этапам (обычно пусто).
   standings: TournamentStandingOut[];
   stages: TournamentStageDetailOut[];
+  /** Пусто, пока админ не опубликовал блок номинаций. */
+  awards: TournamentAwardOut[];
+  /** Стол, по которому посчитаны номинации (null -- турнир без сеток). */
+  awards_table_name: string | null;
 }
 
 export interface TournamentAdminOut {

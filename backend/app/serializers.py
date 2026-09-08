@@ -7,7 +7,13 @@ from sqlalchemy.orm import selectinload
 from app import models
 from app.schemas.bot import RosterMemberOut, RosterOut, ReserveMemberOut, SessionOut
 from app.schemas.game import GameOut, GameRosterEntry, ParticipantOut
-from app.schemas.tournament import TournamentRef, TournamentStageRef, TournamentStandingOut
+from app.schemas.tournament import (
+    AwardCandidateOut,
+    TournamentAwardOut,
+    TournamentRef,
+    TournamentStageRef,
+    TournamentStandingOut,
+)
 
 
 def is_session_open(game: models.Game) -> bool:
@@ -155,4 +161,43 @@ def standing_rows_to_out(
             advanced=row.player.id in advanced_ids,
         )
         for row in rows
+    ]
+
+
+def award_candidate_to_out(candidate) -> AwardCandidateOut:
+    """Кандидат номинации (awards_service.AwardCandidate) -> ответ API."""
+    return AwardCandidateOut(
+        slug=candidate.player.slug,
+        nickname=candidate.player.nickname,
+        photo_url=candidate.player.photo_url,
+        rank=candidate.rank,
+        games_count=candidate.games_count,
+        wins=candidate.wins,
+        losses=candidate.losses,
+        # Доля, а не проценты -- как и везде в API (см. PlayerStatsOut.win_rate),
+        # форматирует её фронт.
+        win_rate=(candidate.wins / candidate.games_count) if candidate.games_count else None,
+        points_judge=candidate.points_judge,
+        lh_points=candidate.lh_points,
+        score=candidate.score,
+        total_score=candidate.total_score,
+    )
+
+
+def awards_to_out(awards: list, *, with_candidates: bool = False) -> list[TournamentAwardOut]:
+    """Номинации -> ответ API. Список кандидатов нужен только админке (там из
+    него выбирают победителя вручную); публичной странице -- один победитель."""
+    return [
+        TournamentAwardOut(
+            nomination=award.nomination.key,
+            title=award.nomination.title,
+            formula=award.nomination.formula,
+            stats_label=award.nomination.stats_label,
+            winner=award_candidate_to_out(award.winner) if award.winner else None,
+            manual=award.manual,
+            candidates=(
+                [award_candidate_to_out(c) for c in award.candidates] if with_candidates else []
+            ),
+        )
+        for award in awards
     ]

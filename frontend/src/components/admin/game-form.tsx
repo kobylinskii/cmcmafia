@@ -49,7 +49,7 @@ type Row = {
 const SCORE_STEPS = {
   points_win: { step: 0.25, min: 0, max: 10 },
   points_judge: { step: 0.25, min: 0, max: 5 },
-  ci: { step: 0.5, min: -20, max: 20 },
+  ci: { step: 0.5, min: 0, max: 20 },
   zk: { step: 0.5, min: 0, max: 10 },
   sk: { step: 0.5, min: 0, max: 10 },
   removals: { step: 1, min: 0, max: 10 },
