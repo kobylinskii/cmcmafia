@@ -207,6 +207,35 @@ svg {
   background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
 }
 
+/* Мобильное меню разделов -- см. components/site-nav.tsx. Карточка
+   раскрывается из угла, где стоит кнопка (origin-top-right), пункты
+   подтягиваются каскадом по --i. Анимируются только opacity и transform:
+   это композитинг, без пересчёта макета. Глобальное правило
+   prefers-reduced-motion ниже гасит и то, и другое; fill-mode both оставляет
+   пункты видимыми, когда длительность обнулена. */
+.nav-popover {
+  animation: nav-popover-in 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.nav-popover > * {
+  animation: nav-popover-item-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation-delay: calc(var(--i, 0) * 45ms);
+}
+
+@keyframes nav-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
+@keyframes nav-popover-item-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
 /* Появление блоков при скролле -- см. components/reveal.tsx. Кривая и тайминги
    те же, что были у motion/react: 0.6s, ease [0.16, 1, 0.3, 1]. */
 .reveal {
