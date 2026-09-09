@@ -20,6 +20,35 @@ const isLocalApiHost = publicApiHostname === "localhost" || publicApiHostname ==
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Cайт нигде не встраивается в iframe и не имеет поддоменов; заголовки
+  // ставим на все ответы. Полный CSP с nonce для inline-скриптов Next -- это
+  // отдельная задача, поэтому пока из CSP только frame-ancestors (дублирует
+  // X-Frame-Options и закрывает кликджекинг, ничего не ломая).
+  poweredByHeader: false,
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "X-Frame-Options", value: "DENY" },
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
+          { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
+          // Намеренно НЕ ставим полный Content-Security-Policy (default-src и
+          // т.п.), COEP и CORP: у Next inline-скрипты/стили без nonce, а COEP
+          // требует CORS/CORP на КАЖДОМ сабресурсе (включая og:image, которую
+          // тянут соцсети, и next/image). Любой из трёх, выставленный вслепую,
+          // роняет страницу в белый экран. Это отдельная задача с прогоном по
+          // сайту, а не однострочник. frame-ancestors выше кликджекинг уже
+          // закрыл -- главное, что было.
+        ],
+      },
+    ];
+  },
   images: {
     // 90 -- для фото игрока в его карточке (см. app/mafia/(site)/[slug]).
     // С Next 16 список обязателен, и значения вне его округляются к
