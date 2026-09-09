@@ -6,6 +6,7 @@ import { LogoMark } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { adminLogin } from "@/lib/admin-auth";
 import { ApiError } from "@/lib/api";
+import { safeNextPath } from "@/lib/search-params";
 
 function LoginForm() {
   const router = useRouter();
@@ -21,7 +22,7 @@ function LoginForm() {
     setLoading(true);
     try {
       await adminLogin(username, password);
-      const next = searchParams.get("next") || "/mafia/admin";
+      const next = safeNextPath(searchParams.get("next"));
       router.push(next);
       router.refresh();
     } catch (err) {

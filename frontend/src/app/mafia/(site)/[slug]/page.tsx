@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
 
 async function getPlayer(slug: string): Promise<PlayerDetailOut | null> {
   try {
-    return await serverGet<PlayerDetailOut>(`/api/players/${slug}`);
+    return await serverGet<PlayerDetailOut>(`/api/players/${encodeURIComponent(slug)}`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;

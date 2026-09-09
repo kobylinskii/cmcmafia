@@ -50,3 +50,18 @@ export function isoDate(value: string | undefined): string | undefined {
     ? undefined
     : value;
 }
+
+/** Внутренний путь для редиректа после входа, из ?next=.
+ *
+ * `router.push(next)` с абсолютным или протокол-относительным адресом уводит
+ * посетителя на чужой домен -- классический open redirect и вектор фишинга
+ * (залогинили -> выкинули на поддельную страницу). Пропускаем только адреса,
+ * начинающиеся с одного `/`: "//evil.com" и "/\evil.com" браузер трактует как
+ * протокол-относительные (внешний хост), поэтому их отбрасываем. Гейт из
+ * proxy.ts кладёт сюда pathname (всегда внутренний), защита -- от адреса,
+ * собранного вручную. */
+export function safeNextPath(value: string | null | undefined, fallback = "/mafia/admin"): string {
+  if (!value || !value.startsWith("/")) return fallback;
+  if (value.startsWith("//") || value.startsWith("/\\")) return fallback;
+  return value;
+}

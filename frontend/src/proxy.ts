@@ -18,7 +18,16 @@ export function proxy(request: NextRequest) {
   if (!hasSession) {
     const loginUrl = new URL("/mafia/admin/login", request.url);
     loginUrl.searchParams.set("next", pathname);
-    return NextResponse.redirect(loginUrl);
+    // Ответы из proxy/middleware НЕ проходят через next.config headers() --
+    // поэтому редирект на логин уходил без Strict-Transport-Security и прочих
+    // заголовков безопасности (Burp: "HSTS not enforced" на /mafia/admin/).
+    // Дублируем критичный минимум прямо на этом ответе.
+    const res = NextResponse.redirect(loginUrl);
+    res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains");
+    res.headers.set("X-Content-Type-Options", "nosniff");
+    res.headers.set("X-Frame-Options", "DENY");
+    res.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
+    return res;
   }
   return NextResponse.next();
 }

@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic";
 
 async function getTournament(slug: string): Promise<TournamentDetailOut | null> {
   try {
-    return await serverGet<TournamentDetailOut>(`/api/tournaments/${slug}`);
+    return await serverGet<TournamentDetailOut>(`/api/tournaments/${encodeURIComponent(slug)}`);
   } catch (err) {
     if (err instanceof ApiError && err.status === 404) return null;
     throw err;
