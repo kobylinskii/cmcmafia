@@ -126,6 +126,7 @@ def test_training_games_do_not_touch_the_rating_at_all(admin):
                  starts_at="2026-02-01T18:00:00Z", extra={"points_win": 2.5, "points_judge": 1.5})
 
     before = {r["slug"]: r for r in client.get("/api/rating").json()["items"]}
+    stats_before = _stats(client, "player1")
 
     _create_game(client, headers, ids, game_type="training",
                  starts_at="2026-02-08T18:00:00Z", extra={"points_win": 2.5, "points_judge": 1.5})
@@ -136,8 +137,11 @@ def test_training_games_do_not_touch_the_rating_at_all(admin):
         assert after[slug]["rating"] == pytest.approx(row["rating"], abs=0.001), slug
         assert after[slug]["games_count"] == row["games_count"], slug
 
-    # При этом обучающая игра остаётся в личной статистике игрока.
-    assert _stats(client, "player1")["total_games"] == 2
+    # И в личной статистике обучающая игра не оставляет вообще никакого следа:
+    # сравниваем карточку целиком, а не один счётчик, -- под это же правило
+    # попадают победы, разбивка по картам и ролям, первоубиенный и средние.
+    assert _stats(client, "player1") == stats_before
+    assert stats_before["total_games"] == 1
 
 
 def test_rating_formula_reflects_the_real_constants(admin):

@@ -82,10 +82,13 @@ def _score(value) -> float:
     return round(float(value), 2)
 
 
-# Форматы, по которым считаются СРЕДНИЕ величины игрока: обучающие игры в
-# рейтинг не входят вовсе (rating_service.UNRATED_GAME_TYPES), поэтому и в
-# «среднем балле» с «средним доп. баллом» им делать нечего -- иначе средние
-# считаются по большему числу игр, чем показывает соседний счётчик.
+# Форматы, которые попадают в личную статистику игрока. Обучающая игра не
+# участвует в рейтинге вовсе (rating_service.UNRATED_GAME_TYPES), и в личной
+# статистике её тоже нет ни в каком виде: ни в счётчиках игр, побед и
+# поражений, ни в разбивке по картам и ролям, ни в первоубиенном с его ЛХ, ни
+# в средних. Иначе на одной карточке стоят числа по разным наборам игр --
+# «Игр 3» из всех форматов рядом с «по 2 рейтинговым играм» и средним баллом
+# по этим же двум.
 _RATED_FORMAT_SQL = models.Game.game_type.notin_(rating_service.UNRATED_GAME_TYPES)
 
 
@@ -639,19 +642,20 @@ def compute_player_stats(db: Session, player_id: int) -> PlayerStats:
             func.count()
             .filter(models.GameParticipant.info == "first_killed", models.GameParticipant.lh == 1.5)
             .label("lh_hits_3"),
-            # Обе средние -- по одному и тому же набору игр (_RATED_FORMAT_SQL):
-            # оценённые фановые и турнирные. Фильтр общий не для краткости, а
-            # чтобы они не разъехались снова: у доп. балла его не было, и один
-            # игрок показывал 1.0 в таблице рейтинга против 0.5 на своей
-            # странице. Счётчики игр рядом продолжают считать всё подряд --
-            # обучающая игра из личной статистики никуда не девается, она лишь
-            # не участвует в средних.
-            func.avg(_SCORE_SQL).filter(_RATED_FORMAT_SQL).label("avg_score"),
-            func.avg(_BONUS_SQL).filter(_RATED_FORMAT_SQL).label("avg_bonus"),
+            # Отдельного фильтра у средних больше нет: обучающие игры отсекает
+            # общий _RATED_FORMAT_SQL в WHERE, и все числа карточки считаются
+            # по одному набору игр. Раньше фильтр стоял только здесь, и
+            # «средний балл» жил по двум играм, а счётчик рядом -- по трём.
+            func.avg(_SCORE_SQL).label("avg_score"),
+            func.avg(_BONUS_SQL).label("avg_bonus"),
         )
         .select_from(models.GameParticipant)
         .join(models.Game, models.Game.id == models.GameParticipant.game_id)
-        .filter(models.GameParticipant.player_id == player_id, models.Game.status == "rated")
+        .filter(
+            models.GameParticipant.player_id == player_id,
+            models.Game.status == "rated",
+            _RATED_FORMAT_SQL,
+        )
         .one()
     )
 

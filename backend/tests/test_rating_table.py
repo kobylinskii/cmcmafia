@@ -229,9 +229,9 @@ def test_avg_bonus_is_the_same_number_in_the_table_and_on_the_player_page(admin)
     # игр -- иначе на одной странице стоят две средние величины по разным
     # играм. Баллы за победу тут нулевые, так что средний балл равен доп.
     assert page_stats["avg_score"] == 0.75
-    # Обучающая игра при этом из личной статистики не исчезает -- она просто
-    # не участвует в средних.
-    assert page_stats["total_games"] == 3
+    # Обучающей игры в личной статистике нет вовсе: счётчик игр показывает те
+    # же две игры, по которым посчитаны средние и рейтинг.
+    assert page_stats["total_games"] == 2
     assert page_stats["rating_games_count"] == 2
 
 
@@ -271,4 +271,5 @@ def test_avg_bonus_is_blank_for_a_player_with_only_training_games(admin) -> None
     assert table_row["avg_bonus"] is None
     assert page_stats["avg_bonus"] is None
     assert page_stats["avg_score"] is None
-    assert page_stats["total_games"] == 1
+    # Игр в статистике ноль: единственная сыгранная -- обучающая.
+    assert page_stats["total_games"] == 0
