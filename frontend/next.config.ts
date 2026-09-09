@@ -20,10 +20,9 @@ const isLocalApiHost = publicApiHostname === "localhost" || publicApiHostname ==
 
 const nextConfig: NextConfig = {
   output: "standalone",
-  // Cайт нигде не встраивается в iframe и не имеет поддоменов; заголовки
-  // ставим на все ответы. Полный CSP с nonce для inline-скриптов Next -- это
-  // отдельная задача, поэтому пока из CSP только frame-ancestors (дублирует
-  // X-Frame-Options и закрывает кликджекинг, ничего не ломая).
+  // Статичные заголовки безопасности ставим на все ответы. Content-Security-
+  // Policy сюда НЕ входит: ему нужен свежий nonce на каждый запрос, поэтому он
+  // живёт в proxy.ts (middleware). См. src/proxy.ts.
   poweredByHeader: false,
   async headers() {
     return [
@@ -33,26 +32,16 @@ const nextConfig: NextConfig = {
           { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },
           { key: "X-Content-Type-Options", value: "nosniff" },
           { key: "X-Frame-Options", value: "DENY" },
-          {
-            key: "Content-Security-Policy",
-            // Директивы, не затрагивающие исполнение inline-скриптов Next (их
-            // закрыл бы только script-src с nonce -- см. заметку ниже):
-            // form-action -- формы шлются лишь на свой origin (Burp: "form
-            // hijacking"); base-uri -- нельзя подменить <base> и увести
-            // относительные ссылки; object-src -- никаких плагинов/эмбедов.
-            value: "frame-ancestors 'none'; form-action 'self'; base-uri 'self'; object-src 'none'",
-          },
+          // Content-Security-Policy теперь ставит proxy.ts (middleware): ему
+          // нужен свежий nonce на каждый запрос для script-src, а здесь
+          // значение статичное. См. src/proxy.ts.
           { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
           { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=()" },
           { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
           { key: "X-Permitted-Cross-Domain-Policies", value: "none" },
-          // Намеренно НЕ ставим полный Content-Security-Policy (default-src и
-          // т.п.), COEP и CORP: у Next inline-скрипты/стили без nonce, а COEP
-          // требует CORS/CORP на КАЖДОМ сабресурсе (включая og:image, которую
-          // тянут соцсети, и next/image). Любой из трёх, выставленный вслепую,
-          // роняет страницу в белый экран. Это отдельная задача с прогоном по
-          // сайту, а не однострочник. frame-ancestors выше кликджекинг уже
-          // закрыл -- главное, что было.
+          // COEP и CORP намеренно НЕ ставим: COEP требует CORS/CORP на КАЖДОМ
+          // сабресурсе (включая og:image из соцсетей и next/image) и вслепую
+          // роняет страницу в белый экран -- отдельная задача с прогоном.
         ],
       },
     ];
