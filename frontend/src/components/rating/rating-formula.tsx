@@ -58,25 +58,29 @@ export function RatingFormula({ formula }: { formula: RatingFormulaOut }) {
           <h3 className="text-sm font-medium tracking-wide text-ink-400 uppercase">
             Коэффициент и штрафы по опыту
           </h3>
-          <div className="mt-3 overflow-x-auto rounded-card border border-ink-800">
-            <table aria-label="Коэффициент K и штрафы по опыту игрока" className="w-full min-w-[420px] border-collapse">
+          {/* Ни min-width, ни горизонтальной прокрутки: на 375px таблица
+              укладывается целиком -- числовые колонки узкие (40 / −8 / −15),
+              а колонка условия переносится по словам. Прокрутка тут была
+              хуже переноса: три строки данных прятались за краем экрана. */}
+          <div className="mt-3 rounded-card border border-ink-800">
+            <table aria-label="Коэффициент K и штрафы по опыту игрока" className="w-full border-collapse">
               <thead>
                 <tr className="border-b border-ink-800 bg-ink-900 text-left text-xs font-medium text-ink-400">
-                  <th scope="col" className="px-4 py-2.5">Опыт игрока</th>
-                  <th scope="col" className="px-4 py-2.5 text-right">K</th>
-                  <th scope="col" className="px-4 py-2.5 text-right">Удаление</th>
-                  <th scope="col" className="px-4 py-2.5 text-right">ППК</th>
+                  <th scope="col" className="px-2.5 py-2.5 sm:px-4">Опыт игрока</th>
+                  <th scope="col" className="px-2.5 py-2.5 sm:px-4 text-right">K</th>
+                  <th scope="col" className="px-2.5 py-2.5 sm:px-4 text-right">Удаление</th>
+                  <th scope="col" className="px-2.5 py-2.5 sm:px-4 text-right">ППК</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-ink-800">
                 {formula.k_tiers.map((tier) => (
                   <tr key={tier.condition} className="odd:bg-ink-900/40">
-                    <td className="px-4 py-2.5 text-sm text-ink-100">{tier.condition}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-sm text-ink-50">{tier.k}</td>
-                    <td className="px-4 py-2.5 text-right font-mono text-sm text-ink-300">
+                    <td className="px-2.5 py-2.5 sm:px-4 text-sm text-ink-100">{tier.condition}</td>
+                    <td className="px-2.5 py-2.5 sm:px-4 text-right font-mono text-sm text-ink-50">{tier.k}</td>
+                    <td className="px-2.5 py-2.5 sm:px-4 text-right font-mono text-sm text-ink-300">
                       −{tier.removal_penalty}
                     </td>
-                    <td className="px-4 py-2.5 text-right font-mono text-sm text-ink-300">
+                    <td className="px-2.5 py-2.5 sm:px-4 text-right font-mono text-sm text-ink-300">
                       −{tier.ppk_penalty}
                     </td>
                   </tr>

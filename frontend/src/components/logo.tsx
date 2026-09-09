@@ -92,7 +92,11 @@ export function NavLogo() {
   return (
     <Link href="/mafia" className="flex items-center gap-2.5 shrink-0">
       <LogoWordmark className="h-14 w-auto" priority />
-      <span className="font-display text-lg text-ink-50">Мафия ВМК</span>
+      {/* Уже 360px подпись прячется: там знак, название, кнопка темы и бургер
+          в строку уже не влезают и раздвигают документ по горизонтали. Прячем
+          именно её -- «МАФИЯ ВМК» и так написано на самом знаке, а alt у
+          картинки остаётся. */}
+      <span className="hidden font-display text-lg text-ink-50 min-[360px]:inline">Мафия ВМК</span>
     </Link>
   );
 }

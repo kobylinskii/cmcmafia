@@ -82,7 +82,11 @@ export function SiteNav() {
                 href={link.href}
                 onClick={() => setOpen(false)}
                 className={clsx(
-                  "rounded-lg px-4 py-3 text-base font-medium",
+                  // Пункты прижаты вправо -- туда, откуда меню открыли (кнопка
+                  // с тремя полосками стоит справа), и туда же тянется большой
+                  // палец. Строка при этом остаётся во всю ширину: сжимать её
+                  // до ширины текста значит уменьшать тач-цель.
+                  "rounded-lg px-4 py-3 text-right text-base font-medium",
                   pathname.startsWith(link.href) ? "bg-brand-600 text-white" : "text-ink-200 hover:bg-ink-850"
                 )}
               >

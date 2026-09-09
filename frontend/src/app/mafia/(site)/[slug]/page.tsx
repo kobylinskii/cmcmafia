@@ -73,7 +73,10 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
 
   return (
     <Container className="py-14">
-      <div className="flex flex-col gap-8 sm:flex-row sm:items-start">
+      {/* На узком экране фото, ник, имя и плашки идут колонкой по центру:
+          слева они висели у края с большим пустым полем справа. С sm блок
+          возвращается в строку и выравнивание по левому краю. */}
+      <div className="flex flex-col items-center gap-8 text-center sm:flex-row sm:items-start sm:text-left">
         <div className="relative h-32 w-32 shrink-0 overflow-hidden rounded-card border border-ink-800 bg-ink-900 sm:h-40 sm:w-40">
           {photo ? (
             <Image
@@ -97,11 +100,11 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
           )}
         </div>
 
-        <div className="flex-1">
+        <div className="w-full flex-1">
           <h1 className="font-display text-3xl font-medium text-ink-50 md:text-4xl">{player.nickname}</h1>
           {player.full_name && <p className="mt-1 text-ink-400">{player.full_name}</p>}
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-2 sm:justify-start">
             {player.favorite_role && (
               <Badge tone="brand">
                 <Trophy size={13} className="mr-1.5" />
@@ -135,7 +138,14 @@ export default async function PlayerPage({ params, searchParams }: PageProps<"/m
           <StatTile label="Ничьих" value={stats.draws} />
           <StatTile label="% побед" value={formatPercent(stats.win_rate)} />
           <StatTile label="Средний балл" value={formatDash(stats.avg_score)} />
-          <StatTile label="Средний доп. балл" value={formatDash(stats.avg_bonus)} />
+          {/* Плиток семь, а колонок два (мобильный) и четыре (md) -- последняя
+              оставалась одна в ряду, и рядом зияла дыра. Растягиваем её на
+              остаток ряда; на lg колонок семь и растягивать нечего. */}
+          <StatTile
+            label="Средний доп. балл"
+            value={formatDash(stats.avg_bonus)}
+            className="col-span-2 lg:col-span-1"
+          />
         </div>
         {stats.rating !== null && (
           <div className="mt-4 grid grid-cols-2 gap-4 sm:max-w-lg">
