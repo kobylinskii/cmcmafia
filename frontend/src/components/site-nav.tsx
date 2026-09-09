@@ -7,6 +7,7 @@ import { List, X } from "@phosphor-icons/react/dist/ssr";
 import clsx from "clsx";
 import { Container } from "@/components/ui/container";
 import { NavLogo } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 const LINKS = [
   { href: "/mafia/games", label: "Игры" },
@@ -35,36 +36,42 @@ export function SiteNav() {
 
   return (
     <header className="sticky top-0 z-40 border-b border-ink-800/80 bg-ink-950/85 backdrop-blur">
-      <Container className="flex h-[4.5rem] items-center justify-between">
+      <Container className="flex h-[4.5rem] items-center justify-between gap-2">
         <NavLogo />
-        <nav className="hidden md:flex items-center gap-1">
-          {LINKS.map((link) => {
-            const active = pathname.startsWith(link.href);
-            return (
-              <Link
-                key={link.href}
-                href={link.href}
-                className={clsx(
-                  "rounded-pill px-4 py-2 text-base font-medium transition-colors active:translate-y-px",
-                  active ? "bg-brand-600 text-ink-50" : "text-ink-200 hover:text-ink-50 hover:bg-ink-850"
-                )}
-              >
-                {link.label}
-              </Link>
-            );
-          })}
-        </nav>
-        <button
-          ref={buttonRef}
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          className="md:hidden inline-flex h-11 w-11 items-center justify-center rounded-pill text-ink-100 hover:bg-ink-850"
-          aria-label={open ? "Закрыть меню" : "Открыть меню"}
-          aria-expanded={open}
-          aria-controls="mobile-nav"
-        >
-          {open ? <X size={22} weight="regular" /> : <List size={22} weight="regular" />}
-        </button>
+        {/* Ссылки, переключатель темы и бургер -- один flex-ряд справа: так
+            кнопка темы стоит на месте и на десктопе, и на мобильном, без
+            второго экземпляра разметки. */}
+        <div className="flex items-center gap-1">
+          <nav className="hidden md:flex items-center gap-1">
+            {LINKS.map((link) => {
+              const active = pathname.startsWith(link.href);
+              return (
+                <Link
+                  key={link.href}
+                  href={link.href}
+                  className={clsx(
+                    "rounded-pill px-4 py-2 text-base font-medium transition-colors active:translate-y-px",
+                    active ? "bg-brand-600 text-white" : "text-ink-200 hover:text-ink-50 hover:bg-ink-850"
+                  )}
+                >
+                  {link.label}
+                </Link>
+              );
+            })}
+          </nav>
+          <ThemeToggle className="h-11 w-11" />
+          <button
+            ref={buttonRef}
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="md:hidden inline-flex h-11 w-11 items-center justify-center rounded-pill text-ink-100 hover:bg-ink-850"
+            aria-label={open ? "Закрыть меню" : "Открыть меню"}
+            aria-expanded={open}
+            aria-controls="mobile-nav"
+          >
+            {open ? <X size={22} weight="regular" /> : <List size={22} weight="regular" />}
+          </button>
+        </div>
       </Container>
       {open && (
         <div id="mobile-nav" className="md:hidden border-t border-ink-800 bg-ink-950">
@@ -76,7 +83,7 @@ export function SiteNav() {
                 onClick={() => setOpen(false)}
                 className={clsx(
                   "rounded-lg px-4 py-3 text-base font-medium",
-                  pathname.startsWith(link.href) ? "bg-brand-600 text-ink-50" : "text-ink-200 hover:bg-ink-850"
+                  pathname.startsWith(link.href) ? "bg-brand-600 text-white" : "text-ink-200 hover:bg-ink-850"
                 )}
               >
                 {link.label}

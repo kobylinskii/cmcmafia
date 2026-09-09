@@ -25,7 +25,7 @@ export function SegmentedControl<T extends string>({
           aria-pressed={value === option.value}
           className={clsx(
             "inline-flex min-h-11 items-center rounded-pill px-3.5 text-sm font-medium transition-colors active:translate-y-px",
-            value === option.value ? "bg-brand-600 text-ink-50" : "text-ink-300 hover:text-ink-50"
+            value === option.value ? "bg-brand-600 text-white" : "text-ink-300 hover:text-ink-50"
           )}
         >
           {option.label}

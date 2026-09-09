@@ -19,7 +19,7 @@ export function SlugSuggestion({
       <button
         type="button"
         onClick={onApply}
-        className="rounded-pill bg-brand-600 px-3 py-1 text-xs font-medium text-ink-50 hover:bg-brand-500 active:translate-y-px"
+        className="rounded-pill bg-brand-600 px-3 py-1 text-xs font-medium text-white hover:bg-brand-500 active:translate-y-px"
       >
         Подставить
       </button>

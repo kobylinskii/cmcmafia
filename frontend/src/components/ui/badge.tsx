@@ -14,7 +14,7 @@ export function Badge({
 }) {
   const tones = {
     neutral: "bg-ink-800 text-ink-200",
-    brand: "bg-brand-500 text-ink-50",
+    brand: "bg-brand-500 text-white",
     outline: "border border-ink-600 text-ink-200",
   };
   return (

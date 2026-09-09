@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Unbounded, Golos_Text, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
@@ -52,10 +53,18 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  // Тема приезжает кукой и проставляется здесь, на сервере: в отличие от
+  // localStorage это не требует inline-скрипта в <head> (а он в проекте
+  // упирался бы в CSP с nonce, см. proxy.ts) и не даёт мигнуть тёмной темой
+  // перед тем, как включится светлая. Тёмная -- дефолт, светлая -- явный
+  // выбор кнопкой в шапке (components/theme-toggle.tsx).
+  const light = (await cookies()).get("theme")?.value === "light";
+
   return (
     <html
       lang="ru"
+      data-theme={light ? "light" : undefined}
       className={`${unbounded.variable} ${golos.variable} ${jetbrainsMono.variable} h-full`}
     >
       <body className="min-h-full antialiased">

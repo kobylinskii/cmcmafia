@@ -6,6 +6,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Gauge, Key, ListChecks, Trophy, UsersThree, SignOut } from "@phosphor-icons/react/dist/ssr";
 import clsx from "clsx";
 import { LogoMark } from "@/components/logo";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { adminLogout, adminMe } from "@/lib/admin-auth";
 import { ApiError } from "@/lib/api";
 
@@ -87,7 +88,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
                 href={item.href}
                 className={clsx(
                   "flex items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                  active ? "bg-brand-600 text-ink-50" : "text-ink-300 hover:bg-ink-850 hover:text-ink-50"
+                  active ? "bg-brand-600 text-white" : "text-ink-300 hover:bg-ink-850 hover:text-ink-50"
                 )}
               >
                 <item.icon size={18} weight={active ? "fill" : "regular"} />
@@ -97,7 +98,10 @@ export function AdminShell({ children }: { children: ReactNode }) {
           })}
         </nav>
         <div className="border-t border-ink-800 p-3">
-          <p className="truncate px-3 py-1 text-xs text-ink-500">{nickname}</p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate px-3 py-1 text-xs text-ink-500">{nickname}</p>
+            <ThemeToggle className="h-9 w-9 shrink-0" />
+          </div>
           <Link
             href="/mafia/admin/password"
             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-ink-300 hover:bg-ink-850 hover:text-ink-50"
@@ -122,9 +126,12 @@ export function AdminShell({ children }: { children: ReactNode }) {
             <LogoMark size={40} />
             <span className="font-display text-sm text-ink-50">Админка</span>
           </div>
-          <button onClick={handleLogout} className="text-sm text-ink-300">
-            Выйти
-          </button>
+          <div className="flex items-center gap-1">
+            <ThemeToggle className="h-9 w-9" />
+            <button onClick={handleLogout} className="px-2 text-sm text-ink-300">
+              Выйти
+            </button>
+          </div>
         </header>
         <nav className="flex gap-1 overflow-x-auto border-b border-ink-800 bg-ink-900 px-3 py-2 md:hidden">
           {NAV.map((item) => (

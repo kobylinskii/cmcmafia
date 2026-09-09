@@ -6,7 +6,7 @@
  */
 export function PageGlow() {
   return (
-    <div aria-hidden className="pointer-events-none fixed inset-0 -z-10 overflow-hidden">
+    <div aria-hidden className="page-glow pointer-events-none fixed inset-0 -z-10 overflow-hidden">
       {/* Тёплый очаг из правого верхнего угла -- как подсветка над игровым
           столом. Спускается по диагонали и сходит на нет к середине экрана,
           где идут таблицы и абзацы: свечение под текстом осветляет фон и

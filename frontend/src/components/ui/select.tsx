@@ -132,7 +132,7 @@ export function Select<T extends string>({
                 }}
                 className={clsx(
                   "cursor-pointer px-3 py-2.5 text-sm",
-                  i === activeIndex ? "bg-brand-600 text-ink-50" : "text-ink-200"
+                  i === activeIndex ? "bg-brand-600 text-white" : "text-ink-200"
                 )}
               >
                 {option.label}

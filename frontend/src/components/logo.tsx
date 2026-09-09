@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import clsx from "clsx";
 
 /**
  * Shape rule for the whole site (design-taste-frontend skill 4.4, "shape
@@ -31,7 +32,9 @@ export function LogoMark({
       alt="Мафия ВМК"
       width={size}
       height={size}
-      className={className}
+      // logo-badge-img: в светлой теме CSS подменяет файл на вариант с
+      // чернильными контурами (белые на бумаге не видны). См. globals.css.
+      className={clsx("logo-badge-img", className)}
       // priority по умолчанию выключен: этот знак стоит в подвале и на
       // служебных экранах, предзагружать его вперёд контента незачем.
       priority={priority}
@@ -57,7 +60,7 @@ export function LogoBadge({ className, priority }: { className?: string; priorit
       width={1200}
       height={1200}
       priority={priority}
-      className={className}
+      className={clsx("logo-badge-img", className)}
     />
   );
 }
@@ -71,7 +74,7 @@ export function LogoWordmark({ className, priority }: { className?: string; prio
       width={2000}
       height={1581}
       priority={priority}
-      className={className}
+      className={clsx("logo-wordmark-img", className)}
       // unoptimized: та же причина, что у LogoMark (см. комментарий там) --
       // next/image пересжимает PNG по качеству 75, и на тонких линиях герба
       // с мелким курсивом это давало видимую грязь. Это самый частый запрос

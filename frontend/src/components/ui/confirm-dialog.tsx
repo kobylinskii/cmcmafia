@@ -58,7 +58,9 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-ink-950/70 p-4 backdrop-blur-sm sm:items-center"
+      // Затемнение фона -- чёрным, а не ink-950: в светлой теме этот токен
+      // сам становится почти белым, и модалка теряла подложку.
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/60 p-4 backdrop-blur-sm sm:items-center"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !busy) onCancel();
       }}
@@ -114,8 +116,13 @@ export function ConfirmDialog({
             onClick={onConfirm}
             disabled={busy}
             className={clsx(
-              "rounded-pill px-4 py-2.5 text-sm font-medium text-ink-50 transition-colors active:translate-y-px disabled:opacity-60",
-              destructive ? "bg-brand-600 hover:bg-brand-500" : "bg-ink-700 hover:bg-ink-600"
+              "rounded-pill px-4 py-2.5 text-sm font-medium transition-colors active:translate-y-px disabled:opacity-60",
+              // Цвет подписи -- в ветках: на красной заливке он всегда белый,
+              // а на нейтральной идёт за темой (ink-50 -- контрастный к ink-700
+              // в обеих).
+              destructive
+                ? "bg-brand-600 text-white hover:bg-brand-500"
+                : "bg-ink-700 text-ink-50 hover:bg-ink-600"
             )}
           >
             {busy ? "Удаляем…" : confirmLabel}

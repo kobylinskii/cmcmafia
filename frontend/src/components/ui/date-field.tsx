@@ -182,7 +182,7 @@ export function DateField({
                     className={clsx(
                       "flex h-9 items-center justify-center rounded-lg text-sm",
                       iso === value
-                        ? "bg-brand-600 font-medium text-ink-50"
+                        ? "bg-brand-600 font-medium text-white"
                         : disabled
                           ? "cursor-not-allowed text-ink-700"
                           : "text-ink-200 hover:bg-ink-800",
@@ -311,7 +311,7 @@ export function TimeField({
                   onClick={() => pick(h, minute || "00", false)}
                   className={clsx(
                     "block w-full rounded-lg py-2 text-center text-sm",
-                    h === hour ? "bg-brand-600 text-ink-50" : "text-ink-200 hover:bg-ink-800"
+                    h === hour ? "bg-brand-600 text-white" : "text-ink-200 hover:bg-ink-800"
                   )}
                 >
                   {h}
@@ -327,7 +327,7 @@ export function TimeField({
                   onClick={() => pick(hour || "00", m, true)}
                   className={clsx(
                     "block w-full rounded-lg py-2 text-center text-sm",
-                    m === minute ? "bg-brand-600 text-ink-50" : "text-ink-200 hover:bg-ink-800"
+                    m === minute ? "bg-brand-600 text-white" : "text-ink-200 hover:bg-ink-800"
                   )}
                 >
                   {m}
