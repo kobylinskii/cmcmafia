@@ -255,6 +255,18 @@ docker compose exec -T postgres psql -U postgres -d mafia -Atc \
   "select count(*) from players where photo_url is not null"
 ```
 
+Если скрипт сообщил, что каких-то файлов нет в источнике, эти ссылки в базе
+битые ещё со старого хостинга — сайт покажет у таких игроков сломанную
+картинку вместо аккуратной буквы ника. Проверить и убрать:
+
+```bash
+docker compose exec api python -m app.scripts.clean_missing_photos
+docker compose exec api python -m app.scripts.clean_missing_photos --apply
+```
+
+Первая команда только показывает найденное, вторая очищает. Фото потом
+загружаются заново через админку или бота.
+
 > **Про версию Postgres.** `pg_dump` отказывается работать с сервером другой
 > major-версии, поэтому скрипт первым делом спрашивает версию у Railway и берёт
 > образ клиента под неё — задавать `PG_IMAGE` вручную не нужно. Перед
