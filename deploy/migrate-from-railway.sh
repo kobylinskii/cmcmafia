@@ -40,6 +40,27 @@ case "$OLD_SITE_URL" in
         exit 1 ;;
 esac
 
+# Внутренний адрес Railway. Резолвится только внутри их сети, и снаружи даёт
+# ровно то же «could not translate host name», что и опечатка -- поэтому
+# называем причину прямо.
+case "$RAILWAY_DATABASE_URL" in
+    *railway.internal*)
+        echo "Это ВНУТРЕННИЙ адрес Railway -- снаружи он не резолвится." >&2
+        echo "Нужен DATABASE_PUBLIC_URL: Railway -> сервис Postgres -> Variables." >&2
+        echo "В нём хост вида *.proxy.rlwy.net и порт, отличный от 5432." >&2
+        exit 1 ;;
+esac
+
+# Адрес сайта без схемы: urllib из copy-railway-photos.py на таком падает с
+# «unknown url type», причём уже после того, как база восстановлена. Дешевле
+# дописать схему здесь, чем ловить это в конце переноса.
+case "$OLD_SITE_URL" in
+    http://*|https://*) ;;
+    *)  OLD_SITE_URL="https://$OLD_SITE_URL"
+        export OLD_SITE_URL
+        echo "==> OLD_SITE_URL был без схемы, использую $OLD_SITE_URL" ;;
+esac
+
 DUMP=deploy/railway.dump
 PG_IMAGE=${PG_IMAGE:-postgres:16}
 
