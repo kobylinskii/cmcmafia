@@ -65,24 +65,20 @@ export function LogoBadge({ className, priority }: { className?: string; priorit
   );
 }
 
-/** Same emblem, trimmed to a wide crop for compact placements (nav bar). */
+/** Горизонтальный логотип со шляпой -- надпись «Мафия ВМК» уже внутри
+ * картинки, поэтому текстовой подписи рядом в шапке больше нет. */
 export function LogoWordmark({ className, priority }: { className?: string; priority?: boolean }) {
   return (
     <Image
-      src="/logo/logo-mark-wide.png"
-      alt="Эмблема клуба Мафия ВМК"
-      width={2000}
-      height={1581}
+      src="/logo/logo-hat-wide.png"
+      alt="Мафия ВМК"
+      width={1600}
+      height={323}
       priority={priority}
       className={clsx("logo-wordmark-img", className)}
-      // unoptimized: та же причина, что у LogoMark (см. комментарий там) --
-      // next/image пересжимает PNG по качеству 75, и на тонких линиях герба
-      // с мелким курсивом это давало видимую грязь. Это самый частый запрос
-      // на сайте (шапка на каждой странице), поэтому файл раньше был урезан
-      // через sizes -- но раз задача теперь чёткость, а не байты, отдаём
-      // оригинал: 240 КБ, кэшируется браузером с первой загрузки на весь
-      // визит, а дальше эта же строка href переиспользуется на каждой
-      // странице (Link, не полная перезагрузка), так что цена разовая.
+      // unoptimized: next/image пересжимает PNG по качеству 75, и на тонких
+      // линиях шляпы это даёт видимую грязь. Файл 67 КБ и кэшируется с первой
+      // загрузки на весь визит -- экономить тут нечего.
       unoptimized
     />
   );
@@ -90,13 +86,8 @@ export function LogoWordmark({ className, priority }: { className?: string; prio
 
 export function NavLogo() {
   return (
-    <Link href="/mafia" className="flex items-center gap-2.5 shrink-0">
-      <LogoWordmark className="h-14 w-auto" priority />
-      {/* Уже 360px подпись прячется: там знак, название, кнопка темы и бургер
-          в строку уже не влезают и раздвигают документ по горизонтали. Прячем
-          именно её -- «МАФИЯ ВМК» и так написано на самом знаке, а alt у
-          картинки остаётся. */}
-      <span className="hidden font-display text-lg text-ink-50 min-[360px]:inline">Клуб</span>
+    <Link href="/mafia" className="flex items-center shrink-0">
+      <LogoWordmark className="h-10 w-auto" priority />
     </Link>
   );
 }

@@ -1,0 +1,54 @@
+# Продакшн-надстройка к docker-compose.yml: TLS в nginx, certbot и домен.
+#
+# Подключается сама: в корневом .env стоит
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.prod.yml
+# поэтому на сервере работает привычный `docker compose up -d` без флагов --
+# забыть `-f` и поднять прод без сертификата невозможно.
+# Локально корневого .env нет, читается только базовый файл, сайт по http.
+
+services:
+  api:
+    environment:
+      # Домен задан один раз в .env. Иначе его пришлось бы держать ещё и в
+      # backend/.env, и два места неизбежно разъехались бы при смене домена.
+      CORS_ORIGINS: '["https://${DOMAIN}"]'
+
+  frontend:
+    build:
+      args:
+        # Абсолютный origin для sitemap.xml и robots.txt -- там относительные
+        # URL невалидны. Вшивается на сборке: после смены домена нужен
+        # `docker compose up -d --build frontend`, простого рестарта мало.
+        NEXT_PUBLIC_SITE_URL: "https://${DOMAIN}"
+
+  nginx:
+    volumes:
+      # Тот же target, что в базовом файле -- запись заменяется целиком, а не
+      # дописывается второй, и в контейнер попадает только TLS-конфиг.
+      - ./nginx/nginx-tls.conf:/etc/nginx/nginx.conf:ro
+      # :ro -- nginx только читает сертификаты и файлы ACME-проверки, пишет
+      # в оба тома исключительно certbot.
+      - certbot_conf:/etc/letsencrypt:ro
+      - certbot_www:/var/www/certbot:ro
+    ports:
+      - "443:443"
+
+  certbot:
+    image: certbot/certbot
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # profiles -- чтобы `docker compose up` его не трогал: certbot не демон,
+    # он делает своё дело и выходит, а restart-политика гоняла бы его по кругу.
+    # Запускается точечно: `docker compose run --rm certbot ...`
+    # (см. deploy/init-tls.sh и deploy/renew-tls.sh).
+    profiles: ["certbot"]
+    volumes:
+      - certbot_conf:/etc/letsencrypt
+      - certbot_www:/var/www/certbot
+
+volumes:
+  certbot_conf:
+  certbot_www:

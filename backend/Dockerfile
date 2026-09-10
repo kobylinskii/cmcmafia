@@ -11,11 +11,19 @@ COPY . .
 
 RUN mkdir -p /app/media/players
 
-# Railway прокидывает порт через $PORT; вне Railway (docker-compose) его нет и
-# слушаем привычные 8000. Хост "::" -- это IPv6 с dual-stack: принимает и IPv4
-# (edge-прокси Railway, docker-compose), и IPv6 (приватная сеть Railway,
-# *.railway.internal, по которой к api ходит бот -- она IPv6-only). С
-# "0.0.0.0" приватные запросы падали с ConnectError.
+# Порт: $PORT, если платформа его задаёт, иначе привычные 8000.
+#
+# Хост 0.0.0.0, а НЕ "::": dual-stack тут не получается. asyncio при создании
+# IPv6-сокета безусловно ставит IPV6_V6ONLY (CPython, base_events.create_server),
+# поэтому "::" даёт сокет, к которому по IPv4 не подключиться вовсе -- а
+# docker-сеть в compose именно IPv4. С "::" nginx и бот получали от api
+# "Connection refused" на 172.x, healthcheck не проходил никогда, и frontend
+# (depends_on: service_healthy) не стартовал вообще.
+#
+# На Railway приватная сеть, наоборот, IPv6-only, и там нужен "::" -- он и
+# стоит в backend/railway.json, а его startCommand перекрывает этот CMD.
+# Так что оба варианта деплоя рабочие, каждый со своим адресом.
+#
 # --proxy-headers + доверие всем X-Forwarded-* нужно, чтобы rate limit
 # считался по реальному IP клиента, а не по адресу прокси (см. app/rate_limit.py).
-CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host :: --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*"]
+CMD ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000} --proxy-headers --forwarded-allow-ips=*"]

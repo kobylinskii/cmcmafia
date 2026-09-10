@@ -31,3 +31,6 @@ frontend/.node/
 
 # OS
 .DS_Store
+
+# Дампы базы при переносе (deploy/migrate-from-railway.sh)
+*.dump

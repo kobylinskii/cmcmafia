@@ -112,7 +112,7 @@ services:
         NEXT_PUBLIC_BOT_USERNAME: "${NEXT_PUBLIC_BOT_USERNAME:-}"
         # Абсолютный origin сайта -- нужен для sitemap.xml и robots.txt, там
         # относительные URL невалидны. Обязательно задать перед проддеплоем:
-        # NEXT_PUBLIC_SITE_URL=https://example.ru docker compose build frontend
+        # NEXT_PUBLIC_SITE_URL=https://cmcmafia.ru docker compose build frontend
         NEXT_PUBLIC_SITE_URL: "${NEXT_PUBLIC_SITE_URL:-http://localhost}"
     restart: unless-stopped
     logging: *default-logging
