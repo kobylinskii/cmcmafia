@@ -6,7 +6,7 @@
 
 | Сервис на Railway | Что это | Root Directory | Источник |
 |---|---|---|---|
-| `postgres` | PostgreSQL 16 | — | плагин Railway (Add → Database → PostgreSQL) |
+| `postgres` | PostgreSQL 18 | — | плагин Railway (Add → Database → PostgreSQL) |
 | `redis` | Redis 7 | — | плагин Railway (Add → Database → Redis) |
 | `api` | FastAPI-бэкенд | `backend` | Dockerfile (`backend/railway.json`) |
 | `bot` | Telegram-бот (long polling, без порта) | `bot` | Dockerfile (`bot/railway.json`) |

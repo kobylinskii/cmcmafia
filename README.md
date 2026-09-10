@@ -11,7 +11,7 @@
 
 | Каталог | Что это | Стек |
 |---|---|---|
-| [`backend/`](backend) | Единый API для сайта и бота | FastAPI + SQLAlchemy 2.0 + Postgres 16 |
+| [`backend/`](backend) | Единый API для сайта и бота | FastAPI + SQLAlchemy 2.0 + Postgres 18 |
 | [`frontend/`](frontend) | Публичный сайт и веб-админка | Next.js 16 (App Router) + TypeScript |
 | [`bot/`](bot) | Telegram-бот записи на игры | aiogram 3, тонкий HTTP-клиент к API |
 
@@ -49,11 +49,11 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-Нужен Postgres 16 и Redis (rate limiting через slowapi) на месте, указанном в
+Нужен Postgres 18 и Redis (rate limiting через slowapi) на месте, указанном в
 `DATABASE_URL`/`REDIS_URL`. Быстрый локальный Postgres:
 
 ```bash
-docker run -d --name mafia-pg-dev -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=mafia -p 5432:5432 postgres:16
+docker run -d --name mafia-pg-dev -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=mafia -p 5432:5432 postgres:18
 ```
 
 Тесты — против **настоящего** Postgres (модели используют TIMESTAMPTZ/JSONB,
@@ -61,7 +61,7 @@ sqlite не подходит), по умолчанию на отдельном �
 (`TRUNCATE` перед каждым тестом) не задел dev-базу:
 
 ```bash
-docker run -d --name mafia-test-db -p 55432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=mafia postgres:16
+docker run -d --name mafia-test-db -p 55432:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=mafia postgres:18
 DATABASE_URL="postgresql+psycopg://postgres:postgres@localhost:55432/mafia" python -m alembic upgrade head
 python -m pytest tests/ -q
 ```

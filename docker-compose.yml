@@ -9,7 +9,7 @@ x-logging: &default-logging
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:18
     restart: unless-stopped
     logging: *default-logging
     environment:
@@ -23,7 +23,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: mafia
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      # НЕ /var/lib/postgresql/data: начиная с 18-й версии образ хранит данные
+      # в подкаталоге с номером major-версии (/var/lib/postgresql/18/docker),
+      # чтобы работал pg_upgrade между версиями. Монтирование по старому пути
+      # образ считает ошибкой и отказывается стартовать -- см.
+      # docker-library/postgres#1259.
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d mafia"]
       interval: 5s

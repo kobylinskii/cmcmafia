@@ -76,7 +76,8 @@ case "$OLD_SITE_URL" in
 esac
 
 DUMP=deploy/railway.dump
-PG_IMAGE=${PG_IMAGE:-postgres:16}
+
+die() { echo "$1" >&2; exit 1; }
 
 echo "==> Версия базы на Railway"
 # Клиент pg_dump старше сервера -- отказ с явным сообщением, поэтому версию
@@ -87,8 +88,19 @@ echo "==> Версия базы на Railway"
 # Без промежуточной переменной здесь был конвейер `psql | cut`, а код возврата
 # конвейера -- это код ПОСЛЕДНЕЙ команды, то есть всегда успешного cut. Ошибка
 # подключения проглатывалась, и скрипт бодро шёл дальше к дампу.
-PG_VERSION=$(docker run --rm "$PG_IMAGE" psql "$RAILWAY_DATABASE_URL" -Atc "select version()")
+# postgres:18 -- только чтобы задать первый вопрос: psql к серверу другой
+# major-версии подключается спокойно (в отличие от pg_dump), и этого хватает,
+# чтобы узнать настоящую версию и дальше взять клиента под неё.
+PG_VERSION=$(docker run --rm postgres:18 psql "$RAILWAY_DATABASE_URL" -Atc "select version()")
 echo "$PG_VERSION" | cut -c1-40
+
+# pg_dump отказывается работать с сервером другой major-версии -- значит образ
+# клиента должен ей соответствовать. Раньше версия была зашита числом, и при
+# любом обновлении Postgres на той стороне перенос падал на ровном месте.
+RAILWAY_MAJOR=$(echo "$PG_VERSION" | sed -n 's/^PostgreSQL \([0-9]*\).*/\1/p')
+[ -n "$RAILWAY_MAJOR" ] || die "не удалось разобрать версию Postgres: $PG_VERSION"
+PG_IMAGE=${PG_IMAGE:-postgres:$RAILWAY_MAJOR}
+echo "    клиент для дампа: $PG_IMAGE"
 
 echo "==> Дамп с Railway -> $DUMP"
 # Пишем во временный файл и переименовываем: при обрыве связи посреди дампа
@@ -115,6 +127,19 @@ while [ "$i" -lt 30 ]; do
 done
 if [ "$i" -ge 30 ]; then
     echo "postgres не поднялся -- смотрите docker compose logs postgres" >&2
+    exit 1
+fi
+
+# Дамп из более новой базы в старую не восстановится: pg_restore упрётся в
+# конструкции, которых прежняя версия не знает. Дешевле остановиться здесь,
+# чем на половине залитой схемы.
+LOCAL_VERSION=$(docker compose exec -T postgres psql -U postgres -d mafia -Atc "show server_version" 2>/dev/null || echo "")
+LOCAL_MAJOR=$(echo "$LOCAL_VERSION" | sed -n 's/^\([0-9]*\).*/\1/p')
+if [ -n "$LOCAL_MAJOR" ] && [ "$LOCAL_MAJOR" != "$RAILWAY_MAJOR" ]; then
+    echo "Версии не совпадают: на Railway $RAILWAY_MAJOR, локально $LOCAL_MAJOR." >&2
+    echo "Поправьте image: postgres:$RAILWAY_MAJOR у сервиса postgres в docker-compose.yml." >&2
+    echo "Если том базы уже создан прежней версией, его придётся удалить" >&2
+    echo "(данных в нём ещё нет): docker compose down && docker volume rm cmcmafia_postgres_data" >&2
     exit 1
 fi
 
