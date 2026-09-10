@@ -1,13 +1,12 @@
-import { TelegramLogo, InstagramLogo } from "@phosphor-icons/react/dist/ssr";
+import { TelegramLogo } from "@phosphor-icons/react/dist/ssr";
 import { Container } from "@/components/ui/container";
 import { LogoMark } from "@/components/logo";
 
-// Placeholder links -- swap in the real club accounts once they exist.
+// VK -- заглушка, пока у клуба нет группы; Telegram уже настоящий.
 // Phosphor has no VK glyph, so that one renders as a text mark instead.
 const SOCIAL_LINKS = [
-  { href: "https://t.me/", label: "Telegram", icon: TelegramLogo },
+  { href: "https://t.me/cmc_mafia", label: "Telegram", icon: TelegramLogo },
   { href: "https://vk.com/", label: "VK", icon: null },
-  { href: "https://instagram.com/", label: "Instagram", icon: InstagramLogo },
 ];
 
 export function SiteFooter() {

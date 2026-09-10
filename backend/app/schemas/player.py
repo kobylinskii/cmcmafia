@@ -102,6 +102,9 @@ class PlayerAdminOut(BaseModel):
     rejection_reason: str | None
     is_bot_admin: bool
     is_site_admin: bool
+    # Кто выдал права админа: по этой ссылке админка решает, кого текущий
+    # пользователь вправе разжаловать (см. player_service.ensure_can_manage_site_admin).
+    site_admin_granted_by_id: int | None
     site_username: str | None
     telegram_id: int | None
     telegram_username: str | None

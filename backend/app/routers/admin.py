@@ -701,12 +701,17 @@ def update_player(request: Request, player_id: DbId, data: PlayerUpdate, db: Ses
 
 @router.delete("/players/{player_id}")
 @limiter.limit("30/minute")
-def delete_player(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> dict:
+def delete_player(
+    request: Request,
+    player_id: DbId,
+    db: Session = Depends(get_db),
+    actor: models.Player = Depends(require_site_admin),
+) -> dict:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
     try:
-        status_ = player_service.delete_player(db, player=player)
+        status_ = player_service.delete_player(db, player=player, actor=actor)
         db.commit()
     except PlayerValidationError as exc:
         db.rollback()
@@ -732,12 +737,20 @@ async def upload_photo(request: Request, player_id: DbId, file: UploadFile, db: 
 
 @router.post("/players/{player_id}/site-access", response_model=SiteAccessGrantOut)
 @limiter.limit("30/minute")
-def grant_site_access(request: Request, player_id: DbId, username: str, db: Session = Depends(get_db)) -> SiteAccessGrantOut:
+def grant_site_access(
+    request: Request,
+    player_id: DbId,
+    username: str,
+    db: Session = Depends(get_db),
+    actor: models.Player = Depends(require_site_admin),
+) -> SiteAccessGrantOut:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
     try:
-        temp_password = player_service.grant_site_access(db, player=player, username=username)
+        temp_password = player_service.grant_site_access(
+            db, player=player, username=username, actor=actor
+        )
         db.commit()
     except PlayerValidationError as exc:
         db.rollback()
@@ -747,12 +760,17 @@ def grant_site_access(request: Request, player_id: DbId, username: str, db: Sess
 
 @router.delete("/players/{player_id}/site-access")
 @limiter.limit("30/minute")
-def revoke_site_access(request: Request, player_id: DbId, db: Session = Depends(get_db)) -> dict:
+def revoke_site_access(
+    request: Request,
+    player_id: DbId,
+    db: Session = Depends(get_db),
+    actor: models.Player = Depends(require_site_admin),
+) -> dict:
     player = db.get(models.Player, player_id)
     if player is None:
         raise HTTPException(404, "Игрок не найден")
     try:
-        player_service.revoke_site_access(db, player=player)
+        player_service.revoke_site_access(db, player=player, actor=actor)
         db.commit()
     except PlayerValidationError as exc:
         db.rollback()

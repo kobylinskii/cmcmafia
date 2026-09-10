@@ -105,10 +105,12 @@ def update_player(db: Session, *, player: models.Player, **fields) -> models.Pla
     return player
 
 
-def delete_player(db: Session, *, player: models.Player) -> str:
-    # Удаление последнего админа запирает админку так же, как снятие доступа,
-    # -- проверка одна на оба пути (см. ensure_not_last_site_admin).
+def delete_player(db: Session, *, player: models.Player, actor: models.Player | None = None) -> str:
+    # Удаление админа -- это тот же отзыв прав (мягко удалённый в админку уже не
+    # войдёт), поэтому обе проверки те же, что и у revoke_site_access.
+    ensure_can_manage_site_admin(db, actor=actor, target=player)
     ensure_not_last_site_admin(db, player=player)
+    _promote_grantees(db, player=player)
     has_games = (
         db.query(models.GameParticipant).filter(models.GameParticipant.player_id == player.id).first()
         is not None
@@ -123,7 +125,13 @@ def delete_player(db: Session, *, player: models.Player) -> str:
     return "deleted"
 
 
-def grant_site_access(db: Session, *, player: models.Player, username: str) -> str:
+def grant_site_access(
+    db: Session, *, player: models.Player, username: str, actor: models.Player | None = None
+) -> str:
+    # Перевыдача доступа действующему админу -- это смена его пароля, то есть
+    # захват учётки: прав на неё нужно ровно столько же, сколько на отзыв.
+    ensure_can_manage_site_admin(db, actor=actor, target=player)
+
     existing = db.query(models.Player).filter(models.Player.site_username == username).first()
     if existing and existing.id != player.id:
         raise PlayerValidationError("Такой логин уже занят")
@@ -131,6 +139,11 @@ def grant_site_access(db: Session, *, player: models.Player, username: str) -> s
     temp_password = security.generate_temp_password()
     player.site_username = username
     player.site_password_hash = security.hash_password(temp_password)
+    # Родитель в цепочке проставляется только при первой выдаче: иначе
+    # перевыдача пароля переподчиняла бы действующего админа тому, кто её
+    # сделал, и права поднимались бы вверх по дереву.
+    if not player.is_site_admin and actor is not None and actor.id != player.id:
+        player.site_admin_granted_by_id = actor.id
     # A site login currently has exactly one purpose: administering /mafia/admin.
     # If a lower-privilege site account type is ever introduced, split this out
     # into its own flag instead of overloading is_site_admin.
@@ -139,6 +152,59 @@ def grant_site_access(db: Session, *, player: models.Player, username: str) -> s
     player.locked_until = None
     db.flush()
     return temp_password
+
+
+def ensure_can_manage_site_admin(
+    db: Session, *, actor: models.Player | None, target: models.Player
+) -> None:
+    """Иерархия отзыва: снять права можно только с того, кому ты их выдал.
+
+    Цепочка хранится в players.site_admin_granted_by_id. Если админ 1 назначил
+    админа 2, а тот -- админа 3, то 1 снимает права с обоих, 2 -- только с 3,
+    3 -- ни с кого. Себя разжаловать можно всегда (упереться остаётся только в
+    ensure_not_last_site_admin).
+
+    Корень цепочки (granted_by IS NULL: первый админ из scripts/create_admin.py
+    и все, кто был админом до этой миграции) неприкосновенен для остальных --
+    иначе назначенный админ мог бы разжаловать назначившего.
+
+    actor=None -- вызов не из HTTP (скрипт на сервере, сиды): там проверять
+    нечего, прямой доступ к базе и так сильнее любых прав в интерфейсе.
+    """
+    if actor is None or actor.id == target.id or not target.is_site_admin:
+        return
+
+    # ponytail: подъём по цепочке -- по запросу на звено; звеньев тут единицы.
+    # Рекурсивный CTE, если дерево админов когда-нибудь станет глубоким.
+    # seen страхует от цикла: 1 назначил 2, 1 разжалован, 2 назначил 1 обратно.
+    seen = {target.id}
+    parent_id = target.site_admin_granted_by_id
+    while parent_id is not None and parent_id not in seen:
+        if parent_id == actor.id:
+            return
+        seen.add(parent_id)
+        parent_id = (
+            db.query(models.Player.site_admin_granted_by_id)
+            .filter(models.Player.id == parent_id)
+            .scalar()
+        )
+
+    raise PlayerValidationError(
+        "Права этому администратору выдавали не вы — снять их может только тот, кто выдал"
+    )
+
+
+def _promote_grantees(db: Session, *, player: models.Player) -> None:
+    """Назначенных разжалованным админом наследует тот, кто назначил его самого.
+
+    Без этого они остались бы корневыми (а при жёстком удалении строки их
+    обнулил бы ON DELETE SET NULL), то есть неприкосновенными для всех, кроме
+    себя, -- и снять с них права было бы уже некому.
+    """
+    db.query(models.Player).filter(models.Player.site_admin_granted_by_id == player.id).update(
+        {models.Player.site_admin_granted_by_id: player.site_admin_granted_by_id},
+        synchronize_session=False,
+    )
 
 
 def ensure_not_last_site_admin(db: Session, *, player: models.Player) -> None:
@@ -163,11 +229,16 @@ def ensure_not_last_site_admin(db: Session, *, player: models.Player) -> None:
         )
 
 
-def revoke_site_access(db: Session, *, player: models.Player) -> None:
+def revoke_site_access(
+    db: Session, *, player: models.Player, actor: models.Player | None = None
+) -> None:
+    ensure_can_manage_site_admin(db, actor=actor, target=player)
     ensure_not_last_site_admin(db, player=player)
+    _promote_grantees(db, player=player)
     player.site_username = None
     player.site_password_hash = None
     player.is_site_admin = False
+    player.site_admin_granted_by_id = None
     db.flush()
 
 

@@ -131,6 +131,8 @@ players (
     site_username          VARCHAR(50) UNIQUE,
     site_password_hash     TEXT,               -- argon2id
     is_site_admin          BOOLEAN NOT NULL DEFAULT FALSE,
+    site_admin_granted_by_id INTEGER REFERENCES players(id) ON DELETE SET NULL,
+                                               -- кто выдал права; NULL = корень цепочки
     failed_login_attempts  SMALLINT NOT NULL DEFAULT 0,
     locked_until           TIMESTAMPTZ,
     last_login_at          TIMESTAMPTZ,
@@ -165,6 +167,19 @@ club_settings (
 
 `is_site_admin` сейчас означает ровно одно — «может входить в `/mafia/admin`»;
 отдельной низкопривилегированной сайт-роли нет.
+
+Отзыв прав иерархичен (`player_service.ensure_can_manage_site_admin`):
+`site_admin_granted_by_id` помнит, кто кого назначил, и снять права можно
+только с того, кто вырос из твоих, — напрямую или по цепочке. Если админ 1
+назначил админа 2, а тот — админа 3, то 1 разжалует обоих, 2 — только третьего,
+3 — никого. Себя разжаловать можно всегда (кроме последнего админа,
+см. `ensure_not_last_site_admin`). Та же проверка стоит на удалении игрока
+(мягко удалённый в админку уже не войдёт) и на ПОВТОРНОЙ выдаче доступа
+действующему админу: перевыдача сбрасывает пароль, то есть это захват учётки.
+`granted_by = NULL` — корень цепочки: первый админ из `scripts/create_admin.py`
+и все, кто был админом до миграции `a9c2e5b71d34`; снять права с корневого
+может только он сам. Разжаловали середину — назначенные ею переходят к тому,
+кто назначил её саму, иначе снимать права с них было бы уже некому.
 
 ### 3.2 Турниры
 
@@ -508,7 +523,8 @@ POST /api/auth/login               — 5/мин/IP; блокировка на N 
 POST /api/auth/refresh             — обменивает refresh-cookie на новую пару access+refresh+csrf
 POST /api/auth/logout
 POST /api/auth/password            — смена пароля себе (требует текущий пароль)
-GET  /api/auth/me
+GET  /api/auth/me                  — {player_id, nickname, is_site_admin}; player_id нужен
+#                                    админке, чтобы понять своё место в цепочке выдачи прав
 
 # ================= SITE ADMIN (app/routers/admin.py; JWT-cookie + CSRF, is_site_admin=true) =================
 GET    /api/admin/games                              — только funky/training, оценённые (турнирные — см. ниже)
@@ -543,6 +559,7 @@ POST /api/admin/players/profile-changes/{id}/apply
 POST /api/admin/players/profile-changes/{id}/reject    — {reason} обязателен
 POST /api/admin/players/{id}/photo
 POST/DELETE /api/admin/players/{id}/site-access        — выдать/отозвать сайт-логин
+#                                                        отзыв только вниз по цепочке выдачи (раздел 3.1)
 GET/POST/DELETE /api/admin/bot-admins[/{player_id}]     — {telegram_id | username}
 
 GET  /api/admin/pass-list                              — ФИО на пропуск за текущую неделю (раздел 3.9)

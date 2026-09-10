@@ -82,7 +82,7 @@ def login(request: Request, response: Response, data: LoginIn, db: Session = Dep
     db.commit()
 
     _set_auth_cookies(response, player.id)
-    return LoginOut(nickname=player.nickname, is_site_admin=player.is_site_admin)
+    return LoginOut(player_id=player.id, nickname=player.nickname, is_site_admin=player.is_site_admin)
 
 
 @router.post("/refresh")
@@ -176,4 +176,4 @@ def change_password(
 
 @router.get("/me", response_model=LoginOut)
 def me(user: models.Player = Depends(get_current_site_user)) -> LoginOut:
-    return LoginOut(nickname=user.nickname, is_site_admin=user.is_site_admin)
+    return LoginOut(player_id=user.id, nickname=user.nickname, is_site_admin=user.is_site_admin)

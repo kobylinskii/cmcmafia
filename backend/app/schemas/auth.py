@@ -9,6 +9,9 @@ class LoginIn(BaseModel):
 
 
 class LoginOut(BaseModel):
+    # player_id -- чтобы админка знала, где она сама стоит в цепочке выдачи
+    # прав, и не показывала кнопку отзыва там, где сервер её всё равно не примет.
+    player_id: int
     nickname: str
     is_site_admin: bool
 

@@ -187,3 +187,84 @@ def test_pending_bot_admin_invitation_can_be_withdrawn(admin):
         params={"telegram_id": admin_tg},
         headers=BOT_HEADERS,
     ).json() == {"removed": False}
+
+
+def _login_as(username: str, password: str) -> tuple:
+    """Отдельный клиент под другим админом: общий TestClient держит куки, и
+    вход вторым сбил бы сессию первого прямо посреди теста."""
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    resp = client.post("/api/auth/login", json={"username": username, "password": password})
+    assert resp.status_code == 200, resp.text
+    return client, {"X-CSRF-Token": client.cookies.get("csrf_token")}
+
+
+def _grant(client, headers, nickname: str, slug: str) -> tuple[int, str]:
+    player_id = client.post(
+        "/api/admin/players", json={"nickname": nickname, "slug": slug}, headers=headers
+    ).json()["id"]
+    resp = client.post(
+        f"/api/admin/players/{player_id}/site-access", params={"username": slug}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    return player_id, resp.json()["temp_password"]
+
+
+def test_site_admin_rights_are_revoked_down_the_chain_only(admin):
+    """Кто выдал права, тот их и снимает -- вместе со всем, что выросло ниже.
+
+    Админ1 (корневой, из фикстуры) назначил админа2, тот -- админа3. Значит
+    админ1 разжалует обоих, админ2 -- только третьего, админ3 -- никого.
+    """
+    client1, headers1 = admin
+    id2, password2 = _grant(client1, headers1, "Второй", "second")
+    client2, headers2 = _login_as("second", password2)
+    id3, password3 = _grant(client2, headers2, "Третий", "third")
+    client3, headers3 = _login_as("third", password3)
+
+    me3 = client3.get("/api/auth/me").json()
+    assert me3["player_id"] == id3
+
+    # Снизу вверх -- нельзя: ни разжаловать, ни удалить, ни перевыдать пароль
+    # (перевыдача -- это захват учётки, то есть тот же отзыв).
+    for target in (id2, client1.get("/api/auth/me").json()["player_id"]):
+        assert client3.delete(f"/api/admin/players/{target}/site-access", headers=headers3).status_code == 422
+        assert client3.delete(f"/api/admin/players/{target}", headers=headers3).status_code == 422
+        assert client3.post(
+            f"/api/admin/players/{target}/site-access", params={"username": "hijack"}, headers=headers3
+        ).status_code == 422
+
+    # Сверху вниз -- можно.
+    assert client2.delete(f"/api/admin/players/{id3}/site-access", headers=headers2).status_code == 200
+    assert client1.get(f"/api/admin/players/{id3}", headers=headers1).json()["is_site_admin"] is False
+
+    assert client1.delete(f"/api/admin/players/{id2}/site-access", headers=headers1).status_code == 200
+    assert client1.get(f"/api/admin/players/{id2}", headers=headers1).json()["is_site_admin"] is False
+
+
+def test_revoked_admins_grantees_move_up_to_his_own_grantor(admin):
+    """Разжаловали середину цепочки -- назначенные ею переходят выше, а не
+    становятся неприкосновенными корнями."""
+    client1, headers1 = admin
+    id2, password2 = _grant(client1, headers1, "Второй", "second")
+    client2, headers2 = _login_as("second", password2)
+    id3, _ = _grant(client2, headers2, "Третий", "third")
+
+    assert client1.delete(f"/api/admin/players/{id2}/site-access", headers=headers1).status_code == 200
+
+    me1 = client1.get("/api/auth/me").json()["player_id"]
+    assert client1.get(f"/api/admin/players/{id3}", headers=headers1).json()["site_admin_granted_by_id"] == me1
+    assert client1.delete(f"/api/admin/players/{id3}/site-access", headers=headers1).status_code == 200
+
+
+def test_admin_can_always_step_down_himself(admin):
+    """Себя разжаловать можно и снизу цепочки -- иначе выйти из админки нечем."""
+    client1, headers1 = admin
+    id2, password2 = _grant(client1, headers1, "Второй", "second")
+    client2, headers2 = _login_as("second", password2)
+
+    assert client2.delete(f"/api/admin/players/{id2}/site-access", headers=headers2).status_code == 200
+    assert client1.get(f"/api/admin/players/{id2}", headers=headers1).json()["is_site_admin"] is False

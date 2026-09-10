@@ -120,6 +120,13 @@ class Player(Base):
     site_username: Mapped[str | None] = mapped_column(String(50), unique=True)
     site_password_hash: Mapped[str | None] = mapped_column(Text)
     is_site_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Кто выдал доступ. Отзыв иерархичен: снять права можно только с того, кому
+    # ты их выдал сам -- напрямую или по цепочке (player_service.ensure_can_manage_site_admin).
+    # NULL -- корень цепочки: первый админ из scripts/create_admin.py, снять
+    # права с него может только он сам.
+    site_admin_granted_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("players.id", ondelete="SET NULL")
+    )
     failed_login_attempts: Mapped[int] = mapped_column(SmallInteger, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

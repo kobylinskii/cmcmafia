@@ -1,24 +1,57 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
-import { Plus, PencilSimple, Trash, Key } from "@phosphor-icons/react/dist/ssr";
+import { useMemo, useState } from "react";
+import { Plus, PencilSimple, Trash, Key, ShieldSlash } from "@phosphor-icons/react/dist/ssr";
 import { clientFetch, ApiError } from "@/lib/api";
 import { useResource } from "@/lib/use-resource";
 import { useConfirmable } from "@/lib/use-confirmable";
-import type { PlayerAdminOut } from "@/types/api";
+import type { LoginOut, PlayerAdminOut } from "@/types/api";
 import { Button, LinkButton } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 export default function AdminPlayersPage() {
   const { data: players, error, reload } = useResource<PlayerAdminOut[]>("/api/admin/players");
+  const { data: me } = useResource<LoginOut>("/api/auth/me");
   const [grantFor, setGrantFor] = useState<PlayerAdminOut | null>(null);
 
   const del = useConfirmable<PlayerAdminOut>(async (player) => {
     await clientFetch(`/api/admin/players/${player.id}`, { method: "DELETE" });
     reload();
   }, "Не удалось удалить");
+
+  const revoke = useConfirmable<PlayerAdminOut>(async (player) => {
+    await clientFetch(`/api/admin/players/${player.id}/site-access`, { method: "DELETE" });
+    reload();
+  }, "Не удалось отозвать доступ");
+
+  // Кого я вправе разжаловать: себя и всё, что выросло из выданных мной прав.
+  // Тот же обход, что и на сервере (player_service.ensure_can_manage_site_admin),
+  // только сверху вниз -- цепочка целиком уже есть в загруженном списке.
+  // Решает он только вид кнопок: отказывает всё равно бэкенд.
+  const manageable = useMemo(() => {
+    const ids = new Set<number>();
+    if (!players || !me) return ids;
+    const grantees = new Map<number, number[]>();
+    for (const p of players) {
+      if (p.site_admin_granted_by_id === null) continue;
+      const siblings = grantees.get(p.site_admin_granted_by_id) ?? [];
+      siblings.push(p.id);
+      grantees.set(p.site_admin_granted_by_id, siblings);
+    }
+    const queue = [me.player_id];
+    while (queue.length) {
+      const id = queue.pop()!;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      queue.push(...(grantees.get(id) ?? []));
+    }
+    return ids;
+  }, [players, me]);
+
+  // Не-админ трогается кем угодно: права ему пока не выдавал никто.
+  const canManage = (p: PlayerAdminOut) => !p.is_site_admin || manageable.has(p.id);
 
   return (
     <div>
@@ -65,25 +98,38 @@ export default function AdminPlayersPage() {
                 </td>
                 <td className="px-4 py-3">
                   <div className="flex items-center justify-end gap-1">
-                    <button
-                      title="Выдать доступ на сайт"
-                      onClick={() => setGrantFor(p)}
-                      className="rounded-lg p-2 text-ink-400 hover:bg-ink-850 hover:text-ink-50"
-                    >
-                      <Key size={16} />
-                    </button>
+                    {canManage(p) && (
+                      <button
+                        title={p.is_site_admin ? "Перевыдать доступ на сайт" : "Выдать доступ на сайт"}
+                        onClick={() => setGrantFor(p)}
+                        className="rounded-lg p-2 text-ink-400 hover:bg-ink-850 hover:text-ink-50"
+                      >
+                        <Key size={16} />
+                      </button>
+                    )}
+                    {p.is_site_admin && canManage(p) && (
+                      <button
+                        title="Отозвать права админа сайта"
+                        onClick={() => revoke.ask(p)}
+                        className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
+                      >
+                        <ShieldSlash size={16} />
+                      </button>
+                    )}
                     <Link
                       href={`/mafia/admin/players/${p.id}/edit`}
                       className="rounded-lg p-2 text-ink-400 hover:bg-ink-850 hover:text-ink-50"
                     >
                       <PencilSimple size={16} />
                     </Link>
-                    <button
-                      onClick={() => del.ask(p)}
-                      className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
-                    >
-                      <Trash size={16} />
-                    </button>
+                    {canManage(p) && (
+                      <button
+                        onClick={() => del.ask(p)}
+                        className="rounded-lg p-2 text-ink-400 hover:bg-brand-900/40 hover:text-brand-300"
+                      >
+                        <Trash size={16} />
+                      </button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -94,6 +140,22 @@ export default function AdminPlayersPage() {
       </div>
 
       {grantFor && <GrantAccessModal player={grantFor} onClose={() => setGrantFor(null)} />}
+
+      <ConfirmDialog
+        open={revoke.target !== null}
+        title={`Отозвать права админа у «${revoke.target?.nickname}»?`}
+        description={
+          <>
+            Логин и пароль для входа на сайт перестанут работать. Те, кому этот админ сам
+            выдал права, останутся админами — они перейдут к вам, и снять их сможете вы.
+          </>
+        }
+        confirmLabel="Отозвать права"
+        busy={revoke.busy}
+        error={revoke.error}
+        onConfirm={revoke.run}
+        onCancel={revoke.close}
+      />
 
       <ConfirmDialog
         open={del.target !== null}

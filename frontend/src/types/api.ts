@@ -265,6 +265,9 @@ export interface PlayerAdminOut {
   rejection_reason: string | null;
   is_bot_admin: boolean;
   is_site_admin: boolean;
+  /** Кто выдал права админа сайта; null -- корень цепочки. Отзыв идёт только
+   * вниз по ней (см. бэкенд, player_service.ensure_can_manage_site_admin). */
+  site_admin_granted_by_id: number | null;
   site_username: string | null;
   telegram_id: number | null;
   telegram_username: string | null;
@@ -328,6 +331,7 @@ export const WEEKDAY_LABELS = [
 ] as const;
 
 export interface LoginOut {
+  player_id: number;
   nickname: string;
   is_site_admin: boolean;
 }
