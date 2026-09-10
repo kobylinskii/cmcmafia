@@ -40,6 +40,20 @@ case "$OLD_SITE_URL" in
         exit 1 ;;
 esac
 
+# Неподставленный шаблон Railway: в интерфейсе переменные показываются
+# ссылками ${{PGPASSWORD}} и т.п., которые платформа раскрывает только у себя.
+# Скопированные как есть, они дают «invalid integer value ... for connection
+# option port» -- сообщение, по которому причину не угадать.
+case "$RAILWAY_DATABASE_URL" in
+    *'${{'*)
+        echo "В строке остались ссылки Railway вида \${{PGPASSWORD}} -- это шаблон," >&2
+        echo "а не готовый адрес. Нужно значение с подставленными данными:" >&2
+        echo "  Railway -> сервис Postgres -> вкладка Connect -> Public Network," >&2
+        echo "  либо собрать вручную из переменных на вкладке Variables:" >&2
+        echo "  postgresql://<PGUSER>:<PGPASSWORD>@<RAILWAY_TCP_PROXY_DOMAIN>:<RAILWAY_TCP_PROXY_PORT>/<PGDATABASE>" >&2
+        exit 1 ;;
+esac
+
 # Внутренний адрес Railway. Резолвится только внутри их сети, и снаружи даёт
 # ровно то же «could not translate host name», что и опечатка -- поэтому
 # называем причину прямо.
