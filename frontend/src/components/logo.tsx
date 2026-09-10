@@ -96,7 +96,7 @@ export function NavLogo() {
           в строку уже не влезают и раздвигают документ по горизонтали. Прячем
           именно её -- «МАФИЯ ВМК» и так написано на самом знаке, а alt у
           картинки остаётся. */}
-      <span className="hidden font-display text-lg text-ink-50 min-[360px]:inline">Мафия ВМК</span>
+      <span className="hidden font-display text-lg text-ink-50 min-[360px]:inline">Клуб</span>
     </Link>
   );
 }
