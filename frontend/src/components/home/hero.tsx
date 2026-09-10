@@ -14,7 +14,7 @@ export function Hero() {
             Вся статистика <span className="text-brand-400">клуба</span>.
           </h1>
           <p className="max-w-md text-base leading-relaxed text-ink-300 md:text-lg">
-            Результаты проведённых игр, рейтинг Эло, профили игроков.
+            Мы клуб спортивной мафии для всех студентов МГУ. А также скоро сможем приглашать гостей.
           </p>
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <LinkButton href="/mafia/games">Смотреть игры</LinkButton>
