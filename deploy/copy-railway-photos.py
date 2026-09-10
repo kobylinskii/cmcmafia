@@ -16,6 +16,7 @@ HTTP-адрес совпадает с этим значением. Ожидаю�
 
 import os
 import sys
+import urllib.error
 import urllib.request
 
 MEDIA_DIR = "/app/media/players"
@@ -52,12 +53,15 @@ def main() -> int:
     with psycopg.connect(dsn) as conn:
         urls = [row[0] for row in conn.execute(PHOTO_SOURCES).fetchall()]
 
-    copied = skipped = failed = 0
+    copied = skipped = 0
+    missing: list[str] = []   # файла нет в источнике -- ссылка в базе битая
+    failed: list[str] = []    # не смогли скачать по другой причине
+
     for url in urls:
         name = local_name(url)
         if not name:
             print(f"пропуск: не разобрать имя файла в {url!r}", file=sys.stderr)
-            failed += 1
+            failed.append(url)
             continue
         dst = os.path.join(MEDIA_DIR, name)
         if os.path.exists(dst):
@@ -71,11 +75,39 @@ def main() -> int:
             urllib.request.urlretrieve(base + url, tmp)
             os.replace(tmp, dst)
             copied += 1
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                # Файла нет и на старом сайте. Это не сбой переноса, а уже
+                # существующая битая ссылка в базе: удалить фото с диска можно
+                # мимо приложения, а photo_url при этом никто не чистит --
+                # проверки существования файла в бэкенде нет вовсе.
+                missing.append(url)
+            else:
+                print(f"не скачалось {base + url}: HTTP {exc.code}", file=sys.stderr)
+                failed.append(url)
         except Exception as exc:  # noqa: BLE001 -- одна битая ссылка не повод рвать перенос
             print(f"не скачалось {base + url}: {exc}", file=sys.stderr)
-            failed += 1
+            failed.append(url)
 
-    print(f"фото: перенесено {copied}, уже было {skipped}, ошибок {failed}")
+    print(f"фото: перенесено {copied}, уже было {skipped}, "
+          f"нет в источнике {len(missing)}, ошибок {len(failed)}")
+
+    if missing:
+        print()
+        print("Этих файлов нет на старом сайте -- ссылки в базе битые ещё до переезда:")
+        for url in missing:
+            print(f"  {url}")
+        print()
+        print("Сайт покажет у таких игроков сломанную картинку. Очистить ссылки:")
+        values = ", ".join("'" + u.replace("'", "''") + "'" for u in missing)
+        print(f"  docker compose exec -T postgres psql -U postgres -d mafia -c \\")
+        print(f"    \"UPDATE players SET photo_url = NULL WHERE photo_url IN ({values});\"")
+        print()
+        print("Фото можно будет загрузить заново через админку.")
+
+    # Ненулевой код -- только при настоящих сбоях. Отсутствие файла в источнике
+    # переносу не мешает: база уже восстановлена, и ронять весь скрипт на
+    # последнем шаге из-за давно удалённой картинки незачем.
     return 1 if failed else 0
 
 
