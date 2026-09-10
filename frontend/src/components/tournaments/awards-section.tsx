@@ -103,7 +103,7 @@ function AwardCard({
       </h3>
 
       <Link
-        href={`/mafia/${winner.slug}`}
+        href={`/${winner.slug}`}
         className="mt-3 flex items-center gap-3 font-display text-lg text-ink-50 hover:text-brand-300"
       >
         <PlayerAvatar photoUrl={winner.photo_url} nickname={winner.nickname} />

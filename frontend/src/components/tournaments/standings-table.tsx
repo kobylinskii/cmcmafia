@@ -8,7 +8,7 @@ import { PlayerAvatar } from "@/components/ui/player-avatar";
  * Турнирная таблица: суммы игровых колонок по всем оценённым играм турнира
  * (или одного его этапа), один игрок -- одна строка, отсортировано бэкендом
  * по убыванию «Итог» (backend stats_service.tournament_standings). Это не
- * общий клубный рейтинг Эло (тот -- в /mafia/rating) и не среднее за игру, а
+ * общий клубный рейтинг Эло (тот -- в /rating) и не среднее за игру, а
  * именно накопленная сумма -- как в турнирной таблице очков.
  */
 export function TournamentStandingsTable({
@@ -77,7 +77,7 @@ export function TournamentStandingsTable({
               <td className="px-4 py-3 font-mono text-sm text-ink-400">{row.rank}</td>
               <td className="px-4 py-3">
                 <Link
-                  href={`/mafia/${row.slug}`}
+                  href={`/${row.slug}`}
                   className="-my-2 flex items-center gap-3 py-2 font-medium text-ink-50 hover:text-brand-400"
                 >
                   <PlayerAvatar photoUrl={row.photo_url} nickname={row.nickname} />

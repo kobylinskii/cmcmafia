@@ -69,7 +69,7 @@ export function ParticipantsTable({ participants }: { participants: ParticipantO
             <tr key={p.seat_number} className="odd:bg-ink-900/40">
               <td className={`${td} font-mono text-ink-400`}>{p.seat_number}</td>
               <td className={td}>
-                <Link href={`/mafia/${p.player_slug}`} className="font-medium text-ink-50 hover:text-brand-400">
+                <Link href={`/${p.player_slug}`} className="font-medium text-ink-50 hover:text-brand-400">
                   {p.player_nickname}
                 </Link>
               </td>

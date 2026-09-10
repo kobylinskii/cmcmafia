@@ -86,7 +86,7 @@ export function LogoWordmark({ className, priority }: { className?: string; prio
 
 export function NavLogo() {
   return (
-    <Link href="/mafia" className="flex items-center shrink-0">
+    <Link href="/" className="flex items-center shrink-0">
       <LogoWordmark className="h-10 w-auto" priority />
     </Link>
   );

@@ -6,8 +6,8 @@ import { NextRequest, NextResponse } from "next/server";
 //     живёт здесь, а не в next.config headers() (там значение статичное).
 //     Next сам вычитывает nonce из CSP запроса и проставляет его своим
 //     скриптам -- при условии ДИНАМИЧЕСКОГО рендера страницы (см. force-dynamic
-//     в page.tsx публичных страниц и app/mafia/admin/layout.tsx).
-//  2. Presence-check сессии для /mafia/admin/* (кроме логина) -- чтобы не
+//     в page.tsx публичных страниц и app/admin/layout.tsx).
+//  2. Presence-check сессии для /admin/* (кроме логина) -- чтобы не
 //     мигать админкой анониму. Авторитет всё равно бэкенд (require_site_admin).
 //
 // style-src остаётся 'unsafe-inline': в вёрстке есть inline style-атрибуты
@@ -48,9 +48,9 @@ export function proxy(request: NextRequest) {
 
   // Гейт админки: редирект аноним -> логин. Ответы из proxy НЕ проходят через
   // next.config headers(), поэтому критичные заголовки ставим тут же.
-  if (pathname.startsWith("/mafia/admin") && pathname !== "/mafia/admin/login") {
+  if (pathname.startsWith("/admin") && pathname !== "/admin/login") {
     if (!request.cookies.has("refresh_token")) {
-      const loginUrl = new URL("/mafia/admin/login", request.url);
+      const loginUrl = new URL("/admin/login", request.url);
       loginUrl.searchParams.set("next", pathname);
       const res = NextResponse.redirect(loginUrl);
       res.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains");

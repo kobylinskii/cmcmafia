@@ -144,7 +144,7 @@ def grant_site_access(
     # сделал, и права поднимались бы вверх по дереву.
     if not player.is_site_admin and actor is not None and actor.id != player.id:
         player.site_admin_granted_by_id = actor.id
-    # A site login currently has exactly one purpose: administering /mafia/admin.
+    # A site login currently has exactly one purpose: administering /admin.
     # If a lower-privilege site account type is ever introduced, split this out
     # into its own flag instead of overloading is_site_admin.
     player.is_site_admin = True
@@ -213,7 +213,7 @@ def ensure_not_last_site_admin(db: Session, *, player: models.Player) -> None:
     Эндпоинта «сделать себя админом» нет намеренно (см. ARCHITECTURE.md,
     раздел 14): первый доступ выдаётся только скриптом на сервере. Обратная
     сторона -- снять с себя доступ или удалить свою учётку админ мог, и если
-    он был единственным, войти в /mafia/admin становилось нечем: ни кнопки,
+    он был единственным, войти в /admin становилось нечем: ни кнопки,
     ни ручки, только `python -m app.scripts.create_admin` по SSH.
     """
     if not player.is_site_admin:

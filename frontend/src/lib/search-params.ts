@@ -60,7 +60,7 @@ export function isoDate(value: string | undefined): string | undefined {
  * протокол-относительные (внешний хост), поэтому их отбрасываем. Гейт из
  * proxy.ts кладёт сюда pathname (всегда внутренний), защита -- от адреса,
  * собранного вручную. */
-export function safeNextPath(value: string | null | undefined, fallback = "/mafia/admin"): string {
+export function safeNextPath(value: string | null | undefined, fallback = "/admin"): string {
   if (!value || !value.startsWith("/")) return fallback;
   if (value.startsWith("//") || value.startsWith("/\\")) return fallback;
   return value;

@@ -56,7 +56,7 @@ def login(request: Request, response: Response, data: LoginIn, db: Session = Dep
 
     # is_active снимает player_service.delete_player у игрока со сыгранными
     # играми (мягкое удаление). Логин у такой учётки оставался рабочим: вход
-    # проходил, кука выписывалась, proxy.ts пускал на /mafia/admin -- и там
+    # проходил, кука выписывалась, proxy.ts пускал на /admin -- и там
     # админка встречала человека сплошными 401 из get_current_site_user,
     # который is_active как раз проверяет. Отказываем сразу и тем же текстом.
     if player is None or not player.site_password_hash or not player.is_active:
@@ -115,7 +115,7 @@ def logout(response: Response, _: None = Depends(require_csrf)) -> dict:
     Раньше здесь висел Depends(get_current_site_user), и через 15 минут
     простоя (столько живёт access) «Выйти» отдавало 401 ещё до тела
     обработчика: delete_cookie не выполнялся, refresh_token оставался, а
-    proxy.ts гейтит /mafia/admin именно по нему -- то есть выйти было нельзя
+    proxy.ts гейтит /admin именно по нему -- то есть выйти было нельзя
     ровно тогда, когда это нужнее всего.
 
     От межсайтового «разлогинь его» по-прежнему защищает CSRF-токен: его кука

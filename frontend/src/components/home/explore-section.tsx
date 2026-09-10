@@ -5,21 +5,21 @@ import { Reveal } from "@/components/reveal";
 
 const cards = [
   {
-    href: "/mafia/rating",
+    href: "/rating",
     icon: ChartLineUp,
     title: "Рейтинг",
     body: "Таблица клуба по системе Эло. Разбор формулы и поиск игроков.",
     tone: "large" as const,
   },
   {
-    href: "/mafia/tournaments",
+    href: "/tournaments",
     icon: Trophy,
     title: "Турниры",
     body: "Составы, площадки и таблицы по каждому турниру.",
     tone: "compact" as const,
   },
   {
-    href: "/mafia/games",
+    href: "/games",
     icon: ListChecks,
     title: "Игры",
     body: "Состав, роли и баллы каждой сыгранной партии.",

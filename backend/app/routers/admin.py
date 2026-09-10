@@ -240,8 +240,8 @@ def create_tournament(request: Request, data: TournamentCreate, db: Session = De
 @limiter.limit("30/minute")
 def suggest_tournament_slug(request: Request, name: str, db: Session = Depends(get_db)) -> dict:
     # scope='tournament': свободным slug должен быть среди ТУРНИРОВ, а не
-    # среди игроков -- это разные пространства имён (/mafia/tournaments/[slug]
-    # против /mafia/[slug]). См. slug_service.suggest_slug.
+    # среди игроков -- это разные пространства имён (/tournaments/[slug]
+    # против /[slug]). См. slug_service.suggest_slug.
     return {"slug": slug_service.suggest_slug(name, db, scope="tournament")}
 
 

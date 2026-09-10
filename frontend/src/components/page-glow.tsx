@@ -1,5 +1,5 @@
 /**
- * Shared ambient background for every /mafia/* page (design-taste-frontend
+ * Shared ambient background for every /* page (design-taste-frontend
  * skill 4.11, page theme lock -- one dark theme, consistent surface
  * treatment everywhere, not just the homepage hero). Fixed + pointer-events
  * none per skill 6.E so it never costs scroll-repaint.

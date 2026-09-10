@@ -5,7 +5,7 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: "/",
-      disallow: "/mafia/admin",
+      disallow: "/admin",
     },
     // `||` for the same reason as in sitemap.ts: an empty build arg must not
     // turn this into a relative URL.

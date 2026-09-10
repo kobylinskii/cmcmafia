@@ -83,7 +83,7 @@ function GameSlotList({
             </div>
             <div className="flex shrink-0 items-center gap-1">
               <Link
-                href={`/mafia/admin/games/${game.id}/edit`}
+                href={`/admin/games/${game.id}/edit`}
                 title={game.status === "rated" ? "Изменить" : "Оценить"}
                 className="rounded-lg p-2 text-ink-400 hover:bg-ink-800 hover:text-ink-50"
               >

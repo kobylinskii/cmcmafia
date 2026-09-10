@@ -148,7 +148,7 @@ python -m app.scripts.create_admin --nickname "Админ" --username root --pas
 прочитать в Deploy Logs `Site admin ready`, затем **очистить** Custom Start
 Command и задеплоить снова.
 
-Вход: `https://<web>/mafia/admin/login`. Дальше администраторов и игроков
+Вход: `https://<web>/admin/login`. Дальше администраторов и игроков
 заводят через саму админку.
 
 ---

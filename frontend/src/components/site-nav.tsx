@@ -13,9 +13,9 @@ import { ThemeToggle } from "@/components/theme-toggle";
 // слова читается как список ссылок, а не как разделы сайта. Те же значки, что
 // в сайдбаре админки, чтобы разделы опознавались одинаково в обоих местах.
 const LINKS = [
-  { href: "/mafia/games", label: "Игры", icon: ListChecks },
-  { href: "/mafia/tournaments", label: "Турниры", icon: Trophy },
-  { href: "/mafia/rating", label: "Рейтинг", icon: Ranking },
+  { href: "/games", label: "Игры", icon: ListChecks },
+  { href: "/tournaments", label: "Турниры", icon: Trophy },
+  { href: "/rating", label: "Рейтинг", icon: Ranking },
 ];
 
 export function SiteNav() {

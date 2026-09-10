@@ -358,10 +358,10 @@ export function GameForm({ game }: { game?: GameOut & { id: number } }) {
    * карточки турнира, и общий список игр (где турнирных вообще нет) -- не то
    * место, куда он шёл. */
   const backHref = game?.tournament
-    ? `/mafia/admin/tournaments/${game.tournament.id}/edit`
+    ? `/admin/tournaments/${game.tournament.id}/edit`
     // Сохранение переводит игру в rated -- возвращаемся на ту вкладку, где она
     // теперь лежит, а не в расписание, которое она только что покинула.
-    : "/mafia/admin/games?tab=rated";
+    : "/admin/games?tab=rated";
 
   async function save(payload: Record<string, unknown>) {
     setLoading(true);

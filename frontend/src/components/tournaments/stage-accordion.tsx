@@ -98,7 +98,7 @@ export function TournamentStageAccordion({ stages }: { stages: TournamentStageDe
                         <span className="w-6 shrink-0 font-mono text-ink-500">{game.number}</span>
                         {game.status === "rated" ? (
                           <Link
-                            href={`/mafia/games/${game.id}`}
+                            href={`/games/${game.id}`}
                             className="flex flex-1 flex-wrap items-center gap-3 text-ink-200 hover:text-brand-300"
                           >
                             <span>{formatDateTime(game.starts_at)}</span>

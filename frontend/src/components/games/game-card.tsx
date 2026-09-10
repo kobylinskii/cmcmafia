@@ -11,7 +11,7 @@ export function GameCard({ game }: { game: GameListItem }) {
     // становятся дата, адрес, название турнира и две плашки -- адрес рвался
     // в столбик из пяти строк. До lg карточка идёт колонкой.
     <Link
-      href={`/mafia/games/${game.id}`}
+      href={`/games/${game.id}`}
       className="flex flex-col gap-3 rounded-card border border-ink-800 bg-ink-900 p-5 transition-colors hover:border-brand-600/60 lg:flex-row lg:items-center lg:justify-between"
     >
       <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:gap-4">

@@ -181,8 +181,8 @@ ACME-проверки, убирает заглушку, просит насто�
 Проверить:
 
 ```bash
-curl -I https://cmcmafia.ru/mafia        # 200, есть Strict-Transport-Security
-curl -I http://cmcmafia.ru/mafia         # 301 на https
+curl -I https://cmcmafia.ru/        # 200, есть Strict-Transport-Security
+curl -I http://cmcmafia.ru/         # 301 на https
 curl -s https://cmcmafia.ru/api/rating   # JSON рейтинга
 docker compose ps                       # api -- healthy
 docker compose logs bot | tail          # Start polling
@@ -278,7 +278,7 @@ docker compose exec -T postgres psql -U postgres -d mafia -Atc \
 docker compose exec api python -m app.scripts.create_admin --nickname "Админ"
 ```
 
-Скрипт печатает логин и временный пароль. Вход — `https://cmcmafia.ru/mafia/admin/login`.
+Скрипт печатает логин и временный пароль. Вход — `https://cmcmafia.ru/admin/login`.
 
 ---
 

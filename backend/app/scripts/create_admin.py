@@ -72,7 +72,7 @@ def main() -> int:
         print(f"  nickname:  {player.nickname}")
         print(f"  username:  {username}")
         print(f"  password:  {temp_password}")
-        print("\nLog in at /mafia/admin/login, then change the password by re-running this")
+        print("\nLog in at /admin/login, then change the password by re-running this")
         print("script with --player-id and a new --password.")
         return 0
     finally:

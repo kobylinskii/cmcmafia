@@ -62,7 +62,7 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
       } else {
         await clientFetch("/api/admin/players", { method: "POST", body: JSON.stringify(payload) });
       }
-      router.push("/mafia/admin/players");
+      router.push("/admin/players");
       router.refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Не удалось сохранить");
@@ -86,7 +86,7 @@ export function PlayerForm({ player }: { player?: PlayerAdminOut }) {
       </label>
 
       <label className={label}>
-        Slug (адрес страницы /mafia/…)
+        Slug (адрес страницы /…)
         <input
           className={field}
           value={slug}

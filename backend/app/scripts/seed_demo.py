@@ -353,7 +353,7 @@ def main() -> int:
         db.commit()
 
         print("Стенд наполнен.\n")
-        print(f"  Админка:   /mafia/admin/login")
+        print(f"  Админка:   /admin/login")
         print(f"  Логин:     {ADMIN_USERNAME}")
         print(f"  Пароль:    {ADMIN_PASSWORD}\n")
         print(f"  Игроков:            {db.query(models.Player).count()}")

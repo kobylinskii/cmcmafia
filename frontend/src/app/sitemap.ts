@@ -15,10 +15,10 @@ const SITE_URL = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const staticRoutes: MetadataRoute.Sitemap = [
-    { url: `${SITE_URL}/mafia`, changeFrequency: "weekly", priority: 1 },
-    { url: `${SITE_URL}/mafia/games`, changeFrequency: "daily", priority: 0.8 },
-    { url: `${SITE_URL}/mafia/rating`, changeFrequency: "daily", priority: 0.8 },
-    { url: `${SITE_URL}/mafia/tournaments`, changeFrequency: "weekly", priority: 0.8 },
+    { url: `${SITE_URL}/`, changeFrequency: "weekly", priority: 1 },
+    { url: `${SITE_URL}/games`, changeFrequency: "daily", priority: 0.8 },
+    { url: `${SITE_URL}/rating`, changeFrequency: "daily", priority: 0.8 },
+    { url: `${SITE_URL}/tournaments`, changeFrequency: "weekly", priority: 0.8 },
   ];
 
   // Постранично, а не одним запросом с limit=100: игры после сотой просто не
@@ -51,18 +51,18 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     ]);
 
     const playerRoutes: MetadataRoute.Sitemap = players.map((p) => ({
-      url: `${SITE_URL}/mafia/${p.slug}`,
+      url: `${SITE_URL}/${p.slug}`,
       changeFrequency: "weekly",
       priority: 0.5,
     }));
     const gameRoutes: MetadataRoute.Sitemap = gameItems.map((g) => ({
-      url: `${SITE_URL}/mafia/games/${g.id}`,
+      url: `${SITE_URL}/games/${g.id}`,
       changeFrequency: "monthly",
       priority: 0.3,
     }));
 
     const tournamentRoutes: MetadataRoute.Sitemap = tournaments.map((t) => ({
-      url: `${SITE_URL}/mafia/tournaments/${t.slug}`,
+      url: `${SITE_URL}/tournaments/${t.slug}`,
       changeFrequency: "weekly",
       priority: 0.6,
     }));

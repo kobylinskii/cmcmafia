@@ -11,10 +11,10 @@ import { adminLogout, adminMe } from "@/lib/admin-auth";
 import { ApiError } from "@/lib/api";
 
 const NAV = [
-  { href: "/mafia/admin", label: "Обзор", icon: Gauge, exact: true },
-  { href: "/mafia/admin/games", label: "Игры", icon: ListChecks },
-  { href: "/mafia/admin/tournaments", label: "Турниры", icon: Trophy },
-  { href: "/mafia/admin/players", label: "Игроки", icon: UsersThree },
+  { href: "/admin", label: "Обзор", icon: Gauge, exact: true },
+  { href: "/admin/games", label: "Игры", icon: ListChecks },
+  { href: "/admin/tournaments", label: "Турниры", icon: Trophy },
+  { href: "/admin/players", label: "Игроки", icon: UsersThree },
 ];
 
 export function AdminShell({ children }: { children: ReactNode }) {
@@ -28,7 +28,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
     adminMe()
       .then((me) => {
         if (!me.is_site_admin) {
-          router.replace("/mafia/admin/login");
+          router.replace("/admin/login");
           return;
         }
         setNickname(me.nickname);
@@ -36,7 +36,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
-          router.replace(`/mafia/admin/login?next=${encodeURIComponent(pathname)}`);
+          router.replace(`/admin/login?next=${encodeURIComponent(pathname)}`);
           return;
         }
         // Сеть или 5xx: раньше здесь не менялось ничего, и админка навсегда
@@ -48,7 +48,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
 
   async function handleLogout() {
     await adminLogout().catch(() => undefined);
-    router.push("/mafia/admin/login");
+    router.push("/admin/login");
   }
 
   if (!checked) {
@@ -103,7 +103,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             <ThemeToggle className="h-9 w-9 shrink-0" />
           </div>
           <Link
-            href="/mafia/admin/password"
+            href="/admin/password"
             className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm text-ink-300 hover:bg-ink-850 hover:text-ink-50"
           >
             <Key size={18} />
@@ -144,7 +144,7 @@ export function AdminShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
           <Link
-            href="/mafia/admin/password"
+            href="/admin/password"
             className="shrink-0 rounded-pill px-3 py-1.5 text-xs font-medium text-ink-300 hover:bg-ink-850 hover:text-ink-50"
           >
             Пароль

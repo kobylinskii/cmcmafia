@@ -72,7 +72,7 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
           method: "POST",
           body: JSON.stringify(payload),
         });
-        router.push(`/mafia/admin/tournaments/${created.id}/edit`);
+        router.push(`/admin/tournaments/${created.id}/edit`);
         router.refresh();
       }
     } catch (err) {
@@ -100,7 +100,7 @@ export function TournamentForm({ tournament }: { tournament?: TournamentAdminOut
       </label>
 
       <label className={label}>
-        Slug (адрес страницы /mafia/tournaments/…)
+        Slug (адрес страницы /tournaments/…)
         <input
           className={field}
           value={slug}

@@ -24,6 +24,15 @@ const nextConfig: NextConfig = {
   // Policy сюда НЕ входит: ему нужен свежий nonce на каждый запрос, поэтому он
   // живёт в proxy.ts (middleware). См. src/proxy.ts.
   poweredByHeader: false,
+  // Раздел жил по адресу /mafia/*, пока сайт делил домен с чем-то ещё. На
+  // своём домене этот префикс стал лишним, но ссылки на него могли разойтись
+  // по чатам -- отдаём постоянный редирект вместо 404.
+  async redirects() {
+    return [
+      { source: "/mafia", destination: "/", permanent: true },
+      { source: "/mafia/:path*", destination: "/:path*", permanent: true },
+    ];
+  },
   async headers() {
     return [
       {
