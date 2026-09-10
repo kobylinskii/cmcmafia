@@ -24,6 +24,22 @@ cd "$(dirname "$0")/.."
 : "${RAILWAY_DATABASE_URL:?нужен RAILWAY_DATABASE_URL (DATABASE_PUBLIC_URL из Railway)}"
 : "${OLD_SITE_URL:?нужен OLD_SITE_URL (адрес сайта на Railway, ещё работающего)}"
 
+# Заглушки из инструкции, подставленные дословно. Без этой проверки они дают
+# «could not translate host name», по которому не догадаться, что дело не в
+# сети, а в незаполненной команде.
+case "$RAILWAY_DATABASE_URL" in
+    *xxx.proxy.rlwy.net*|*postgres:...@*|*'<'*'>'*)
+        echo "RAILWAY_DATABASE_URL -- это пример из инструкции, а не ваш адрес." >&2
+        echo "Взять настоящий: Railway -> сервис Postgres -> Variables -> DATABASE_PUBLIC_URL" >&2
+        exit 1 ;;
+esac
+case "$OLD_SITE_URL" in
+    *web-production-xxxx*|*'<'*'>'*)
+        echo "OLD_SITE_URL -- это пример из инструкции, а не ваш адрес." >&2
+        echo "Взять настоящий: Railway -> сервис web -> Settings -> Domains" >&2
+        exit 1 ;;
+esac
+
 DUMP=deploy/railway.dump
 PG_IMAGE=${PG_IMAGE:-postgres:16}
 
@@ -32,13 +48,21 @@ echo "==> Версия базы на Railway"
 # лучше увидеть заранее. Если тут major больше 16, поднимите PG_IMAGE и image
 # сервиса postgres в docker-compose.yml до той же версии, иначе дамп либо не
 # снимется, либо не восстановится.
-docker run --rm "$PG_IMAGE" psql "$RAILWAY_DATABASE_URL" -Atc "select version()" | cut -c1-40
+#
+# Без промежуточной переменной здесь был конвейер `psql | cut`, а код возврата
+# конвейера -- это код ПОСЛЕДНЕЙ команды, то есть всегда успешного cut. Ошибка
+# подключения проглатывалась, и скрипт бодро шёл дальше к дампу.
+PG_VERSION=$(docker run --rm "$PG_IMAGE" psql "$RAILWAY_DATABASE_URL" -Atc "select version()")
+echo "$PG_VERSION" | cut -c1-40
 
 echo "==> Дамп с Railway -> $DUMP"
+# Пишем во временный файл и переименовываем: при обрыве связи посреди дампа
+# редирект оставил бы обрезанный файл на месте прежнего, годного.
 # --no-owner/--no-privileges: роли на Railway свои, локально всё под postgres.
 docker run --rm "$PG_IMAGE" pg_dump \
     --no-owner --no-privileges --format=custom \
-    "$RAILWAY_DATABASE_URL" > "$DUMP"
+    "$RAILWAY_DATABASE_URL" > "$DUMP.part"
+mv "$DUMP.part" "$DUMP"
 ls -lh "$DUMP"
 
 echo "==> Останавливаем api и bot, поднимаем только базу"
