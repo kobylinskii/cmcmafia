@@ -17,6 +17,11 @@
 
 set -eux
 
+# Порт SSH. 22 наружу -- это непрерывный перебор паролей ботами с первых минут
+# жизни публичного адреса; на нестандартном порту он прекращается полностью.
+# Переопределяется при запуске:  SSH_PORT=22 bash cloud-init.sh
+SSH_PORT="${SSH_PORT:-2222}"
+
 exec > >(tee -a /var/log/cmcmafia-init.log) 2>&1
 echo "=== cmcmafia init $(date -Is) ==="
 
@@ -46,13 +51,36 @@ $APT install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docke
 
 systemctl enable --now docker
 
-# ---------- Файрвол ----------
+# ---------- SSH и файрвол ----------
 # Наружу нужны только ssh и порты nginx. База, Redis, api и фронтенд портов
 # не пробрасывают вовсе и видны лишь внутри docker-сети.
-ufw allow 22/tcp
+#
+# Порядок важен: сначала РАЗРЕШИТЬ порт, потом переносить на него sshd. Иначе
+# между сменой порта и правилом файрвола образуется окно, в которое не войти.
+ufw allow "$SSH_PORT"/tcp
 ufw allow 80/tcp
 ufw allow 443/tcp
+
+# 22-й остаётся открытым, пока не проверено, что новый порт работает: скрипт
+# может выполняться и на живой машине, где по 22 прямо сейчас сидит человек.
+# Закрыть его -- отдельной командой, она в next-steps.txt.
+if [ "$SSH_PORT" != "22" ]; then
+    ufw allow 22/tcp
+fi
+
 ufw --force enable
+
+# Drop-in с номером 01: sshd читает их по алфавиту и берёт ПЕРВОЕ найденное
+# значение, а в облачных образах лежит 50-cloud-init.conf со своими
+# настройками -- файл с большим номером ему проиграл бы.
+cat > /etc/ssh/sshd_config.d/01-port.conf <<SSHD
+Port $SSH_PORT
+PermitRootLogin prohibit-password
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+SSHD
+sshd -t
+systemctl restart ssh
 
 # ---------- Swap ----------
 # Самая тяжёлая операция на этой машине -- `npm run build` фронтенда, и
@@ -107,8 +135,8 @@ chmod 600 .env backend/.env bot/.env
 # ---------- Что дальше ----------
 {
     cat <<'TXT'
-Сервер подготовлен: Docker, файрвол (22/80/443), swap 4 ГБ,
-автообновления безопасности.
+Сервер подготовлен: Docker, файрвол, swap 4 ГБ, автообновления безопасности.
+SSH перенесён на порт SSH_PORT_PLACEHOLDER, вход только по ключу.
 
 Код уже в /opt/cmcmafia, файлы .env созданы из примеров,
 POSTGRES_PASSWORD сгенерирован.
@@ -135,10 +163,19 @@ POSTGRES_PASSWORD сгенерирован.
        docker compose build
        ./deploy/init-tls.sh
 
+  4. Убедиться, что вход по новому порту работает, и закрыть 22-й:
+       ssh -p SSH_PORT_PLACEHOLDER root@<адрес>
+       ufw delete allow 22/tcp
+
 Полный порядок работ -- TIMEWEB.md в /opt/cmcmafia.
 Лог этой подготовки -- /var/log/cmcmafia-init.log
 TXT
 } > /root/next-steps.txt
+
+# Heredoc'и выше в кавычках -- переменные внутри намеренно не раскрываются
+# (в тексте есть $ и обратные кавычки, которые сломались бы). Порт
+# подставляем отдельным проходом.
+sed -i "s/SSH_PORT_PLACEHOLDER/$SSH_PORT/g" /root/next-steps.txt
 
 # Чтобы инструкция попалась на глаза сразу при входе по ssh, а не лежала
 # незамеченным файлом в домашнем каталоге.
