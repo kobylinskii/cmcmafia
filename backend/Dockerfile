@@ -20,9 +20,9 @@ RUN mkdir -p /app/media/players
 # "Connection refused" на 172.x, healthcheck не проходил никогда, и frontend
 # (depends_on: service_healthy) не стартовал вообще.
 #
-# На Railway приватная сеть, наоборот, IPv6-only, и там нужен "::" -- он и
-# стоит в backend/railway.json, а его startCommand перекрывает этот CMD.
-# Так что оба варианта деплоя рабочие, каждый со своим адресом.
+# Оговорка на будущее: платформы с IPv6-only приватной сетью (так было на
+# Railway) требуют обратного -- "::" вместо 0.0.0.0. Здесь docker-сеть
+# обычная, IPv4.
 #
 # --proxy-headers + доверие всем X-Forwarded-* нужно, чтобы rate limit
 # считался по реальному IP клиента, а не по адресу прокси (см. app/rate_limit.py).

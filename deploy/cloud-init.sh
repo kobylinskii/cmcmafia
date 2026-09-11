@@ -150,14 +150,14 @@ POSTGRES_PASSWORD сгенерирован.
        cd /opt/cmcmafia && nano .env
          LETSENCRYPT_EMAIL, NEXT_PUBLIC_BOT_USERNAME
        nano backend/.env
-         перенести с Railway JWT_SECRET, BOT_SERVICE_TOKEN,
+         JWT_SECRET, BOT_SERVICE_TOKEN,
          SUPERADMIN_TELEGRAM_IDS_RAW, BOOTSTRAP_ADMIN_PHONE_RAW
        nano bot/.env
          BOT_TOKEN и тот же BOT_SERVICE_TOKEN, что в backend/.env
 
-     JWT_SECRET и BOT_SERVICE_TOKEN берутся со старого хостинга, а не
-     придумываются заново: новый JWT_SECRET разлогинит админов, а разошедшийся
-     BOT_SERVICE_TOKEN тихо сломает бота. init-tls.sh это проверит.
+     BOT_SERVICE_TOKEN должен совпадать в backend/.env и bot/.env: при
+     расхождении сайт работает, а бот молчит -- API отдаёт ему 401.
+     init-tls.sh это проверит перед выпуском сертификата.
 
   2. Убедиться, что домен уже резолвится в IP этого сервера:
        dig +short cmcmafia.ru

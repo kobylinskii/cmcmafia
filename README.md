@@ -117,7 +117,5 @@ python bot.py
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — полное описание архитектуры: схема
   БД, весь API, формула рейтинга, турнирная сетка, безопасность, деплой.
-- [TIMEWEB.md](TIMEWEB.md) — деплой на Timeweb Cloud (облачный сервер,
-  Docker Compose, TLS через certbot, перенос данных с Railway).
-- [RAILWAY.md](RAILWAY.md) — прежний деплой на Railway. Оставлен как путь
-  отката на время переезда.
+- [TIMEWEB.md](TIMEWEB.md) — деплой на Timeweb Cloud: облачный сервер,
+  Docker Compose, TLS через certbot, эксплуатация и бэкапы.

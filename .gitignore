@@ -32,5 +32,5 @@ frontend/.node/
 # OS
 .DS_Store
 
-# Дампы базы при переносе (deploy/migrate-from-railway.sh)
+# Дампы базы -- их делает бэкап и разовые выгрузки, в репозиторий им незачем
 *.dump
