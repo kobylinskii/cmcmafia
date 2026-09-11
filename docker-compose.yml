@@ -105,6 +105,13 @@ services:
       # FSM бота: без внешнего хранилища незавершённая регистрация терялась
       # при каждом рестарте контейнера (см. bot/bot.py, build_storage).
       REDIS_URL: redis://redis:6379/0
+    networks:
+      # default -- чтобы видеть api и redis по именам сервисов.
+      - default
+      # telegram6 -- ради выхода в интернет по IPv6. IPv4-адрес
+      # api.telegram.org с российского хостинга не отвечает, и это
+      # единственный способ боту вообще добраться до Telegram.
+      - telegram6
 
   frontend:
     build:
@@ -140,6 +147,18 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - media_players:/media/players:ro
+
+networks:
+  default:
+  # Отдельная сеть вместо enable_ipv6 на default: у api uvicorn слушает только
+  # IPv4, и если бы соседи стали резолвить его ещё и в AAAA, часть соединений
+  # внутри стека начала бы упираться в несуществующий слушатель. IPv6 нужен
+  # ровно одному сервису -- боту, ему одному его и даём.
+  telegram6:
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: fd00:cafe:1::/64
 
 volumes:
   postgres_data:

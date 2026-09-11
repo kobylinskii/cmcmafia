@@ -2,7 +2,10 @@ import asyncio
 import contextlib
 import logging
 
+import socket
+
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
@@ -49,7 +52,21 @@ def build_storage(config: Config):
 async def main() -> None:
     config = load_config()
     api = ApiClient(base_url=config.api_base_url, service_token=config.bot_service_token)
-    bot = Bot(token=config.bot_token)
+    # Только IPv6 -- это не предпочтение, а единственный рабочий путь.
+    # api.telegram.org отдаёт и A, и AAAA, но IPv4-адрес (149.154.166.110) с
+    # российского хостинга не отвечает вовсе: соединение висит до таймаута.
+    # IPv6 при этом отвечает за 0.14 секунды.
+    #
+    # Без этой строки aiohttp честно пробует оба адреса, и каждый запрос к
+    # Telegram начинается с ожидания мёртвого IPv4. При старте бот на этом
+    # падал: set_my_commands не укладывался в таймаут, и контейнер уходил в
+    # цикл перезапусков.
+    #
+    # Сам IPv6 в контейнере появляется из сети telegram6 (docker-compose.yml):
+    # обычная docker-сеть его не даёт.
+    session = AiohttpSession()
+    session._connector_init["family"] = socket.AF_INET6
+    bot = Bot(token=config.bot_token, session=session)
     dp = Dispatcher(storage=build_storage(config))
 
     dp["config"] = config
