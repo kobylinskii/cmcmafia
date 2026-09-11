@@ -24,8 +24,26 @@ import { PUBLIC_CACHE_TAG } from "@/lib/api-server";
  * посторонний сбрасывал кеш в цикле: сама по себе операция безопасна, но
  * бесплатно ронять кеш чужого сайта не должно быть можно.
  */
+// Второй способ позвать сброс -- из бэкенда. Правки мимо админки (кнопки в
+// боте: подтверждение регистрации, применённая правка профиля, фото, отзыв
+// согласия на публикацию) браузером не сопровождаются, и сбрасывать кеш было
+// некому: сайт показывал прежнее до пяти минут. Для отзыва согласия это прямо
+// противоречило обещанию на /privacy, что карточка исчезает сразу.
+//
+// Токен общий с бэкендом. Куку он не заменяет, а дополняет: браузерный путь
+// остаётся как был.
+const REVALIDATE_TOKEN = process.env.REVALIDATE_TOKEN;
+
+function authorized(request: NextRequest): boolean {
+  if (request.cookies.has("refresh_token")) return true;
+  const token = request.headers.get("x-revalidate-token");
+  // Пустой REVALIDATE_TOKEN не должен открывать ручку кому угодно: без
+  // настроенного токена этот путь просто выключен.
+  return Boolean(REVALIDATE_TOKEN) && token === REVALIDATE_TOKEN;
+}
+
 export async function POST(request: NextRequest) {
-  if (!request.cookies.has("refresh_token")) {
+  if (!authorized(request)) {
     return NextResponse.json({ revalidated: false }, { status: 401 });
   }
   // Второй аргумент в Next 16 обязателен: профиль cacheLife или { expire }.

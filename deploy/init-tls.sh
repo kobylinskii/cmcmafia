@@ -55,6 +55,7 @@ fi
 
 check .env POSTGRES_PASSWORD "" "пароль базы; сгенерировать: openssl rand -hex 24"
 check .env NEXT_PUBLIC_BOT_USERNAME "" "username бота без @"
+check .env REVALIDATE_TOKEN "" "общий секрет api и frontend; openssl rand -hex 32"
 check backend/.env JWT_SECRET "change-me-to-a-random-64-char-secret" "при переезде -- значение со старого хостинга"
 check backend/.env BOT_SERVICE_TOKEN "change-me-to-a-random-64-char-secret" "при переезде -- значение со старого хостинга"
 check bot/.env BOT_TOKEN "your_bot_token_here" "токен от @BotFather"

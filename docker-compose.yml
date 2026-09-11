@@ -70,6 +70,10 @@ services:
       # но сессия не сохраняется. Как только перед nginx появится TLS,
       # выставить COOKIE_SECURE=true в окружении хоста.
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      # Сброс кеша фронтенда после правок из бота. Тот же токен ниже у
+      # frontend: расхождение здесь тихо возвращает пятиминутную задержку
+      # публикации, ничего при этом не ломая явно.
+      REVALIDATE_TOKEN: ${REVALIDATE_TOKEN:-}
     volumes:
       - media_players:/app/media/players
     # /health отдаёт сам FastAPI (app/main.py). Проверка нужна не ради
@@ -134,6 +138,8 @@ services:
     environment:
       # Сервер Next.js (не браузер) ходит к бэкенду напрямую по имени сервиса.
       API_INTERNAL_URL: http://api:8000
+      # Тот же токен, что у api: им бэкенд подтверждает право сбросить кеш.
+      REVALIDATE_TOKEN: ${REVALIDATE_TOKEN:-}
 
   nginx:
     image: nginx:alpine

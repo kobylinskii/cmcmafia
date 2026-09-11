@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app.ids import DbId, TelegramId
@@ -38,6 +38,7 @@ from app.schemas.club import (
     PlayerRejectIn,
     ProfileChangeRejectIn,
 )
+from app.services.revalidate_service import revalidate_public_pages
 from app.services import (
     admin_grant,
     admin_notification_service,
@@ -197,6 +198,7 @@ def update_my_profile(
 @limiter.limit("10/minute")
 async def upload_my_photo(
     request: Request,
+    tasks: BackgroundTasks,
     file: UploadFile,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
@@ -226,6 +228,7 @@ async def upload_my_photo(
         else:
             actor.photo_url = photo_url
         db.commit()
+        tasks.add_task(revalidate_public_pages)
     except ProfileChangeError as exc:
         db.rollback()
         # Файл уже на диске, а ссылаться на него теперь некому.
@@ -242,6 +245,7 @@ async def upload_my_photo(
 @limiter.limit("20/minute")
 def delete_my_photo(
     request: Request,
+    tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
 ) -> dict:
@@ -256,6 +260,7 @@ def delete_my_photo(
     previous = actor.photo_url
     actor.photo_url = None
     db.commit()
+    tasks.add_task(revalidate_public_pages)
     player_service.delete_photo_file(previous)
     return {"deleted": bool(previous), "withdrawn": withdrawn}
 
@@ -298,6 +303,7 @@ def resubmit_my_profile(
 @limiter.limit("20/minute")
 def set_my_publication_consent(
     request: Request,
+    tasks: BackgroundTasks,
     payload: BotPublicationConsentIn,
     db: Session = Depends(get_db),
     actor: models.Player = Depends(get_bot_actor),
@@ -311,6 +317,11 @@ def set_my_publication_consent(
     """
     actor.publication_consent = payload.consent
     db.commit()
+    # Кеш публичных страниц живёт пять минут и сбрасывается из браузера
+    # админки -- сюда браузер не заходит, поэтому сбрасываем сами. Для отзыва
+    # согласия это принципиально: на /privacy обещано, что карточка исчезает
+    # сразу, а не когда истечёт окно кеширования.
+    tasks.add_task(revalidate_public_pages)
     db.refresh(actor)
     return _profile_out(db, actor)
 
@@ -532,6 +543,7 @@ def list_moderation_queue(
 @limiter.limit("60/minute")
 def moderate_confirm_registration(
     request: Request,
+    tasks: BackgroundTasks,
     player_id: DbId,
     telegram_id: TelegramId,
     db: Session = Depends(get_db),
@@ -543,6 +555,7 @@ def moderate_confirm_registration(
     try:
         player_confirmation_service.confirm(db, player=player)
         db.commit()
+        tasks.add_task(revalidate_public_pages)
     except ConfirmationError as exc:
         db.rollback()
         raise HTTPException(409, exc.message) from exc
@@ -553,6 +566,7 @@ def moderate_confirm_registration(
 @limiter.limit("60/minute")
 def moderate_reject_registration(
     request: Request,
+    tasks: BackgroundTasks,
     player_id: DbId,
     telegram_id: TelegramId,
     data: PlayerRejectIn,
@@ -565,6 +579,7 @@ def moderate_reject_registration(
     try:
         player_confirmation_service.reject(db, player=player, reason=data.reason)
         db.commit()
+        tasks.add_task(revalidate_public_pages)
     except ConfirmationError as exc:
         db.rollback()
         raise HTTPException(409, exc.message) from exc
@@ -575,6 +590,7 @@ def moderate_reject_registration(
 @limiter.limit("60/minute")
 def moderate_apply_profile_change(
     request: Request,
+    tasks: BackgroundTasks,
     change_id: DbId,
     telegram_id: TelegramId,
     db: Session = Depends(get_db),
@@ -586,6 +602,7 @@ def moderate_apply_profile_change(
     try:
         profile_change_service.apply(db, change=change)
         db.commit()
+        tasks.add_task(revalidate_public_pages)
     except ProfileChangeError as exc:
         db.rollback()
         raise HTTPException(409, exc.message) from exc

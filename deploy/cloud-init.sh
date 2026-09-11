@@ -131,6 +131,11 @@ done
 if [ -z "$(grep -E '^POSTGRES_PASSWORD=' .env | cut -d= -f2-)" ]; then
     sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 24)|" .env
 fi
+# Тоже локальный секрет -- он связывает api и frontend внутри одной машины и
+# ни с чем снаружи совпадать не обязан.
+if [ -z "$(grep -E '^REVALIDATE_TOKEN=' .env | cut -d= -f2-)" ]; then
+    sed -i "s|^REVALIDATE_TOKEN=.*|REVALIDATE_TOKEN=$(openssl rand -hex 32)|" .env
+fi
 
 # .env хранят секреты в открытом виде -- читать их должен только root.
 chmod 600 .env backend/.env bot/.env

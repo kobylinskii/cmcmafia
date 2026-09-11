@@ -39,6 +39,13 @@ class Settings(BaseSettings):
 
     cors_origins: list[str] = ["http://localhost:3000"]
 
+    # Сброс кеша публичных страниц фронтенда после правок мимо админки
+    # (бот, скрипты). Адрес -- внутри docker-сети, наружу эта ручка ходит
+    # только из браузера админки по куке. Пустой токен выключает сброс:
+    # backend может работать и без фронтенда.
+    frontend_revalidate_url: str = "http://frontend:3000/revalidate"
+    revalidate_token: str = ""
+
     media_root: str = "./media/players"
     max_photo_bytes: int = 5 * 1024 * 1024
 
