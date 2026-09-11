@@ -154,6 +154,22 @@ class Player(Base):
     confirmation_admin_notified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+    # Согласие на публикацию профиля. Отдельно от is_active и
+    # confirmation_status, потому что смысл третий: человек остаётся игроком
+    # клуба и его регистрация подтверждена, но он больше не хочет, чтобы его
+    # ФИО, возраст и фотография были видны всем в интернете.
+    #
+    # 152-ФЗ различает обработку и распространение персональных данных, и
+    # согласие на второе отзывается отдельно и в любой момент. Отзыв должен
+    # срабатывать сразу, без решения администратора, поэтому снимает флаг сам
+    # игрок из бота.
+    #
+    # Игры и результаты при этом остаются в истории клуба: скрывается карточка
+    # игрока, а не факт его участия.
+    publication_consent: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -465,6 +465,9 @@ def _callback(data: str) -> Update:
 
 async def _register(dp: Dispatcher, bot: MockedBot) -> None:
     await dp.feed_update(bot, _message("/start"))
+    # Согласие на обработку данных -- первый шаг: до него бот телефон не
+    # спрашивает и присланный контакт игнорирует.
+    await dp.feed_update(bot, _callback("consent:yes"))
     await dp.feed_update(bot, _message(contact=Contact(phone_number="+79000000000", first_name="Тест", user_id=USER_ID)))
     await dp.feed_update(bot, _callback("nr:salutation:господин"))
     await dp.feed_update(bot, _message("Иванов Иван Иванович"))
@@ -479,6 +482,13 @@ async def test_registration_walks_all_six_steps(stack):
     dp, bot, api = stack
 
     await dp.feed_update(bot, _message("/start"))
+    # Сначала согласие -- и в нём прямым текстом сказано, что профиль станет
+    # публичным. Это не косметика: 152-ФЗ требует отдельного и осознанного
+    # согласия на распространение персональных данных.
+    assert "виден всем на сайте" in bot.last_text
+    assert bot.last_inline() == ["consent:yes"]
+
+    await dp.feed_update(bot, _callback("consent:yes"))
     assert "поделитесь номером телефона" in bot.last_text
     assert bot.last_reply_buttons() == ["📱 Поделиться номером телефона"]
 
@@ -516,6 +526,7 @@ async def test_registration_walks_all_six_steps(stack):
 async def test_registration_refuses_to_finish_without_a_role(stack):
     dp, bot, _ = stack
     await dp.feed_update(bot, _message("/start"))
+    await dp.feed_update(bot, _callback("consent:yes"))
     await dp.feed_update(bot, _message(contact=Contact(phone_number="+79000000000", first_name="Т", user_id=USER_ID)))
     await dp.feed_update(bot, _callback("nr:salutation:господин"))
     await dp.feed_update(bot, _message("Иванов Иван Иванович"))
@@ -1267,3 +1278,34 @@ async def test_card_of_an_already_decided_item_falls_back_to_the_list(stack):
     alerts = [c.text for c in bot.calls if isinstance(c, AnswerCallbackQuery) and c.show_alert]
     assert alerts and "уже рассмотрели" in alerts[0]
     assert "Ничего не ждёт решения" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_registration_does_not_start_before_consent(stack):
+    """До согласия бот не принимает никаких данных.
+
+    Порядок здесь -- не косметика. Согласие на обработку персональных данных
+    получают до того, как эти данные собраны, а не после: присланный раньше
+    времени контакт с номером телефона обрабатываться не должен.
+
+    Отдельно проверяется, что в тексте согласия сказано про публичность
+    профиля -- 152-ФЗ требует, чтобы согласие на распространение было
+    осознанным, то есть человек должен понимать, что именно увидят посторонние.
+    """
+    dp, bot, _ = stack
+
+    await dp.feed_update(bot, _message("/start"))
+    assert "виден всем на сайте" in bot.last_text
+    assert "отозвать" in bot.last_text
+    assert bot.last_inline() == ["consent:yes"]
+
+    # Контакт до согласия -- бот не двигается дальше по анкете.
+    bot.reset()
+    await dp.feed_update(
+        bot, _message(contact=Contact(phone_number="+79000000000", first_name="Т", user_id=USER_ID))
+    )
+    assert "Шаг 2 из 6" not in "".join(bot.texts)
+
+    # И только после нажатия начинается обычная регистрация.
+    await dp.feed_update(bot, _callback("consent:yes"))
+    assert "поделитесь номером телефона" in bot.last_text

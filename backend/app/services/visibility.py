@@ -18,9 +18,14 @@ def public_player_criteria() -> tuple:
     is_active -- мягкое удаление (игрок ушёл из клуба, но его игры в истории
     остались). confirmation_status -- модерация регистрации из бота: пока
     админ не подтвердил новичка, его на сайте нет вообще (см.
-    models.ConfirmationStatus).
+    models.ConfirmationStatus). publication_consent -- отзыв согласия на
+    публикацию: игрок остаётся в клубе, но своей карточки на сайте не хочет.
+
+    Именно поэтому условие живёт одной функцией: отзыв согласия обязан
+    срабатывать везде сразу, а не в тех местах, где о нём вспомнили.
     """
     return (
         models.Player.is_active.is_(True),
         models.Player.confirmation_status == models.ConfirmationStatus.confirmed.value,
+        models.Player.publication_consent.is_(True),
     )

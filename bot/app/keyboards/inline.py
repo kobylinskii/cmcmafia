@@ -114,11 +114,31 @@ PROFILE_FIELDS: tuple[tuple[str, str], ...] = (
 CLEARABLE_FIELDS = frozenset({"age", "favorite_role", "experience", "bio"})
 
 
-def profile_keyboard(*, can_resubmit: bool) -> InlineKeyboardMarkup:
+def consent_keyboard() -> InlineKeyboardMarkup:
+    """Единственная кнопка: без неё регистрация не начинается.
+
+    Отказа отдельной кнопкой нет намеренно -- отказ это просто не нажать её и
+    закрыть чат. Кнопка «не согласен» создавала бы впечатление, что бот после
+    неё чем-то полезен, а без данных он не умеет ровно ничего.
+    """
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Согласен, продолжить", callback_data="consent:yes")
+    kb.adjust(1)
+    return kb.as_markup()
+
+
+def profile_keyboard(*, can_resubmit: bool, published: bool = True) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="✏️ Изменить данные", callback_data="pf:edit")
     if can_resubmit:
         kb.button(text="🔁 Отправить на повторную проверку", callback_data="pf:resubmit")
+    # Отзыв согласия на публикацию. Текст кнопки показывает, что произойдёт
+    # после нажатия, а не текущее состояние -- так меньше шансов нажать её,
+    # думая, что включаешь то, что уже включено.
+    kb.button(
+        text="🙈 Скрыть профиль с сайта" if published else "🌐 Вернуть профиль на сайт",
+        callback_data="pf:publication:off" if published else "pf:publication:on",
+    )
     kb.adjust(1)
     kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
     return kb.as_markup()

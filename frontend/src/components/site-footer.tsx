@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { TelegramLogo } from "@phosphor-icons/react/dist/ssr";
 import { Container } from "@/components/ui/container";
 import { LogoMark } from "@/components/logo";
@@ -18,6 +19,14 @@ export function SiteFooter() {
           <div>
             <p className="font-display text-base text-ink-50">Мафия ВМК</p>
             <p className="text-sm text-ink-400">Клуб спортивной мафии ВМК МГУ</p>
+            {/* Ссылка в подвале, а не где-то в меню: 152-ФЗ требует
+                свободного доступа к политике, то есть с любой страницы. */}
+            <Link
+              href="/privacy"
+              className="mt-1 inline-block text-sm text-ink-500 underline underline-offset-4 hover:text-ink-300"
+            >
+              Обработка персональных данных
+            </Link>
           </div>
         </div>
         <nav className="flex items-center gap-4 text-ink-300">

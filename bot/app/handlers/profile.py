@@ -173,7 +173,10 @@ async def _show_card(callback: CallbackQuery, state: FSMContext, api: ApiClient,
         callback,
         state,
         text,
-        profile_keyboard(can_resubmit=user.get("confirmation_status") == "rejected"),
+        profile_keyboard(
+            can_resubmit=user.get("confirmation_status") == "rejected",
+            published=user.get("publication_consent", True),
+        ),
         alert=alert,
     )
 
@@ -189,7 +192,34 @@ async def open_profile(message: Message, state: FSMContext, api: ApiClient) -> N
         return
     user, text = card
     await open_screen(
-        message, state, text, profile_keyboard(can_resubmit=user.get("confirmation_status") == "rejected")
+        message,
+        state,
+        text,
+        profile_keyboard(
+            can_resubmit=user.get("confirmation_status") == "rejected",
+            published=user.get("publication_consent", True),
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("pf:publication:"))
+async def toggle_publication(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    """Отзыв и возврат согласия на публикацию карточки.
+
+    Применяется сразу, без очереди к админу: это отзыв согласия на
+    распространение персональных данных, а не правка анкеты.
+    """
+    consent = callback.data.rsplit(":", 1)[1] == "on"
+    await api.set_publication(callback.from_user.id, consent)
+    await _show_card(
+        callback,
+        state,
+        api,
+        alert=(
+            "Профиль снова виден на сайте."
+            if consent
+            else "Профиль скрыт с сайта. Сыгранные игры остаются в истории клуба."
+        ),
     )
 
 
@@ -453,7 +483,10 @@ async def _show_card_after_input(
         message,
         state,
         f"{headline}\n\n{text}",
-        profile_keyboard(can_resubmit=user.get("confirmation_status") == "rejected"),
+        profile_keyboard(
+            can_resubmit=user.get("confirmation_status") == "rejected",
+            published=user.get("publication_consent", True),
+        ),
     )
 
 

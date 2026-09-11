@@ -26,6 +26,7 @@ RESERVED_SLUGS = {
     # таким slug просто стал бы недоступен.
     "media",
     "revalidate",
+    "privacy",
     # /tournaments -- отдельный раздел, он не должен перекрываться
     # игроком с таким slug (страницы игроков живут прямо в /[slug]).
     "tournaments",

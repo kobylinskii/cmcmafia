@@ -211,3 +211,48 @@ def test_duplicate_phone_is_refused_politely(admin):
     )
     assert resp.status_code == 409, resp.text
     assert "телефон" in resp.json()["detail"].lower()
+
+
+def _set_publication(client, telegram_id: int, consent: bool) -> dict:
+    resp = client.post(
+        "/api/bot/players/me/publication",
+        headers=BOT_HEADERS,
+        params={"telegram_id": telegram_id},
+        json={"consent": consent},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_withdrawing_publication_consent_hides_the_card_but_keeps_the_history(admin):
+    """Отзыв согласия на публикацию убирает карточку игрока с сайта.
+
+    152-ФЗ различает обработку и распространение: человек может остаться
+    игроком клуба и продолжать записываться на игры, но не хотеть, чтобы его
+    ФИО, возраст и фотография были доступны всему интернету. Отзыв действует
+    сразу, без решения администратора.
+
+    При этом история клуба не переписывается: сыгранные игры и составы
+    остаются на месте -- скрывается карточка, а не факт участия.
+    """
+    client, headers = admin
+    player = register_bot_player(client, 5101, "Скрытный")
+    player_id = _pending(client, headers)[0]["id"]
+    client.post(f"/api/admin/players/{player_id}/confirm", headers=headers)
+
+    slug = player["slug"]
+    assert client.get(f"/api/players/{slug}").status_code == 200
+    assert slug in [p["slug"] for p in client.get("/api/players").json()]
+
+    assert _set_publication(client, 5101, False)["publication_consent"] is False
+
+    # Со всех публичных мест сразу -- и карточка, и список.
+    assert client.get(f"/api/players/{slug}").status_code == 404
+    assert slug not in [p["slug"] for p in client.get("/api/players").json()]
+
+    # Но игрок никуда не делся: профиль в боте работает, запись на игры тоже.
+    assert _profile(client, 5101)["nickname"] == "Скрытный"
+
+    # И возвращается обратно тем же движением.
+    assert _set_publication(client, 5101, True)["publication_consent"] is True
+    assert client.get(f"/api/players/{slug}").status_code == 200

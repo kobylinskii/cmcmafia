@@ -18,7 +18,7 @@ from aiogram.types import CallbackQuery, Message
 
 from app import commands
 from app.api_client import ApiClient
-from app.keyboards.inline import main_menu_keyboard, menu_only_keyboard
+from app.keyboards.inline import consent_keyboard, main_menu_keyboard, menu_only_keyboard
 from app.keyboards.reply import request_contact_keyboard
 from app.states import RegistrationStates
 from app.ui import consume_input, edit_screen, hide_reply_keyboard, open_screen
@@ -29,6 +29,25 @@ GREETING = (
     "Бот клуба спортивной мафии ВМК. 🎭\n\n"
     "Запись на игры, свои регистрации, профиль для сайта.\n"
     "Чтобы начать, поделитесь номером телефона кнопкой ниже."
+)
+
+# Экран согласия. Показывается ДО запроса телефона -- до него бот не сохраняет
+# о человеке ничего, и это принципиально: согласие на обработку получают
+# заранее, а не задним числом.
+#
+# Про публичность профиля сказано прямым текстом и с перечислением полей.
+# 152-ФЗ разделяет обработку и распространение, и согласие на второе должно
+# быть осознанным: человек обязан понимать, что его имя, возраст и фотографию
+# увидит любой посетитель сайта, а не только клуб.
+CONSENT = (
+    "Прежде чем начать — о данных. 📋\n\n"
+    "Для записи на игры бот попросит номер телефона, имя и никнейм. "
+    "Телефон и ваш Telegram видят только администраторы клуба.\n\n"
+    "🌐 А вот профиль игрока будет виден всем на сайте cmcmafia.ru: "
+    "никнейм, имя, возраст, опыт, рассказ о себе, фотография и результаты игр.\n\n"
+    "Согласие можно отозвать в любой момент командой /profile — "
+    "карточка сразу исчезнет с сайта.\n\n"
+    "Подробнее: cmcmafia.ru/privacy"
 )
 
 HELP_TEXT = (
@@ -71,8 +90,7 @@ async def require_profile(message: Message, state: FSMContext, api: ApiClient) -
     """Профиль действующего пользователя либо приглашение завести его."""
     user = await api.get_profile(message.from_user.id)
     if user is None:
-        await message.answer(GREETING, reply_markup=request_contact_keyboard())
-        await state.set_state(RegistrationStates.waiting_for_contact)
+        await message.answer(CONSENT, reply_markup=consent_keyboard())
         return None
     return user
 
@@ -85,6 +103,21 @@ async def show_menu(message: Message, state: FSMContext, api: ApiClient) -> None
     await open_screen(message, state, menu_text(user), main_menu_keyboard(is_admin=user["is_bot_admin"]))
 
 
+@router.callback_query(F.data == "consent:yes")
+async def consent_given(callback: CallbackQuery, state: FSMContext) -> None:
+    """Согласие получено -- только теперь просим телефон.
+
+    Состояние waiting_for_contact выставляется здесь, а не на /start: до
+    нажатия этой кнопки регистрация не начата, и любой присланный контакт
+    обрабатывать нельзя.
+    """
+    if callback.message is not None:
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer(GREETING, reply_markup=request_contact_keyboard())
+    await state.set_state(RegistrationStates.waiting_for_contact)
+    await callback.answer()
+
+
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
     await state.clear()
@@ -92,8 +125,7 @@ async def start_handler(message: Message, state: FSMContext, api: ApiClient, bot
     user = await api.get_profile(message.from_user.id, telegram_username=message.from_user.username)
 
     if user is None:
-        await message.answer(GREETING, reply_markup=request_contact_keyboard())
-        await state.set_state(RegistrationStates.waiting_for_contact)
+        await message.answer(CONSENT, reply_markup=consent_keyboard())
         return
 
     # У всех, кто застал прошлую версию бота, внизу висит меню из четырёх

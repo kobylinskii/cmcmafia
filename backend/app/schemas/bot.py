@@ -65,6 +65,22 @@ class BotPlayerProfileOut(BaseModel):
     # бот показывает эту пару рядом («сейчас X, на проверке Y»).
     pending_changes: dict[str, str | None] = {}
 
+    # Нужно боту, чтобы нарисовать правильную кнопку: «скрыть профиль» или
+    # «вернуть на сайт».
+    publication_consent: bool = True
+
+
+class BotPublicationConsentIn(BaseModel):
+    """Согласие на публикацию профиля на сайте.
+
+    Отдельная ручка, а не поле в общем обновлении профиля: остальные правки
+    текстовых полей проходят через модерацию админом, а отзыв согласия на
+    распространение персональных данных ждать ничьего решения не может и
+    применяется сразу.
+    """
+
+    consent: bool
+
 
 class BotPlayerProfileUpdateIn(BaseModel):
     salutation: str | None = Field(default=None, max_length=20)

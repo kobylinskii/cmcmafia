@@ -10,6 +10,7 @@ from app.textmatch import ci_equals
 from app.serializers import is_session_open, roster_to_out, session_to_out
 from app.timeutil import club_day
 from app.schemas.bot import (
+    BotPublicationConsentIn,
     BotPlayerProfileOut,
     BotPlayerProfileUpdateIn,
     BotPlayerStatsOut,
@@ -289,6 +290,27 @@ def resubmit_my_profile(
     except ConfirmationError as exc:
         db.rollback()
         raise HTTPException(409, exc.message) from exc
+    db.refresh(actor)
+    return _profile_out(db, actor)
+
+
+@router.post("/players/me/publication", response_model=BotPlayerProfileOut)
+@limiter.limit("20/minute")
+def set_my_publication_consent(
+    request: Request,
+    payload: BotPublicationConsentIn,
+    db: Session = Depends(get_db),
+    actor: models.Player = Depends(get_bot_actor),
+) -> BotPlayerProfileOut:
+    """Игрок сам включает и выключает показ своей карточки на сайте.
+
+    Без модерации и подтверждений: это отзыв согласия на распространение
+    персональных данных, он действует с момента, когда человек его заявил.
+    Скрывается именно карточка -- составы прошедших игр и история клуба
+    остаются, там игрок виден под ником, который он сам выбрал публичным.
+    """
+    actor.publication_consent = payload.consent
+    db.commit()
     db.refresh(actor)
     return _profile_out(db, actor)
 

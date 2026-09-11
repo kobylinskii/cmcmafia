@@ -191,6 +191,20 @@ class ApiClient:
         )
         return resp.json()
 
+    async def set_publication(self, tg_id: int, consent: bool) -> dict:
+        """Показывать карточку игрока на сайте или нет.
+
+        Отдельно от update_profile: текстовые правки уходят на проверку
+        админу, а отзыв согласия на публикацию применяется сразу.
+        """
+        resp = await self._request(
+            "POST",
+            "/api/bot/players/me/publication",
+            params={"telegram_id": tg_id},
+            json={"consent": consent},
+        )
+        return resp.json()
+
     # --------------------------------------------------- модерация регистраций
     async def confirmation_notifications(self) -> list[dict]:
         """Решения админа по заявкам, о которых игрок ещё не знает.
