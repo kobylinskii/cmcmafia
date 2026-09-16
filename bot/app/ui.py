@@ -140,6 +140,21 @@ async def edit_screen(
     await callback.answer(alert or "", show_alert=bool(alert and len(alert) > 60))
 
 
+async def clear_state(state: FSMContext) -> None:
+    """Сбросить диалог, сохранив указатель на текущий экран.
+
+    `state.clear()` уносит ВСЕ данные FSM, в том числе `screen_message_id`.
+    После него open_screen не знает, что удалять, и в чате остаётся второй
+    экран с рабочими кнопками -- ровно это и происходило на `/start`, в том
+    числе по ссылке-deep-link из рассылки: старое меню не исчезало, а новое
+    приходило под ним.
+    """
+    screen = (await state.get_data()).get(SCREEN_KEY)
+    await state.clear()
+    if screen:
+        await state.update_data(**{SCREEN_KEY: screen})
+
+
 async def drop_screen(state: FSMContext) -> None:
     """Забыть текущий экран, не трогая сообщение (оно уже перерисовано в
     финальное состояние и кнопок не несёт)."""

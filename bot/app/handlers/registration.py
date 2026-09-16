@@ -28,6 +28,7 @@ from app.keyboards.inline import (
 from app.keyboards.reply import request_contact_keyboard
 from app.states import RegistrationStates
 from app.ui import (
+    clear_state,
     consume_input,
     drop_screen,
     edit_screen,
@@ -239,7 +240,7 @@ async def nickname_received(message: Message, state: FSMContext, api: ApiClient,
         if "ник" in exc.message.lower():
             await open_screen(message, state, f"{exc.message}. Попробуйте другой.\n\n" + STEP_NICKNAME)
             return
-        await state.clear()
+        await clear_state(state)
         await open_screen(message, state, f"{exc.message}.\n\nЕсли это ошибка — напишите администратору.")
         return
     except ApiError as exc:
@@ -248,7 +249,7 @@ async def nickname_received(message: Message, state: FSMContext, api: ApiClient,
         )
         return
 
-    await state.clear()
+    await clear_state(state)
     await commands.sync_chat_commands(bot, message.chat.id, is_admin=user["is_bot_admin"])
     admin_note = "\n\n🛠️ Вам выданы права администратора бота." if user["is_bot_admin"] else ""
     await open_screen(

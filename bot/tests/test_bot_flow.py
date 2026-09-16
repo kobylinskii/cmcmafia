@@ -67,6 +67,7 @@ class MockedBot(Bot):
     def __init__(self) -> None:
         super().__init__(token="42:TEST")
         self.calls: list[TelegramMethod] = []
+        self.screens: list[int] = []
         self.downloaded: list[str] = []
         self._next_message_id = 1000
 
@@ -74,6 +75,10 @@ class MockedBot(Bot):
         self.calls.append(method)
         if isinstance(method, SendMessage):
             self._next_message_id += 1
+            if isinstance(method.reply_markup, InlineKeyboardMarkup):
+                # id каждого присланного экрана: по нему видно, удалил ли бот
+                # прежний, когда прислал следующий.
+                self.screens.append(self._next_message_id)
             return Message(
                 message_id=self._next_message_id,
                 date=datetime.now(),
@@ -319,8 +324,29 @@ class FakeApi:
         ]
 
     async def session_roster(self, tg_id: int, session_id: int) -> dict:
-        return {"registrations": [{"nickname": "Шериф", "role": "player", "telegram_id": 1,
-                                   "telegram_username": None}], "reserves": []}
+        """У каждой игры свой состав, и «Шериф» записан на обе: состав дня
+        обязан склеить их в один список и не показать его дважды."""
+        rosters = {
+            7: {
+                "registrations": [
+                    {"nickname": "Шериф", "role": "player", "telegram_id": 1,
+                     "telegram_username": None},
+                    {"nickname": "Дон", "role": "host", "telegram_id": 2,
+                     "telegram_username": None},
+                ],
+                "reserves": [],
+            },
+            8: {
+                "registrations": [
+                    {"nickname": "Шериф", "role": "player", "telegram_id": 1,
+                     "telegram_username": None},
+                    {"nickname": "Мирный", "role": "player", "telegram_id": 3,
+                     "telegram_username": None},
+                ],
+                "reserves": [{"nickname": "Запасной", "telegram_id": 4}],
+            },
+        }
+        return rosters.get(session_id, {"registrations": [], "reserves": []})
 
     async def cancel_registration(self, tg_id: int, session_id: int) -> dict:
         self.registered = [item for item in self.registered if item[0] != session_id]
@@ -1350,10 +1376,10 @@ async def test_registration_does_not_start_before_consent(stack):
 
 # ------------------------------------------------------ состав дня и ссылки
 @pytest.mark.asyncio
-async def test_day_roster_shows_every_game_of_the_day(stack):
-    """Состав за весь день, а не за одну игру: раньше он был виден только из
-    «Мои регистрации», то есть лишь тому, кто уже записался, -- а смотрят его
-    как раз чтобы решить, идти ли."""
+async def test_day_roster_is_one_list_for_the_whole_day(stack):
+    """Состав за весь день одним списком, а не столбиком составов по играм:
+    клуб играет вечер целиком, и записанный на две игры подряд должен
+    считаться один раз."""
     dp, bot, api = stack
     await _register(dp, bot)
     day = datetime.fromisoformat(api.session["starts_at"])
@@ -1361,11 +1387,33 @@ async def test_day_roster_shows_every_game_of_the_day(stack):
     token = api._day.replace(".", "")
 
     await dp.feed_update(bot, _callback(f"sg:who:{token}"))
-    assert "Кто записан" in bot.last_text
-    assert "Игра #7" in bot.last_text and "Игра #8" in bot.last_text
-    assert "Шериф" in bot.last_text
+    text = bot.last_text
+    assert "Кто записан" in text
+    assert "Игра #" not in text, "разбивки по играм в составе дня больше нет"
+    assert text.count("Шериф") == 1, "записанный на обе игры считается один раз"
+    assert "Игроки (2):" in text and "Мирный" in text
+    assert "Ведущие (1):" in text and "Дон" in text
+    assert "Резерв (1):" in text and "Запасной" in text
     # Назад -- на экран этого же дня, а не в список дней.
     assert bot.last_inline() == [f"sg:day:{token}"]
+
+
+@pytest.mark.asyncio
+async def test_start_replaces_the_screen_instead_of_stacking_a_second_one(stack):
+    """`state.clear()` уносил и указатель на текущий экран, поэтому на /start
+    старое меню оставалось в чате с рабочими кнопками, а новое приходило под
+    ним. Проверяется и обычный /start, и приход по ссылке из рассылки."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    token = api._day.replace(".", "")
+
+    for command in ("/start", f"/start day{token}"):
+        previous_screen = bot.screens[-1]
+        bot.reset()
+        await dp.feed_update(bot, _message(command))
+        deleted = [c.message_id for c in bot.calls if isinstance(c, DeleteMessage)]
+        assert previous_screen in deleted, command
+        assert bot.screens[-1] != previous_screen, command
 
 
 @pytest.mark.asyncio

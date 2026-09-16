@@ -21,7 +21,7 @@ from app.api_client import ApiClient
 from app.keyboards.inline import consent_keyboard, main_menu_keyboard, menu_only_keyboard
 from app.keyboards.reply import request_contact_keyboard
 from app.states import RegistrationStates
-from app.ui import consume_input, edit_screen, hide_reply_keyboard, open_screen
+from app.ui import clear_state, consume_input, edit_screen, hide_reply_keyboard, open_screen
 
 router = Router(name="common")
 
@@ -120,7 +120,7 @@ async def consent_given(callback: CallbackQuery, state: FSMContext) -> None:
 
 @router.message(CommandStart())
 async def start_handler(message: Message, state: FSMContext, api: ApiClient, bot: Bot) -> None:
-    await state.clear()
+    await clear_state(state)
     await consume_input(message)
     user = await api.get_profile(message.from_user.id, telegram_username=message.from_user.username)
 

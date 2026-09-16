@@ -43,7 +43,7 @@ from app.keyboards.inline import (
     my_registrations_keyboard,
     registration_role_keyboard,
 )
-from app.ui import consume_input, edit_screen, open_screen
+from app.ui import clear_state, consume_input, edit_screen, open_screen
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ async def _show_day(
 async def start_on_day(
     message: Message, state: FSMContext, api: ApiClient, command: CommandObject
 ) -> None:
-    await state.clear()
+    await clear_state(state)
     await consume_input(message)
     if not await require_profile(message, state, api):
         return
@@ -253,14 +253,11 @@ async def show_day_roster(callback: CallbackQuery, state: FSMContext, api: ApiCl
         )
         return
 
-    blocks = []
-    for game in games:
-        roster = await api.session_roster(tg_id, game["id"])
-        blocks.append(_roster_text(game, roster))
+    rosters = [await api.session_roster(tg_id, game["id"]) for game in games]
     await edit_screen(
         callback,
         state,
-        f"👥 Кто записан — {day_label(day)}\n\n" + "\n\n".join(blocks),
+        _day_roster_text(day, rosters),
         day_roster_keyboard(f"sg:day:{token}"),
     )
 
@@ -471,6 +468,49 @@ async def _notify_promoted(callback: CallbackQuery, game_id: int, result: dict) 
         # Человек мог заблокировать бота: своё место он всё равно получил,
         # ронять из-за этого чужое действие нельзя.
         logger.warning("Не удалось уведомить %s о переводе из резерва", promoted)
+
+
+DAY_ROSTER_GROUPS: tuple[tuple[str, str], ...] = (
+    ("host", "Ведущие"),
+    ("judge", "Судьи"),
+    ("player", "Игроки"),
+)
+
+
+def _day_roster_text(day: str, rosters: list[dict]) -> str:
+    """Состав дня одним списком, а не столбиком составов по играм.
+
+    Клуб играет вечер целиком: человек смотрит, кто сегодня придёт, а не кто
+    сядет за какой из трёх столов. Разбивка по играм превращала экран в
+    простыню, в которой одни и те же люди повторялись по несколько раз --
+    записанный на две игры подряд считается один раз и здесь.
+    """
+    people: dict[str, list[str]] = {role: [] for role, _ in DAY_ROSTER_GROUPS}
+    reserves: list[str] = []
+    for roster in rosters:
+        for row in roster.get("registrations") or []:
+            group = people.setdefault(row["role"], [])
+            if row["nickname"] not in group:
+                group.append(row["nickname"])
+        for row in roster.get("reserves") or []:
+            if row["nickname"] not in reserves:
+                reserves.append(row["nickname"])
+
+    lines = [f"👥 Кто записан — {day_label(day)}", ""]
+    for role, title in DAY_ROSTER_GROUPS:
+        members = people.get(role) or []
+        lines.append(f"{title} ({len(members)}):" if members else f"{title}: пока никого")
+        # Ведущих и судей пересчитывать незачем -- их единицы; у игроков номер
+        # в списке отвечает на главный вопрос: сколько уже набралось.
+        if role == "player":
+            lines += [f"{index}. {name}" for index, name in enumerate(members, start=1)]
+        else:
+            lines += [f"• {name}" for name in members]
+        lines.append("")
+    if reserves:
+        lines.append(f"Резерв ({len(reserves)}):")
+        lines += [f"{index}. {name}" for index, name in enumerate(reserves, start=1)]
+    return "\n".join(lines).strip()
 
 
 def _roster_text(game: dict, roster: dict) -> str:
