@@ -32,9 +32,6 @@ from app.schemas.club import (
     BotConfirmationNotificationOut,
     BotProfileChangeAckIn,
     BotProfileChangeNotificationOut,
-    DayReminderGameOut,
-    DayReminderOut,
-    DayRemindersAckIn,
     PlayerRejectIn,
     ProfileChangeRejectIn,
 )
@@ -43,7 +40,6 @@ from app.services import (
     admin_grant,
     admin_notification_service,
     bootstrap_admin_service,
-    day_reminder_service,
     player_confirmation_service,
     profile_change_service,
     player_service,
@@ -461,46 +457,6 @@ def ack_admin_notifications(
         "marked_registrations": marked_registrations,
         "marked_profile_changes": marked_profile_changes,
     }
-
-
-# ------------------------------------------------------- напоминания о дне игр
-@router.get("/day-reminders", response_model=list[DayReminderOut])
-@limiter.limit("60/minute")
-def list_day_reminders(
-    request: Request, db: Session = Depends(get_db), _: None = Depends(require_bot_service)
-) -> list[DayReminderOut]:
-    """Дни, до первой игры которых осталось меньше трёх часов.
-
-    Та же схема «очередь + ack», что и у остальных рассылок: текст собирает и
-    отправляет бот, бэкенд в Telegram не ходит (см. day_reminder_service).
-    """
-    return [
-        DayReminderOut(
-            day=item.day,
-            marker_game_id=item.marker_game_id,
-            games=[
-                DayReminderGameOut(
-                    starts_at=game.starts_at, game_type=game.game_type, location=game.location
-                )
-                for game in item.games
-            ],
-            recipients=[player.telegram_id for player in item.recipients],
-        )
-        for item in day_reminder_service.pending_reminders(db)
-    ]
-
-
-@router.post("/day-reminders/ack")
-@limiter.limit("60/minute")
-def ack_day_reminders(
-    request: Request,
-    data: DayRemindersAckIn,
-    db: Session = Depends(get_db),
-    _: None = Depends(require_bot_service),
-) -> dict:
-    marked = day_reminder_service.mark_sent(db, game_ids=data.game_ids)
-    db.commit()
-    return {"marked": marked}
 
 
 # ------------------------------------------------------------ модерация из бота

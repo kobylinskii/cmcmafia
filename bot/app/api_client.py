@@ -61,8 +61,19 @@ def from_api_datetime(value: str) -> datetime:
     return dt.astimezone(LOCAL_TZ)
 
 
+# Дата без дня недели заставляет человека лезть в календарь: «19.09» само по
+# себе не говорит, пятница это или суббота, а выбирают игру именно по этому.
+WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
+
+
+def day_label(day: str) -> str:
+    """«19.09.2026» -> «пт 19.09.2026». День приезжает от API уже строкой."""
+    return f"{WEEKDAYS[datetime.strptime(day, '%d.%m.%Y').weekday()]} {day}"
+
+
 def format_day_time(value: str) -> str:
-    return from_api_datetime(value).strftime("%d.%m.%Y %H:%M")
+    """С днём недели: строка показывается человеку, а не едет в callback_data."""
+    return f"{day_label(format_day(value))} {format_time(value)}"
 
 
 def format_time(value: str) -> str:
@@ -70,6 +81,8 @@ def format_time(value: str) -> str:
 
 
 def format_day(value: str) -> str:
+    """Голая дата «ДД.ММ.ГГГГ» -- в этом же виде дни приезжают от API и едут
+    в callback_data. Для показа человеку оборачивается в day_label."""
     return from_api_datetime(value).strftime("%d.%m.%Y")
 
 
@@ -301,18 +314,16 @@ class ApiClient:
         )
         return resp.json()
 
-    # ------------------------------------------------ напоминания о дне игр
-    async def day_reminders(self) -> list[dict]:
-        """Дни, до первой игры которых осталось меньше трёх часов. Ручка
-        сервисная, как и остальные очереди рассылок."""
-        resp = await self._request("GET", "/api/bot/day-reminders")
-        return resp.json()
-
-    async def ack_day_reminders(self, game_ids: list[int]) -> int:
+    # --------------------------------------------- рассылка по одному дню
+    async def admin_day_broadcast(self, tg_id: int, day: str, audience: str) -> dict:
+        """Игры дня и получатели одной из двух рассылок по дню: audience
+        'absent' -- собрать за стол, 'registered' -- напомнить записавшимся."""
         resp = await self._request(
-            "POST", "/api/bot/day-reminders/ack", json={"game_ids": game_ids}
+            "GET",
+            "/api/bot/admin/broadcast/day",
+            params={"telegram_id": tg_id, "day": day, "audience": audience},
         )
-        return int(resp.json().get("marked", 0))
+        return resp.json()
 
     # ------------------------------------------------------------- sessions (user)
     async def list_game_days(self, tg_id: int, game_type: str | None = None) -> list[str]:

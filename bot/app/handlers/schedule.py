@@ -16,14 +16,15 @@ from __future__ import annotations
 import logging
 
 from aiogram import F, Router
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app import texts
 from app.api_client import (
     ApiClient,
     ApiError,
+    day_label,
     format_day_time,
     format_time,
     from_api_datetime,
@@ -31,9 +32,13 @@ from app.api_client import (
 )
 from app.handlers.common import require_profile
 from app.keyboards.inline import (
+    DEEP_LINK_PREFIX,
+    day_from_token,
+    day_roster_keyboard,
     game_days_keyboard,
     game_slots_keyboard,
     game_types_keyboard,
+    menu_only_keyboard,
     my_registration_keyboard,
     my_registrations_keyboard,
     registration_role_keyboard,
@@ -50,12 +55,6 @@ NO_ROLES = (
     "В профиле не отмечено ни одной роли. Откройте «Профиль» и выберите, "
     "за кого вы готовы играть."
 )
-
-
-def _day_from_token(token: str) -> str | None:
-    if len(token) != 8 or not token.isdigit():
-        return None
-    return f"{token[:2]}.{token[2:4]}.{token[4:]}"
 
 
 def _with_time(game: dict) -> dict:
@@ -93,47 +92,47 @@ async def back_to_days(callback: CallbackQuery, state: FSMContext, api: ApiClien
     await _days_screen(callback, state, api, callback.from_user.id, edit=True)
 
 
-async def _show_day(
-    callback: CallbackQuery,
-    state: FSMContext,
+class DayGone(Exception):
+    """Игр этого дня не осталось: экран дня показывать нечего, надо вернуть
+    человека к списку дней. Отдельным исключением, потому что случиться это
+    может на любом шаге цепочки, а выход один."""
+
+
+async def _day_screen(
     api: ApiClient,
+    tg_id: int,
     *,
     token: str,
     game_type: str | None = None,
     role_kind: str | None = None,
-    alert: str | None = None,
-) -> None:
+) -> tuple[str, InlineKeyboardMarkup]:
     """Один проход по цепочке «день -> формат -> роль -> игры».
 
     Собран в одну функцию, а не в три обработчика: шаги пропускаются, когда
     выбирать не из чего, и после каждой записи экран перерисовывается с того
     же места. Тремя отдельными путями это разъезжалось бы на каждом шаге.
-    """
-    day = _day_from_token(token)
-    if day is None:
-        await callback.answer("Некорректная дата.", show_alert=True)
-        return
 
-    tg_id = callback.from_user.id
+    Возвращает готовый экран, а не рисует его: тот же расчёт нужен и нажатию
+    кнопки (правит текущее сообщение), и приходу по ссылке-deep-link из
+    рассылки (присылает новое). Ошибки летят наверх: ApiError -- как есть,
+    «нечего показывать» -- DayGone.
+    """
+    day = day_from_token(token)
+    if day is None:
+        raise ApiError(400, "Некорректная дата.")
+
     games = [_with_time(g) for g in await api.list_open_sessions(tg_id, day=day)]
     if not games:
-        await _days_screen(
-            callback, state, api, tg_id, edit=True, alert="На этот день игр не осталось"
-        )
-        return
+        raise DayGone
 
     # Шаг 1: формат. Спрашиваем, только если в дне есть и фанки, и обучающие.
     present = sorted({g["game_type"] for g in games})
     if game_type is None:
         if len(present) > 1:
-            await edit_screen(
-                callback,
-                state,
-                f"📅 {day}\n\nКакие игры показать?",
+            return (
+                f"📅 {day_label(day)}\n\nКакие игры показать?",
                 game_types_keyboard(token, present),
-                alert=alert,
             )
-            return
         game_type = present[0]
     if game_type != texts.ALL_GAMES:
         games = [g for g in games if g["game_type"] == game_type]
@@ -150,46 +149,120 @@ async def _show_day(
     # показывали, -- и первое нажатие выглядело бы холостым.
     user = await api.get_profile(tg_id)
     if user is None:
-        await callback.answer("Профиль не найден, начните с /start.", show_alert=True)
-        return
+        raise ApiError(404, "Профиль не найден, начните с /start.")
     can_play, can_staff = bool(user.get("can_play")), bool(user.get("can_staff"))
     if not (can_play or can_staff):
-        await callback.answer(NO_ROLES, show_alert=True)
-        return
+        raise ApiError(400, NO_ROLES)
     both_roles = can_play and can_staff
 
     if role_kind is None:
         if both_roles:
-            await edit_screen(
-                callback,
-                state,
-                f"📅 {day} · {texts.game_type_title(game_type)}\n\nВ какой роли записываемся?",
+            return (
+                f"📅 {day_label(day)} · {texts.game_type_title(game_type)}\n\n"
+                "В какой роли записываемся?",
                 registration_role_keyboard(
                     token, game_type, can_play=True, can_staff=True, back_to=after_type
                 ),
-                alert=alert,
             )
-            return
         role_kind = "player" if can_play else "staff"
     after_role = f"sg:cat:{token}:{game_type}" if both_roles else after_type
 
-    await edit_screen(
-        callback,
-        state,
-        f"📅 {day} · {texts.game_type_title(game_type)} · "
+    return (
+        f"📅 {day_label(day)} · {texts.game_type_title(game_type)} · "
         f"{texts.REGISTRATION_ROLES.get(role_kind, '')}\n\n"
         "Нажмите на игру, чтобы записаться, на свою (✅) — чтобы отменить запись.\n"
         "Собранный стол помечен «в резерв» — запись на него ставит в очередь.",
         game_slots_keyboard(
             token=token, game_type=game_type, role_kind=role_kind, games=games, back_to=after_role
         ),
-        alert=alert,
     )
+
+
+async def _show_day(
+    callback: CallbackQuery,
+    state: FSMContext,
+    api: ApiClient,
+    *,
+    token: str,
+    game_type: str | None = None,
+    role_kind: str | None = None,
+    alert: str | None = None,
+) -> None:
+    tg_id = callback.from_user.id
+    try:
+        text, keyboard = await _day_screen(
+            api, tg_id, token=token, game_type=game_type, role_kind=role_kind
+        )
+    except DayGone:
+        await _days_screen(
+            callback, state, api, tg_id, edit=True, alert="На этот день игр не осталось"
+        )
+        return
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    await edit_screen(callback, state, text, keyboard, alert=alert)
+
+
+# Приход по кнопке-ссылке из рассылки: `/start day19092026`. Регистрируется в
+# этом роутере, а не в common: schedule подключается раньше, и более узкий
+# фильтр забирает такой /start себе, оставляя обычный common'у.
+@router.message(CommandStart(deep_link=True, magic=F.args.startswith(DEEP_LINK_PREFIX)))
+async def start_on_day(
+    message: Message, state: FSMContext, api: ApiClient, command: CommandObject
+) -> None:
+    await state.clear()
+    await consume_input(message)
+    if not await require_profile(message, state, api):
+        return
+    token = (command.args or "").removeprefix(DEEP_LINK_PREFIX)
+    try:
+        text, keyboard = await _day_screen(api, message.from_user.id, token=token)
+    except DayGone:
+        await _days_screen(message, state, api, message.from_user.id, edit=False)
+        return
+    except ApiError as exc:
+        await open_screen(message, state, exc.message, menu_only_keyboard())
+        return
+    await open_screen(message, state, text, keyboard)
 
 
 @router.callback_query(F.data.startswith("sg:day:"))
 async def pick_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
     await _show_day(callback, state, api, token=callback.data.split(":")[2])
+
+
+@router.callback_query(F.data.startswith("sg:who:"))
+async def show_day_roster(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    """Состав всех игр дня одним экраном.
+
+    Раньше состав был виден только у своей игры, из «Мои регистрации», -- то
+    есть узнать, кто сегодня придёт, мог лишь тот, кто уже записался. Вопрос
+    же ровно обратный: люди смотрят состав, чтобы решить, идти ли вообще.
+    """
+    token = callback.data.split(":")[2]
+    day = day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+    tg_id = callback.from_user.id
+    games = await api.list_open_sessions(tg_id, day=day)
+    if not games:
+        await _days_screen(
+            callback, state, api, tg_id, edit=True, alert="На этот день игр не осталось"
+        )
+        return
+
+    blocks = []
+    for game in games:
+        roster = await api.session_roster(tg_id, game["id"])
+        blocks.append(_roster_text(game, roster))
+    await edit_screen(
+        callback,
+        state,
+        f"👥 Кто записан — {day_label(day)}\n\n" + "\n\n".join(blocks),
+        day_roster_keyboard(f"sg:day:{token}"),
+    )
 
 
 @router.callback_query(F.data.startswith("sg:cat:"))

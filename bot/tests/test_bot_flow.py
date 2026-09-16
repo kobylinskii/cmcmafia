@@ -23,6 +23,7 @@ from aiogram.methods import (
     DeleteMessage,
     EditMessageCaption,
     EditMessageText,
+    GetMe,
     SendMessage,
     SendPhoto,
     TelegramMethod,
@@ -40,7 +41,7 @@ from aiogram.types import (
     User,
 )
 
-from app.api_client import LOCAL_TZ, ConflictError
+from app.api_client import LOCAL_TZ, ConflictError, now_local
 
 USER_ID = 424242
 CHAT_ID = 424242
@@ -48,6 +49,15 @@ CHAT_ID = 424242
 # Те же поля, что и в profile_change_service.MODERATED_FIELDS на бэкенде.
 # photo_url приходит не текстом, а отдельной ручкой (см. FakeApi.upload_photo).
 MODERATED_FIELDS = ("full_name", "nickname", "age", "experience", "bio")
+
+
+BOT_USERNAME = "cmcmafia_test_bot"
+
+# Всё, что осталось в админ-меню бота: планировщик уехал на сайт, здесь права,
+# модерация и три рассылки.
+ADMIN_MENU_BUTTONS = {
+    "md:queue", "am:admins", "am:cast", "am:day", "am:remind", "am:say", "mn:menu",
+}
 
 
 class MockedBot(Bot):
@@ -86,6 +96,10 @@ class MockedBot(Bot):
                 caption=method.caption,
                 photo=[PhotoSize(file_id="sent", file_unique_id="us", width=90, height=90)],
             )
+        if isinstance(method, GetMe):
+            # Имя бота нужно рассылкам: из него собирается ссылка-deep-link на
+            # игровой день (keyboards.inline.day_deep_link).
+            return User(id=42, is_bot=True, first_name="Бот", username=BOT_USERNAME)
         if isinstance(method, (DeleteMessage, AnswerCallbackQuery, EditMessageCaption)):
             return True
         return True
@@ -163,6 +177,9 @@ class FakeApi:
         self.promote_on_cancel: int | None = None
         self.broadcast_recipients: list[int] = []
         self.broadcast_audience: list[int] = []
+        # (день, аудитория) каждой рассылки по дню -- «собрать» и «напомнить»
+        # отличаются именно аудиторией.
+        self.day_broadcasts: list[tuple[str, str]] = []
         # Решения админа по заявкам и правкам: что вызвали и чем ответить.
         self.moderated: list[tuple[str, int, str | None]] = []
         self.moderation_error: Exception | None = None
@@ -252,8 +269,15 @@ class FakeApi:
 
     async def list_open_sessions(self, tg_id: int, game_type=None, day=None) -> list[dict]:
         # Фильтр по формату делает сам обработчик: ему нужно знать, какие
-        # форматы в дне вообще есть.
-        return [self.session, *self.extra]
+        # форматы в дне вообще есть. А вот день фильтрует API -- как и живой.
+        games = [self.session, *self.extra]
+        if day:
+            games = [
+                g
+                for g in games
+                if datetime.fromisoformat(g["starts_at"]).strftime("%d.%m.%Y") == day
+            ]
+        return games
 
     async def get_session(self, tg_id: int, session_id: int) -> dict | None:
         return self.sessions.get(session_id)
@@ -350,6 +374,16 @@ class FakeApi:
             "days": days,
             "games": [self.session],
             "recipients": [{"telegram_id": tg, "nickname": f"И{tg}"} for tg in self.broadcast_recipients],
+        }
+
+    async def admin_day_broadcast(self, tg_id: int, day: str, audience: str) -> dict:
+        self.day_broadcasts.append((day, audience))
+        return {
+            "day": day,
+            "games": [self.session, *self.extra],
+            "recipients": [
+                {"telegram_id": tg, "nickname": f"И{tg}"} for tg in self.broadcast_recipients
+            ],
         }
 
     async def admin_broadcast_audience(self, tg_id: int) -> dict:
@@ -875,7 +909,7 @@ async def test_admin_menu_is_hidden_from_ordinary_players(stack):
     await dp.feed_update(bot, _message("/admin"))
     assert "Админ-меню" in bot.last_text
     # Планировщик уехал на сайт: в боте остались только права и две рассылки.
-    assert set(bot.last_inline()) == {"md:queue", "am:admins", "am:cast", "am:say", "mn:menu"}
+    assert set(bot.last_inline()) == ADMIN_MENU_BUTTONS
 
 
 @pytest.mark.asyncio
@@ -890,7 +924,7 @@ async def test_old_scheduler_buttons_say_where_the_planner_went(stack):
     for stale in ("am:create", "am:days", "am:toconfirm", "am:date:26082026", "am:played:8"):
         await dp.feed_update(bot, _callback(stale))
         assert "Расписание игр теперь ведётся на сайте" in bot.last_text
-        assert set(bot.last_inline()) == {"md:queue", "am:admins", "am:cast", "am:say", "mn:menu"}
+        assert set(bot.last_inline()) == ADMIN_MENU_BUTTONS
 
 
 @pytest.mark.asyncio
@@ -971,8 +1005,10 @@ async def test_weekly_announcement_goes_only_to_those_without_a_registration(sta
     sent = [c for c in bot.calls if isinstance(c, SendMessage)]
     assert [c.chat_id for c in sent] == [111, 222]
     assert all("Игры на ближайшие 7 дней" in c.text for c in sent)
-    # В каждом сообщении -- кнопка записи, ведущая в обычный экран выбора.
-    assert all(c.reply_markup.inline_keyboard[0][0].callback_data == "sg:days" for c in sent)
+    # В каждом сообщении -- кнопка-ссылка на день: сообщение рассылки живёт в
+    # чате долго и его пересылают, а у пересланного callback не работает вовсе.
+    link = sent[0].reply_markup.inline_keyboard[0][0].url
+    assert link == f"https://t.me/{BOT_USERNAME}?start=day{api._day.replace('.', '')}"
     assert "Доставлено: 2" in bot.last_text
 
 
@@ -1175,6 +1211,7 @@ async def test_single_type_day_goes_straight_to_the_games(stack):
     assert bot.last_inline() == [
         f"sg:game:{day_token}:training:player:7",
         f"sg:game:{day_token}:training:player:8",
+        f"sg:who:{day_token}",
         "sg:days",
     ]
 
@@ -1309,3 +1346,103 @@ async def test_registration_does_not_start_before_consent(stack):
     # И только после нажатия начинается обычная регистрация.
     await dp.feed_update(bot, _callback("consent:yes"))
     assert "поделитесь номером телефона" in bot.last_text
+
+
+# ------------------------------------------------------ состав дня и ссылки
+@pytest.mark.asyncio
+async def test_day_roster_shows_every_game_of_the_day(stack):
+    """Состав за весь день, а не за одну игру: раньше он был виден только из
+    «Мои регистрации», то есть лишь тому, кто уже записался, -- а смотрят его
+    как раз чтобы решить, идти ли."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    day = datetime.fromisoformat(api.session["starts_at"])
+    api.extra = [_session(8, day.replace(hour=20))]
+    token = api._day.replace(".", "")
+
+    await dp.feed_update(bot, _callback(f"sg:who:{token}"))
+    assert "Кто записан" in bot.last_text
+    assert "Игра #7" in bot.last_text and "Игра #8" in bot.last_text
+    assert "Шериф" in bot.last_text
+    # Назад -- на экран этого же дня, а не в список дней.
+    assert bot.last_inline() == [f"sg:day:{token}"]
+
+
+@pytest.mark.asyncio
+async def test_deep_link_opens_the_day_from_a_broadcast(stack):
+    """Кнопка-ссылка из рассылки: `/start day<ДДММГГГГ>` открывает сразу
+    список игр этого дня, а не главное меню."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    token = api._day.replace(".", "")
+
+    bot.reset()
+    await dp.feed_update(bot, _message(f"/start day{token}"))
+    assert "Нажмите на игру, чтобы записаться" in bot.last_text
+    assert f"sg:game:{token}:funky:player:7" in bot.last_inline()
+
+
+@pytest.mark.asyncio
+async def test_deep_link_with_a_day_that_has_no_games_falls_back_to_the_list(stack):
+    dp, bot, api = stack
+    await _register(dp, bot)
+
+    bot.reset()
+    await dp.feed_update(bot, _message("/start day01012030"))
+    assert "Выберите день" in bot.last_text or "Свободных игр" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_gathering_broadcast_targets_the_day_and_links_to_it(stack):
+    """«Собрать на игровой день»: зовут тех, кого на дне ещё нет, и ведёт их
+    ссылка именно на этот день."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["is_bot_admin"] = True
+    api.broadcast_recipients = [111, 222]
+    token = api._day.replace(".", "")
+
+    await dp.feed_update(bot, _message("/admin"))
+    await dp.feed_update(bot, _callback("am:day"))
+    assert f"am:day:{token}" in bot.last_inline()
+
+    await dp.feed_update(bot, _callback(f"am:day:{token}"))
+    assert "Получателей: 2" in bot.last_text
+    assert "Собираем игры" in bot.last_text
+    assert f"am:daygo:{token}" in bot.last_inline()
+
+    bot.reset()
+    await dp.feed_update(bot, _callback(f"am:daygo:{token}"))
+    sent = [c for c in bot.calls if isinstance(c, SendMessage)]
+    assert [c.chat_id for c in sent] == [111, 222]
+    assert all(
+        c.reply_markup.inline_keyboard[0][0].url
+        == f"https://t.me/{BOT_USERNAME}?start=day{token}"
+        for c in sent
+    )
+    assert api.day_broadcasts[-1] == (api._day, "absent")
+    assert "Доставлено: 2" in bot.last_text
+
+
+@pytest.mark.asyncio
+async def test_reminder_is_sent_by_hand_to_those_signed_up_for_today(stack):
+    """Автоматического напоминания за три часа больше нет: момент выбирает
+    админ, а получатели -- только записавшиеся на сегодня."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["is_bot_admin"] = True
+    api.broadcast_recipients = [111]
+
+    await dp.feed_update(bot, _message("/admin"))
+    await dp.feed_update(bot, _callback("am:remind"))
+    assert "Сегодня игры" in bot.last_text
+    assert "am:remindgo" in bot.last_inline()
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("am:remindgo"))
+    sent = [c for c in bot.calls if isinstance(c, SendMessage)]
+    assert [c.chat_id for c in sent] == [111]
+    # Записанному вести некуда: состав и отмена -- в «Мои регистрации».
+    assert sent[0].reply_markup is None
+    today = now_local().strftime("%d.%m.%Y")
+    assert api.day_broadcasts[-1] == (today, "registered")

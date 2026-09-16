@@ -242,3 +242,52 @@ def test_pending_queue_is_closed_to_ordinary_players(admin):
         "/api/bot/moderation/pending", headers=BOT_HEADERS, params={"telegram_id": 710006}
     )
     assert resp.status_code == 403
+
+
+def test_opposite_decisions_by_two_admins_do_not_overwrite_each_other(admin):
+    """Уведомление о заявке уходит каждому админу своей копией, и кнопки живут
+    в каждой из них. Раньше побеждало последнее нажатие -- второй админ молча
+    переписывал решение первого, а игрок получал два взаимоисключающих
+    сообщения подряд. Решает тот, кто нажал первым."""
+    client, _ = admin
+    _admin(client)
+    second_admin_tg = 710006
+    register_bot_player(client, second_admin_tg, "Второй распорядитель")
+    _make_bot_admin(second_admin_tg)
+
+    register_bot_player(client, PLAYER_TG, "Новичок")
+    player_id = _player_id(PLAYER_TG)
+
+    confirmed = client.post(
+        f"/api/bot/moderation/registrations/{player_id}/confirm?telegram_id={ADMIN_TG}",
+        headers=BOT_HEADERS,
+    )
+    assert confirmed.status_code == 200, confirmed.text
+
+    rejected = client.post(
+        f"/api/bot/moderation/registrations/{player_id}/reject?telegram_id={second_admin_tg}",
+        headers=BOT_HEADERS,
+        json={"reason": "Передумал"},
+    )
+    assert rejected.status_code == 409
+    assert "рассмотрена" in rejected.json()["detail"]
+
+    profile = _profile(client, PLAYER_TG)
+    assert profile["confirmation_status"] == "confirmed"
+    assert profile["rejection_reason"] is None
+
+    # И в обратную сторону: подтвердить уже отклонённую заявку тоже нельзя.
+    other_tg = 710007
+    register_bot_player(client, other_tg, "Ещё новичок")
+    other_id = _player_id(other_tg)
+    client.post(
+        f"/api/bot/moderation/registrations/{other_id}/reject?telegram_id={ADMIN_TG}",
+        headers=BOT_HEADERS,
+        json={"reason": "ФИО не совпадает"},
+    )
+    late = client.post(
+        f"/api/bot/moderation/registrations/{other_id}/confirm?telegram_id={second_admin_tg}",
+        headers=BOT_HEADERS,
+    )
+    assert late.status_code == 409
+    assert _profile(client, other_tg)["confirmation_status"] == "rejected"

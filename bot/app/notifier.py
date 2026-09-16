@@ -1,15 +1,19 @@
 """Рассылки, которые может сделать только бот -- у него один живёт токен Telegram.
 
-Четыре независимые очереди, все устроены одинаково: бот забирает у API список
+Три независимые очереди, все устроены одинаково: бот забирает у API список
 недоставленного, рассылает и подтверждает ack'ом. Пока ack не пришёл, строка
 остаётся в очереди, так что упавший бот ничего не теряет.
 
 - решения админа по заявкам на вступление  -> игроку   (раздел 3.7)
 - решения админа по правкам профиля         -> игроку   (раздел 3.8)
 - новые заявки и правки, ждущие проверки     -> админам  (admin_notification_service)
-- «сегодня игры», за три часа до первой       -> записавшимся (day_reminder_service)
 
 Очереди независимы: недоставленное в одной не задерживает другие.
+
+Четвёртой очередью было автоматическое «сегодня игры» за три часа до первой
+игры дня. Его больше нет: напоминание рассылает админ кнопкой в админ-меню
+(handlers/admin.py), потому что решение «напоминать или не надо» зависит от
+того, что происходит в клубе, а не от часов на сервере.
 
 Уведомление админам уходит с кнопками решения: разбирает заявку он тут же, в
 этом сообщении (см. handlers/moderation.py).
@@ -25,7 +29,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.types import BufferedInputFile, InlineKeyboardMarkup
 
 from app import texts
-from app.api_client import ApiClient, ApiError, format_time
+from app.api_client import ApiClient, ApiError
 from app.keyboards.inline import KIND_CHANGE, KIND_REGISTRATION, moderation_keyboard
 
 logger = logging.getLogger(__name__)
@@ -122,24 +126,6 @@ def admin_profile_change_text(item: dict) -> str:
         f"сейчас: {current}\n"
         f"станет: {new_value}\n\n"
     )
-
-
-def day_reminder_text(item: dict) -> str:
-    """«Сегодня игры» -- одно сообщение на день, а не на каждый слот.
-
-    Место показывается у каждой игры: в один день клуб играет и на ВМК, и в
-    других аудиториях, и «сегодня игры» без адреса заставляет искать его в
-    переписке.
-    """
-    lines = [f"⏰ Сегодня игры — {item.get('day', '')}\n"]
-    for game in item.get("games") or []:
-        type_label = texts.GAME_TYPES.get(game.get("game_type", ""), "")
-        lines.append(
-            f"• {format_time(game['starts_at'])} — {type_label}, "
-            f"{game.get('location') or 'место уточняется'}"
-        )
-    lines.append("\nСостав и отмена записи — в «📋 Мои регистрации».")
-    return "\n".join(lines)
 
 
 async def _deliver(
@@ -311,39 +297,12 @@ async def deliver_admin_notifications_once(bot: Bot, api: ApiClient) -> int:
     return len(acked_registrations) + len(acked_changes)
 
 
-async def deliver_day_reminders_once(bot: Bot, api: ApiClient) -> int:
-    """Один проход по очереди напоминаний «сегодня игры».
-
-    День подтверждается, только когда у каждого получателя исход окончательный:
-    иначе половина записавшихся осталась бы без напоминания. Тем, кому уже
-    дошло, на повторе уйдёт второй раз -- лучше, чем не напомнить вовсе.
-    """
-    queue = await api.day_reminders()
-    if not queue:
-        return 0
-
-    acked: list[int] = []
-    for item in queue:
-        text = day_reminder_text(item)
-        resolved = True
-        for telegram_id in item.get("recipients") or []:
-            if await _deliver(bot, telegram_id, text) is None:
-                resolved = False
-        if resolved:
-            acked.append(item["marker_game_id"])
-
-    if acked:
-        await api.ack_day_reminders(acked)
-    return len(acked)
-
-
 async def notifier_loop(bot: Bot, api: ApiClient, interval_seconds: int) -> None:
     while True:
         for name, deliver in (
             ("решений по заявкам", deliver_once),
             ("решений по правкам профиля", deliver_profile_changes_once),
             ("новых заявок и правок админам", deliver_admin_notifications_once),
-            ("напоминаний о сегодняшних играх", deliver_day_reminders_once),
         ):
             try:
                 sent = await deliver(bot, api)

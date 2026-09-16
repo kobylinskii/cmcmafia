@@ -201,6 +201,18 @@ class BroadcastAudienceOut(BaseModel):
     recipients: list[BroadcastPlayerOut]
 
 
+class DayBroadcastOut(BaseModel):
+    """Один игровой день для рассылки: что рассылать и кому.
+
+    Одна схема на обе кнопки дня -- «собрать» и «напомнить»: отличаются они
+    только аудиторией (см. broadcast_service.day_recipients).
+    """
+
+    day: str
+    games: list[SessionOut]
+    recipients: list[BroadcastPlayerOut]
+
+
 class WeeklyBroadcastOut(BaseModel):
     """Всё, что боту нужно для анонса игр на неделю: что рассылать и кому."""
 

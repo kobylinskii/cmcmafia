@@ -16,14 +16,19 @@ import pytest
 
 from app import texts
 from app.api_client import LOCAL_TZ, now_local
-from app.handlers.admin import MAX_BROADCAST_LENGTH, _announcement_text
+from app.handlers.admin import (
+    MAX_BROADCAST_LENGTH,
+    _announcement_text,
+    _games_count,
+    _gathering_text,
+    day_reminder_text,
+)
 from app.handlers.profile import _parse, _stats_line
 from app.handlers.schedule import _is_past
 from app.notifier import (
     admin_profile_change_text,
     admin_registration_text,
     deliver_admin_notifications_once,
-    deliver_day_reminders_once,
     deliver_once,
 )
 
@@ -80,8 +85,9 @@ def _item(player_id: int, telegram_id: int, status: str = "confirmed", reason: s
 
 
 # ---------------------------------------------------------------- админка
-def test_announcement_groups_games_under_one_heading_per_day():
-    """Заголовок на день, строка на игру: иначе анонс превращается в простыню."""
+def test_announcement_lists_days_and_how_many_games_each():
+    """Анонс -- только дни и число игр: подробности видно на экране записи,
+    куда ведёт кнопка-ссылка дня."""
     games = [
         {"starts_at": "2026-09-10T15:00:00Z", "game_type": "funky", "location": "ВМК",
          "players": 3, "max_players": 10},
@@ -92,11 +98,33 @@ def test_announcement_groups_games_under_one_heading_per_day():
     ]
     text = _announcement_text(games, 7)
 
-    assert text.count("📅") == 2, "два дня -- два заголовка"
-    assert "10.09.2026" in text and "11.09.2026" in text
+    assert text.count("📅") == 2, "два дня -- две строки"
+    assert "чт 10.09.2026 — 2 игры" in text
+    assert "пт 11.09.2026 — 1 игра" in text
+    assert "мест" not in text, "подробности игр в анонс больше не едут"
+
+
+def test_games_count_agrees_with_the_number():
+    assert [_games_count(n) for n in (1, 2, 5, 11, 21)] == [
+        "1 игра", "2 игры", "5 игр", "11 игр", "21 игра",
+    ]
+
+
+def test_gathering_message_keeps_the_details_of_the_day():
+    """Рассылку «собираем» читают те, кто ещё не записан: им нужны время,
+    место и сколько мест осталось."""
+    games = [
+        {"starts_at": "2026-09-10T15:00:00Z", "game_type": "funky", "location": "ВМК",
+         "players": 3, "max_players": 10},
+        {"starts_at": "2026-09-10T16:00:00Z", "game_type": "funky", "location": None,
+         "players": 10, "max_players": 10},
+    ]
+    text = _gathering_text("10.09.2026", games)
+
+    assert "чт 10.09.2026" in text
     assert "7 мест" in text
     assert "стол собран, есть резерв" in text
-    assert "место уточняется" in text, "игра без места всё равно попадает в анонс"
+    assert "место уточняется" in text
 
 
 def test_broadcast_length_limit_leaves_room_under_telegram_cap():
@@ -327,53 +355,18 @@ async def test_admin_notifications_carry_the_decision_buttons():
 
 
 # ------------------------------------------- напоминание о сегодняшних играх
-class FakeReminderApi:
-    def __init__(self, queue: list[dict]):
-        self.queue = queue
-        self.acked: list[int] = []
+def test_reminder_lists_every_game_of_the_day_with_its_place():
+    """Одно сообщение на день со всеми играми: записанный на две игры подряд
+    не должен получать два одинаковых напоминания."""
+    games = [
+        {"starts_at": "2026-09-10T15:00:00Z", "game_type": "funky", "location": "ВМК"},
+        {"starts_at": "2026-09-10T18:00:00Z", "game_type": "training", "location": None},
+    ]
+    text = day_reminder_text("10.09.2026", games)
 
-    async def day_reminders(self) -> list[dict]:
-        return self.queue
-
-    async def ack_day_reminders(self, game_ids: list[int]) -> int:
-        self.acked.extend(game_ids)
-        return len(game_ids)
-
-
-def _reminder(marker_game_id: int, recipients: list[int]) -> dict:
-    return {
-        "day": "10.09.2026",
-        "marker_game_id": marker_game_id,
-        "games": [
-            {"starts_at": "2026-09-10T15:00:00Z", "game_type": "funky", "location": "ВМК"},
-            {"starts_at": "2026-09-10T18:00:00Z", "game_type": "training", "location": None},
-        ],
-        "recipients": recipients,
-    }
-
-
-@pytest.mark.asyncio
-async def test_day_reminder_goes_to_everyone_signed_up_and_is_acked():
-    api = FakeReminderApi([_reminder(7, [100, 200])])
-    bot = FakeBot()
-
-    assert await deliver_day_reminders_once(bot, api) == 1
-    assert {chat_id for chat_id, _ in bot.sent} == {100, 200}
-    text = bot.sent[0][1]
-    assert "Сегодня игры" in text
+    assert "Сегодня игры — чт 10.09.2026" in text
     assert "18:00" in text, "все игры дня в одном сообщении"
     assert "место уточняется" in text
-    assert api.acked == [7]
-
-
-@pytest.mark.asyncio
-async def test_day_reminder_stays_in_the_queue_if_someone_was_not_reached():
-    """Иначе половина записавшихся осталась бы без напоминания навсегда."""
-    api = FakeReminderApi([_reminder(7, [100, 200])])
-    bot = FakeBot(fail_for={200})
-
-    assert await deliver_day_reminders_once(bot, api) == 0
-    assert api.acked == []
 
 
 def test_admin_notification_texts_are_readable():

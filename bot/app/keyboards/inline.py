@@ -15,6 +15,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app import texts
+from app.api_client import day_label
 
 BACK = "↩️ Назад"
 CANCEL = "✖️ Отмена"
@@ -188,12 +189,32 @@ def day_token(day: str) -> str:
     return day.replace(".", "")
 
 
-def game_days_keyboard(days: list[str]) -> InlineKeyboardMarkup:
+def day_from_token(token: str) -> str | None:
+    """Обратно: «19092026» -> «19.09.2026». None -- если пришло не то (кнопка
+    из чужой или очень старой клавиатуры)."""
+    if len(token) != 8 or not token.isdigit():
+        return None
+    return f"{token[:2]}.{token[2:4]}.{token[4:]}"
+
+
+def game_days_keyboard(
+    days: list[str], *, prefix: str = "sg:day", back_to: str | None = None
+) -> InlineKeyboardMarkup:
+    """Дни с днём недели: «пт 19.09.2026». Одна дата на кнопке заставляла
+    сверяться с календарём, а день выбирают как раз по дню недели.
+
+    prefix и back_to -- чтобы тем же списком выбирать день для рассылки в
+    админ-меню: экран там не корневой, и уходить с него надо в админ-меню, а
+    не на главный.
+    """
     kb = InlineKeyboardBuilder()
     for day in days:
-        kb.button(text=day, callback_data=f"sg:day:{day_token(day)}")
+        kb.button(text=day_label(day), callback_data=f"{prefix}:{day_token(day)}")
     kb.adjust(2)
-    kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
+    if back_to:
+        kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
+    else:
+        kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
     return kb.as_markup()
 
 
@@ -237,7 +258,16 @@ def game_slots_keyboard(
             callback_data=f"sg:game:{token}:{game_type}:{role_kind}:{game['id']}",
         )
     kb.adjust(1)
+    # Состав показывается сразу за весь день, а не по игре: человек решает,
+    # идти ли вечером в клуб, а не на какой из трёх столов сесть.
+    kb.row(InlineKeyboardButton(text="👥 Кто записан", callback_data=f"sg:who:{token}"))
     kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
+    return kb.as_markup()
+
+
+def day_roster_keyboard(back_to: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text=BACK, callback_data=back_to)
     return kb.as_markup()
 
 
@@ -315,17 +345,23 @@ def admin_menu_keyboard() -> InlineKeyboardMarkup:
     kb.button(text="🕓 На проверке", callback_data="md:queue")
     kb.button(text="👮 Администраторы", callback_data="am:admins")
     kb.button(text="📢 Анонс игр на неделю", callback_data="am:cast")
+    kb.button(text="📣 Собрать на игровой день", callback_data="am:day")
+    kb.button(text="⏰ Напомнить про сегодня", callback_data="am:remind")
     kb.button(text="✉️ Написать всем", callback_data="am:say")
     kb.adjust(1)
     kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
     return kb.as_markup()
 
 
-def admin_broadcast_keyboard(*, can_send: bool) -> InlineKeyboardMarkup:
+def admin_broadcast_keyboard(
+    *, can_send: bool, send_to: str = "am:castgo", back_to: str = "am:menu"
+) -> InlineKeyboardMarkup:
+    """Предпросмотр рассылки. Один экран на все три: анонс недели, сбор на
+    день и напоминание -- отличаются они только тем, куда ведёт «Разослать»."""
     kb = InlineKeyboardBuilder()
     if can_send:
-        kb.button(text="📢 Разослать", callback_data="am:castgo")
-    kb.button(text=BACK, callback_data="am:menu")
+        kb.button(text="📢 Разослать", callback_data=send_to)
+    kb.button(text=BACK, callback_data=back_to)
     kb.adjust(1)
     return kb.as_markup()
 
@@ -343,12 +379,32 @@ def admin_text_broadcast_keyboard(*, can_send: bool) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def announcement_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура самого анонса: кнопка ведёт в обычный экран записи, который
-    и займёт это сообщение -- ещё одного в чате не появится."""
+def announcement_keyboard(bot_username: str, days: list[str]) -> InlineKeyboardMarkup:
+    """Клавиатура анонса: по кнопке-ссылке на каждый игровой день.
+
+    Ссылка, а не callback: сообщение рассылки живёт в чате неделю, его
+    пересылают друзьям, и deep-link открывает бота на нужном дне у любого,
+    кто по нему пришёл, -- callback у пересланного сообщения не работает
+    вовсе. Экран записи бот при этом присылает свой, отдельный, так что
+    остальные дни анонса остаются нажимаемыми.
+    """
     kb = InlineKeyboardBuilder()
-    kb.button(text="📝 Записаться", callback_data="sg:days")
+    for day in days:
+        kb.button(text=f"📝 {day_label(day)}", url=day_deep_link(bot_username, day))
+    kb.adjust(1)
     return kb.as_markup()
+
+
+DEEP_LINK_PREFIX = "day"
+
+
+def day_deep_link(bot_username: str, day: str) -> str:
+    """t.me-ссылка, открывающая бота сразу на записи в этот день.
+
+    Полезная нагрузка deep-link'а -- только буквы, цифры, `_` и `-`, поэтому
+    день едет тем же токеном ДДММГГГГ, что и в callback_data.
+    """
+    return f"https://t.me/{bot_username}?start={DEEP_LINK_PREFIX}{day_token(day)}"
 
 
 # ------------------------------------------------------ модерация в сообщении

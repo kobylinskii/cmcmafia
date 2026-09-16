@@ -27,7 +27,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from app import texts
-from app.api_client import ApiClient, ApiError, format_day, format_time
+from app.api_client import ApiClient, ApiError, day_label, format_day, format_time, now_local
 from app.keyboards.inline import (
     admin_admins_keyboard,
     admin_broadcast_keyboard,
@@ -35,6 +35,8 @@ from app.keyboards.inline import (
     admin_text_broadcast_keyboard,
     announcement_keyboard,
     cancel_input_keyboard,
+    day_from_token,
+    game_days_keyboard,
 )
 from app.states import AdminStates
 from app.ui import consume_input, edit_screen, open_screen, screen_message
@@ -107,24 +109,79 @@ async def back_to_menu(callback: CallbackQuery, state: FSMContext, api: ApiClien
 
 
 # ---------------------------------------------------------------- рассылка
-def _announcement_text(games: list[dict], days: int) -> str:
-    """Одно сообщение на весь список: отдельная строка на игру и один заголовок
-    на день, иначе анонс превращается в простыню."""
-    lines = [f"🎲 Игры на ближайшие {days} дней\n"]
-    current_day = ""
+def _by_day(games: list[dict]) -> list[tuple[str, list[dict]]]:
+    """Игры, разложенные по дням, в порядке расписания."""
+    days: dict[str, list[dict]] = {}
     for game in games:
-        day = format_day(game["starts_at"])
-        if day != current_day:
-            current_day = day
-            lines.append(f"\n📅 {day}")
-        players, limit = int(game.get("players", 0)), int(game.get("max_players", 10))
-        seats = f"{limit - players} мест" if players < limit else "стол собран, есть резерв"
+        days.setdefault(format_day(game["starts_at"]), []).append(game)
+    return list(days.items())
+
+
+def _plural(count: int, one: str, few: str, many: str) -> str:
+    """«1 игра», «2 игры», «5 игр» -- русское согласование числительного."""
+    if count % 100 in range(11, 15):
+        return f"{count} {many}"
+    return f"{count} {({1: one, 2: few, 3: few, 4: few}).get(count % 10, many)}"
+
+
+def _games_count(count: int) -> str:
+    return _plural(count, "игра", "игры", "игр")
+
+
+def _game_line(game: dict) -> str:
+    players, limit = int(game.get("players", 0)), int(game.get("max_players", 10))
+    seats = (
+        _plural(limit - players, "место", "места", "мест")
+        if players < limit
+        else "стол собран, есть резерв"
+    )
+    return (
+        f"• {format_time(game['starts_at'])} — "
+        f"{texts.GAME_TYPES.get(game.get('game_type', ''), '')}, "
+        f"{game.get('location') or 'место уточняется'} ({seats})"
+    )
+
+
+def _announcement_text(games: list[dict], days: int) -> str:
+    """Анонс на неделю -- только дни и сколько в каждом игр.
+
+    Раньше здесь была строка на каждую игру с местом и свободными местами, и
+    анонс из трёх игровых дней уезжал за экран, а решение всё равно
+    принимается на уровне «в какой день я иду». Подробности человек видит на
+    экране записи -- по кнопке нужного дня.
+    """
+    lines = [f"🎲 Игры на ближайшие {days} дней\n"]
+    for day, day_games in _by_day(games):
+        lines.append(f"📅 {day_label(day)} — {_games_count(len(day_games))}")
+    lines.append("\nВыберите день кнопкой ниже — откроется запись.")
+    return "\n".join(lines)
+
+
+def _gathering_text(day: str, games: list[dict]) -> str:
+    """Рассылка «собираем стол» по одному дню -- с подробностями по играм:
+    зовут сюда тех, кто ещё не записан, и им как раз нужно знать, где и
+    сколько мест."""
+    lines = [f"🎲 Собираем игры — {day_label(day)}\n"]
+    lines += [_game_line(game) for game in games]
+    lines.append("\nНажмите кнопку ниже, чтобы записаться.")
+    return "\n".join(lines)
+
+
+def day_reminder_text(day: str, games: list[dict]) -> str:
+    """«Сегодня игры» -- одно сообщение на день, а не на каждый слот.
+
+    Место показывается у каждой игры: в один день клуб играет и на ВМК, и в
+    других аудиториях, и «сегодня игры» без адреса заставляет искать его в
+    переписке.
+    """
+    lines = [f"⏰ Сегодня игры — {day_label(day)}\n"]
+    for game in games:
+        type_label = texts.GAME_TYPES.get(game.get("game_type", ""), "")
         lines.append(
-            f"• {format_time(game['starts_at'])} — "
-            f"{texts.GAME_TYPES.get(game.get('game_type', ''), '')}, "
-            f"{game.get('location') or 'место уточняется'} ({seats})"
+            f"• {format_time(game['starts_at'])} — {type_label}, "
+            f"{game.get('location') or 'место уточняется'}"
         )
-    lines.append("\nНажмите «Записаться», чтобы выбрать игру.")
+    lines.append("\nСостав и отмена записи — в «📋 Мои регистрации».")
     return "\n".join(lines)
 
 
@@ -221,8 +278,153 @@ async def broadcast_send(callback: CallbackQuery, state: FSMContext, api: ApiCli
         bot,
         recipients=recipients,
         text=_announcement_text(games, payload["days"]),
-        keyboard=announcement_keyboard(),
+        keyboard=announcement_keyboard(
+            (await bot.me()).username, [day for day, _ in _by_day(games)]
+        ),
         title="📢 Анонс.",
+    )
+
+
+# --------------------------------------------- рассылка по одному дню
+# Две кнопки на одной механике: «собрать» зовёт тех, кого на дне ещё нет,
+# «напомнить» пишет только записавшимся. Различаются аудиторией на бэкенде
+# (broadcast_service.day_recipients) и текстом -- всё остальное общее.
+AUDIENCE_ABSENT = "absent"
+AUDIENCE_REGISTERED = "registered"
+
+
+async def _day_payload(api: ApiClient, tg_id: int, day: str, audience: str) -> tuple[list[dict], list[int]]:
+    payload = await api.admin_day_broadcast(tg_id, day, audience)
+    recipients = [r["telegram_id"] for r in payload["recipients"] if r.get("telegram_id")]
+    return payload["games"], recipients
+
+
+@router.callback_query(F.data == "am:day")
+async def pick_broadcast_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    """Выбор дня для сбора. Дни берутся те же, что видит игрок в записи: день
+    с закрытой записью звать некуда."""
+    await state.set_state(None)
+    days = await api.list_game_days(callback.from_user.id)
+    if not days:
+        await edit_screen(
+            callback, state, "Открытых для записи дней нет — собирать не на что.",
+            admin_broadcast_keyboard(can_send=False),
+        )
+        return
+    await edit_screen(
+        callback,
+        state,
+        "📣 Собрать на игровой день\n\nВыберите день — покажу текст и получателей:",
+        game_days_keyboard(days, prefix="am:day", back_to="am:menu"),
+    )
+
+
+@router.callback_query(F.data.startswith("am:day:"))
+async def gathering_preview(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    token = callback.data.split(":")[2]
+    day = day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+    try:
+        games, recipients = await _day_payload(api, callback.from_user.id, day, AUDIENCE_ABSENT)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    if not games:
+        await edit_screen(
+            callback, state, f"На {day_label(day)} открытых игр не осталось.",
+            admin_broadcast_keyboard(can_send=False, back_to="am:day"),
+        )
+        return
+    await edit_screen(
+        callback,
+        state,
+        f"Получателей: {len(recipients)} — все, кроме записанных на этот день.\n\n"
+        f"Текст сообщения:\n\n{_gathering_text(day, games)}",
+        admin_broadcast_keyboard(
+            can_send=bool(recipients), send_to=f"am:daygo:{token}", back_to="am:day"
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("am:daygo:"))
+async def gathering_send(callback: CallbackQuery, state: FSMContext, api: ApiClient, bot: Bot) -> None:
+    token = callback.data.split(":")[2]
+    day = day_from_token(token)
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
+        return
+    try:
+        games, recipients = await _day_payload(api, callback.from_user.id, day, AUDIENCE_ABSENT)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    if not games or not recipients:
+        await edit_screen(callback, state, "Рассылать нечего или некому.", admin_menu_keyboard())
+        return
+    await _send_broadcast(
+        callback,
+        state,
+        bot,
+        recipients=recipients,
+        text=_gathering_text(day, games),
+        keyboard=announcement_keyboard((await bot.me()).username, [day]),
+        title="📣 Сбор.",
+    )
+
+
+@router.callback_query(F.data == "am:remind")
+async def reminder_preview(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    """Напоминание про сегодняшние игры.
+
+    Раньше оно уходило само за три часа до первой игры дня. Автоматика не
+    знала ни про отмену в последний момент, ни про то, что клуб уже всё
+    обсудил в чате, -- теперь момент выбирает админ.
+    """
+    await state.set_state(None)
+    day = now_local().strftime("%d.%m.%Y")
+    try:
+        games, recipients = await _day_payload(api, callback.from_user.id, day, AUDIENCE_REGISTERED)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    if not games:
+        await edit_screen(
+            callback, state, f"На сегодня ({day_label(day)}) игр в расписании нет.",
+            admin_broadcast_keyboard(can_send=False),
+        )
+        return
+    await edit_screen(
+        callback,
+        state,
+        f"Получателей: {len(recipients)} — все записанные на сегодня, включая резерв.\n\n"
+        f"Текст сообщения:\n\n{day_reminder_text(day, games)}",
+        admin_broadcast_keyboard(can_send=bool(recipients), send_to="am:remindgo"),
+    )
+
+
+@router.callback_query(F.data == "am:remindgo")
+async def reminder_send(callback: CallbackQuery, state: FSMContext, api: ApiClient, bot: Bot) -> None:
+    day = now_local().strftime("%d.%m.%Y")
+    try:
+        games, recipients = await _day_payload(api, callback.from_user.id, day, AUDIENCE_REGISTERED)
+    except ApiError as exc:
+        await callback.answer(exc.message, show_alert=True)
+        return
+    if not games or not recipients:
+        await edit_screen(callback, state, "Напоминать нечего или некому.", admin_menu_keyboard())
+        return
+    await _send_broadcast(
+        callback,
+        state,
+        bot,
+        recipients=recipients,
+        # Кнопки нет намеренно: получатель уже записан, и вести его на экран
+        # записи незачем -- состав и отмена живут в «Мои регистрации».
+        text=day_reminder_text(day, games),
+        keyboard=None,
+        title="⏰ Напоминание.",
     )
 
 

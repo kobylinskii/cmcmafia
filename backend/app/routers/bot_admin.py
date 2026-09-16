@@ -21,6 +21,7 @@ from app.schemas.bot import (
     BotAdminGrantIn,
     BroadcastAudienceOut,
     BroadcastPlayerOut,
+    DayBroadcastOut,
     PlayerLookupOut,
     WeeklyBroadcastOut,
 )
@@ -45,6 +46,34 @@ def weekly_broadcast(
     recipients = broadcast_service.announcement_recipients(db, days=days)
     return WeeklyBroadcastOut(
         days=days,
+        games=[session_to_out(g) for g in games],
+        recipients=[BroadcastPlayerOut.model_validate(p) for p in recipients],
+    )
+
+
+@router.get("/broadcast/day", response_model=DayBroadcastOut)
+@limiter.limit("30/minute")
+def day_broadcast(
+    request: Request,
+    telegram_id: TelegramId,
+    day: str,
+    audience: str = broadcast_service.AUDIENCE_ABSENT,
+    db: Session = Depends(get_db),
+) -> DayBroadcastOut:
+    """Рассылка по одному игровому дню: «собрать» и «напомнить».
+
+    Аудитории ровно две и они взаимно дополняют друг друга: `absent` -- клуб
+    без тех, кто на этот день уже записан (их зовут за стол), `registered` --
+    только они (им напоминают, что сегодня играем).
+    """
+    if audience not in (broadcast_service.AUDIENCE_ABSENT, broadcast_service.AUDIENCE_REGISTERED):
+        raise HTTPException(422, "Неизвестная аудитория рассылки")
+    games = broadcast_service.day_sessions(
+        db, day=day, only_open=audience == broadcast_service.AUDIENCE_ABSENT
+    )
+    recipients = broadcast_service.day_recipients(db, day=day, audience=audience)
+    return DayBroadcastOut(
+        day=day,
         games=[session_to_out(g) for g in games],
         recipients=[BroadcastPlayerOut.model_validate(p) for p in recipients],
     )

@@ -43,9 +43,25 @@ def pending_count(db: Session) -> int:
     )
 
 
+def _ensure_pending(player: models.Player) -> None:
+    """Решение принимается ровно один раз -- первым, кто нажал.
+
+    Уведомление о заявке уходит каждому админу своей копией, и кнопки живут
+    в каждой из них. Без этой проверки второе нажатие (хоть по той же
+    заявке, хоть противоположное) молча переписывало решение первого, а
+    игрок получал два взаимоисключающих сообщения подряд -- сначала
+    «подтверждена», потом «отклонена». Теперь второй админ видит «уже
+    рассмотрена», как и у правок профиля (profile_change_service.apply).
+
+    Вернуть отклонённую заявку на проверку может сам игрок -- кнопкой
+    «Отправить на повторную проверку» (resubmit ниже).
+    """
+    if player.confirmation_status != STATUS_PENDING:
+        raise ConfirmationError("Заявка уже рассмотрена")
+
+
 def confirm(db: Session, *, player: models.Player) -> models.Player:
-    if player.confirmation_status == STATUS_CONFIRMED:
-        raise ConfirmationError("Игрок уже подтверждён")
+    _ensure_pending(player)
     player.confirmation_status = STATUS_CONFIRMED
     player.rejection_reason = None
     player.confirmation_decided_at = datetime.now(timezone.utc)
@@ -55,6 +71,7 @@ def confirm(db: Session, *, player: models.Player) -> models.Player:
 
 
 def reject(db: Session, *, player: models.Player, reason: str) -> models.Player:
+    _ensure_pending(player)
     reason = (reason or "").strip()
     if not reason:
         # Не только требование констрейнта: причина -- единственное, что игрок
