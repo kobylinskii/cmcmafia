@@ -470,13 +470,32 @@ async def _notify_promoted(callback: CallbackQuery, game_id: int, result: dict) 
         logger.warning("Не удалось уведомить %s о переводе из резерва", promoted)
 
 
-# Ведущий и судьи -- один штаб на три места, и делить его на два раздела в
-# составе дня незачем: набирают их вместе, и вопрос всегда один -- хватает
-# ли людей на стол, а не кто из них сегодня судит.
-DAY_ROSTER_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+# Ведущий и судьи -- один штаб на три места, и делить его на два раздела
+# незачем: набирают их вместе, и вопрос всегда один -- хватает ли людей на
+# стол, а не кто из них сегодня судит. Так же их считает и строка игры в
+# списке (keyboards.inline._slot_label: hosts + judges из трёх).
+ROSTER_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("Ведущие/судьи", ("host", "judge")),
     ("Игроки", ("player",)),
 )
+
+
+def _roster_sections(people: dict[str, list[str]], reserves: list[str]) -> list[str]:
+    """Разделы состава -- общие у одной игры и у целого дня.
+
+    Номер в списке отвечает на главный вопрос обоих разделов: сколько уже
+    набралось -- из трёх мест в штабе и из десяти за столом.
+    """
+    lines: list[str] = []
+    for title, roles in ROSTER_GROUPS:
+        members = [name for role in roles for name in people.get(role) or []]
+        lines.append(f"{title} ({len(members)}):" if members else f"{title}: пока никого")
+        lines += [f"{index}. {name}" for index, name in enumerate(members, start=1)]
+        lines.append("")
+    if reserves:
+        lines.append(f"Резерв ({len(reserves)}):")
+        lines += [f"{index}. {name}" for index, name in enumerate(reserves, start=1)]
+    return lines
 
 
 def _day_roster_text(day: str, rosters: list[dict]) -> str:
@@ -499,23 +518,16 @@ def _day_roster_text(day: str, rosters: list[dict]) -> str:
                 reserves.append(row["nickname"])
 
     lines = [f"👥 Кто записан — {day_label(day)}", ""]
-    for title, roles in DAY_ROSTER_GROUPS:
-        members = [name for role in roles for name in people.get(role) or []]
-        lines.append(f"{title} ({len(members)}):" if members else f"{title}: пока никого")
-        # Номер в списке отвечает на главный вопрос обоих разделов: сколько
-        # уже набралось -- из трёх мест в штабе и из десяти за столом.
-        lines += [f"{index}. {name}" for index, name in enumerate(members, start=1)]
-        lines.append("")
-    if reserves:
-        lines.append(f"Резерв ({len(reserves)}):")
-        lines += [f"{index}. {name}" for index, name in enumerate(reserves, start=1)]
+    lines += _roster_sections(people, reserves)
     return "\n".join(lines).strip()
 
 
 def _roster_text(game: dict, roster: dict) -> str:
-    by_role: dict[str, list[dict]] = {"host": [], "judge": [], "player": []}
+    """Состав одной игры -- карточка из «Мои регистрации». Разделы те же, что
+    и у дня: штаб одним куском, потом стол, потом очередь."""
+    people: dict[str, list[str]] = {}
     for row in roster["registrations"]:
-        by_role.setdefault(row["role"], []).append(row)
+        people.setdefault(row["role"], []).append(row["nickname"])
 
     lines = [
         f"Игра #{game['id']} · {texts.GAME_TYPES.get(game.get('game_type', ''), '')}",
@@ -523,21 +535,7 @@ def _roster_text(game: dict, roster: dict) -> str:
         f"Где: {game.get('location') or '—'}",
         "",
     ]
-    for role in ("host", "judge", "player"):
-        members = by_role.get(role, [])
-        lines.append(f"{texts.ROSTER_ROLES[role]}:")
-        if not members:
-            lines.append("• пока никого")
-        else:
-            for index, member in enumerate(members, start=1):
-                prefix = f"{index}." if role == "player" else "•"
-                lines.append(f"{prefix} {member['nickname']}")
-        lines.append("")
-
-    reserves = roster.get("reserves") or []
-    if reserves:
-        lines.append("Резерв:")
-        lines += [f"{index}. {item['nickname']}" for index, item in enumerate(reserves, start=1)]
+    lines += _roster_sections(people, [row["nickname"] for row in roster.get("reserves") or []])
     return "\n".join(lines).strip()
 
 

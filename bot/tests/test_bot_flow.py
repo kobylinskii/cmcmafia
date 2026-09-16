@@ -664,6 +664,8 @@ async def test_signing_up_for_a_game_and_cancelling(stack):
 
     await dp.feed_update(bot, _callback("mr:view:7"))
     assert "Игра #7" in bot.last_text
+    # Разделы те же, что и в составе дня: штаб одним куском, потом стол.
+    assert "Ведущие/судьи (1):" in bot.last_text and "Судья:" not in bot.last_text
     assert "mr:cancel:7" in bot.last_inline()
 
     await dp.feed_update(bot, _callback("mr:cancel:7"))
