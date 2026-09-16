@@ -470,10 +470,12 @@ async def _notify_promoted(callback: CallbackQuery, game_id: int, result: dict) 
         logger.warning("Не удалось уведомить %s о переводе из резерва", promoted)
 
 
-DAY_ROSTER_GROUPS: tuple[tuple[str, str], ...] = (
-    ("host", "Ведущие"),
-    ("judge", "Судьи"),
-    ("player", "Игроки"),
+# Ведущий и судьи -- один штаб на три места, и делить его на два раздела в
+# составе дня незачем: набирают их вместе, и вопрос всегда один -- хватает
+# ли людей на стол, а не кто из них сегодня судит.
+DAY_ROSTER_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Ведущие/судьи", ("host", "judge")),
+    ("Игроки", ("player",)),
 )
 
 
@@ -485,7 +487,7 @@ def _day_roster_text(day: str, rosters: list[dict]) -> str:
     простыню, в которой одни и те же люди повторялись по несколько раз --
     записанный на две игры подряд считается один раз и здесь.
     """
-    people: dict[str, list[str]] = {role: [] for role, _ in DAY_ROSTER_GROUPS}
+    people: dict[str, list[str]] = {}
     reserves: list[str] = []
     for roster in rosters:
         for row in roster.get("registrations") or []:
@@ -497,15 +499,12 @@ def _day_roster_text(day: str, rosters: list[dict]) -> str:
                 reserves.append(row["nickname"])
 
     lines = [f"👥 Кто записан — {day_label(day)}", ""]
-    for role, title in DAY_ROSTER_GROUPS:
-        members = people.get(role) or []
+    for title, roles in DAY_ROSTER_GROUPS:
+        members = [name for role in roles for name in people.get(role) or []]
         lines.append(f"{title} ({len(members)}):" if members else f"{title}: пока никого")
-        # Ведущих и судей пересчитывать незачем -- их единицы; у игроков номер
-        # в списке отвечает на главный вопрос: сколько уже набралось.
-        if role == "player":
-            lines += [f"{index}. {name}" for index, name in enumerate(members, start=1)]
-        else:
-            lines += [f"• {name}" for name in members]
+        # Номер в списке отвечает на главный вопрос обоих разделов: сколько
+        # уже набралось -- из трёх мест в штабе и из десяти за столом.
+        lines += [f"{index}. {name}" for index, name in enumerate(members, start=1)]
         lines.append("")
     if reserves:
         lines.append(f"Резерв ({len(reserves)}):")

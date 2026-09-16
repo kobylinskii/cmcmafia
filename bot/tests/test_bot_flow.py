@@ -1392,7 +1392,9 @@ async def test_day_roster_is_one_list_for_the_whole_day(stack):
     assert "Игра #" not in text, "разбивки по играм в составе дня больше нет"
     assert text.count("Шериф") == 1, "записанный на обе игры считается один раз"
     assert "Игроки (2):" in text and "Мирный" in text
-    assert "Ведущие (1):" in text and "Дон" in text
+    # Ведущий и судьи -- один штаб на три места, отдельных разделов у них нет.
+    assert "Ведущие/судьи (1):" in text and "Дон" in text
+    assert "Судьи (" not in text
     assert "Резерв (1):" in text and "Запасной" in text
     # Назад -- на экран этого же дня, а не в список дней.
     assert bot.last_inline() == [f"sg:day:{token}"]
