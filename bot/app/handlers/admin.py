@@ -32,6 +32,7 @@ from app.keyboards.inline import (
     admin_admins_keyboard,
     admin_broadcast_keyboard,
     admin_menu_keyboard,
+    admin_reminder_keyboard,
     admin_text_broadcast_keyboard,
     announcement_keyboard,
     cancel_input_keyboard,
@@ -380,12 +381,51 @@ async def reminder_preview(callback: CallbackQuery, state: FSMContext, api: ApiC
 
     Раньше оно уходило само за три часа до первой игры дня. Автоматика не
     знала ни про отмену в последний момент, ни про то, что клуб уже всё
-    обсудил в чате, -- теперь момент выбирает админ.
+    обсудил в чате, -- теперь момент выбирает админ, он же отмечает, какие
+    игры сегодня действительно состоятся.
     """
     await state.set_state(None)
+    # Вход в раздел всегда начинается с «состоятся все»: прошлый выбор -- это
+    # прошлое нажатие кнопки, к сегодняшнему расписанию он отношения не имеет.
+    await state.update_data(am_remind_off=[])
+    await _reminder_screen(callback, state, api)
+
+
+@router.callback_query(F.data.startswith("am:rmg:"))
+async def reminder_toggle_game(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    game_id = int(callback.data.split(":")[2])
+    data = await state.get_data()
+    off = set(data.get("am_remind_off") or [])
+    off.symmetric_difference_update({game_id})
+    await state.update_data(am_remind_off=sorted(off))
+    await _reminder_screen(callback, state, api)
+
+
+async def _reminder_games(
+    api: ApiClient, tg_id: int, state: FSMContext
+) -> tuple[str, list[dict], list[dict], list[int]]:
+    """День, все его игры, отмеченные игры и получатели по отмеченным."""
     day = now_local().strftime("%d.%m.%Y")
+    payload = await api.admin_day_broadcast(tg_id, day, AUDIENCE_REGISTERED)
+    games = payload["games"]
+    off = set((await state.get_data()).get("am_remind_off") or [])
+    chosen = [game for game in games if game["id"] not in off]
+    if not chosen:
+        return day, games, [], []
+    if len(chosen) == len(games):
+        # Отмечены все -- получатели уже посчитаны, второй запрос ни к чему.
+        recipients = payload["recipients"]
+    else:
+        narrowed = await api.admin_day_broadcast(
+            tg_id, day, AUDIENCE_REGISTERED, [game["id"] for game in chosen]
+        )
+        recipients = narrowed["recipients"]
+    return day, games, chosen, [r["telegram_id"] for r in recipients if r.get("telegram_id")]
+
+
+async def _reminder_screen(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
     try:
-        games, recipients = await _day_payload(api, callback.from_user.id, day, AUDIENCE_REGISTERED)
+        day, games, chosen, recipients = await _reminder_games(api, callback.from_user.id, state)
     except ApiError as exc:
         await callback.answer(exc.message, show_alert=True)
         return
@@ -395,26 +435,39 @@ async def reminder_preview(callback: CallbackQuery, state: FSMContext, api: ApiC
             admin_broadcast_keyboard(can_send=False),
         )
         return
+
+    for game in games:
+        game["time"] = format_time(game["starts_at"])
+    if not chosen:
+        text = (
+            "⏰ Напоминание про сегодняшние игры\n\n"
+            "Ни одна игра не отмечена — напоминать не о чем."
+        )
+    else:
+        text = (
+            f"Отмечены игры, которые сегодня состоятся: {len(chosen)} из {len(games)}.\n"
+            f"Получателей: {len(recipients)} — записанные на отмеченные игры, включая резерв.\n\n"
+            f"Текст сообщения:\n\n{day_reminder_text(day, chosen)}"
+        )
     await edit_screen(
         callback,
         state,
-        f"Получателей: {len(recipients)} — все записанные на сегодня, включая резерв.\n\n"
-        f"Текст сообщения:\n\n{day_reminder_text(day, games)}",
-        admin_broadcast_keyboard(can_send=bool(recipients), send_to="am:remindgo"),
+        text,
+        admin_reminder_keyboard(games, {game["id"] for game in chosen}, can_send=bool(recipients)),
     )
 
 
 @router.callback_query(F.data == "am:remindgo")
 async def reminder_send(callback: CallbackQuery, state: FSMContext, api: ApiClient, bot: Bot) -> None:
-    day = now_local().strftime("%d.%m.%Y")
     try:
-        games, recipients = await _day_payload(api, callback.from_user.id, day, AUDIENCE_REGISTERED)
+        day, _, chosen, recipients = await _reminder_games(api, callback.from_user.id, state)
     except ApiError as exc:
         await callback.answer(exc.message, show_alert=True)
         return
-    if not games or not recipients:
+    if not chosen or not recipients:
         await edit_screen(callback, state, "Напоминать нечего или некому.", admin_menu_keyboard())
         return
+    await state.update_data(am_remind_off=[])
     await _send_broadcast(
         callback,
         state,
@@ -422,7 +475,7 @@ async def reminder_send(callback: CallbackQuery, state: FSMContext, api: ApiClie
         recipients=recipients,
         # Кнопки нет намеренно: получатель уже записан, и вести его на экран
         # записи незачем -- состав и отмена живут в «Мои регистрации».
-        text=day_reminder_text(day, games),
+        text=day_reminder_text(day, chosen),
         keyboard=None,
         title="⏰ Напоминание.",
     )

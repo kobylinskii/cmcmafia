@@ -160,15 +160,23 @@ def day_participants(db: Session, *, game_ids: list[int]) -> list[models.Player]
     return [by_id[key] for key in sorted(by_id)]
 
 
-def day_recipients(db: Session, *, day: str, audience: str) -> list[models.Player]:
+def day_recipients(
+    db: Session, *, day: str, audience: str, game_ids: list[int] | None = None
+) -> list[models.Player]:
     """Кому уйдёт рассылка по дню.
 
     Занятость считается по ВСЕМ играм дня, а не только по открытым: человек,
     записанный на игру с закрытой записью, на этот день всё равно придёт.
+
+    game_ids сужает аудиторию `registered` до записанных на эти игры: админ
+    в напоминании отмечает, какие игры сегодня состоятся, и писать «сегодня
+    играем» тому, чья игра не состоится, было бы враньём. На аудиторию
+    `absent` этот список не влияет: занятым считается любой, у кого на день
+    есть хоть одна запись.
     """
-    game_ids = [game.id for game in day_sessions(db, day=day, only_open=False)]
-    participants = day_participants(db, game_ids=game_ids)
+    day_ids = [game.id for game in day_sessions(db, day=day, only_open=False)]
     if audience == AUDIENCE_REGISTERED:
-        return participants
-    busy = {player.id for player in participants}
+        chosen = [gid for gid in day_ids if gid in set(game_ids)] if game_ids else day_ids
+        return day_participants(db, game_ids=chosen)
+    busy = {player.id for player in day_participants(db, game_ids=day_ids)}
     return [player for player in all_recipients(db) if player.id not in busy]

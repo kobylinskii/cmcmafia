@@ -68,7 +68,21 @@ WEEKDAYS = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 
 def day_label(day: str) -> str:
     """«19.09.2026» -> «пт 19.09.2026». День приезжает от API уже строкой."""
-    return f"{WEEKDAYS[datetime.strptime(day, '%d.%m.%Y').weekday()]} {day}"
+    return f"{_weekday(day)} {day}"
+
+
+def day_button_label(day: str) -> str:
+    """То же для кнопки, но без года: «пт 19.09».
+
+    Кнопки дней стоят по две в ряд, и полная дата с днём недели в них не
+    помещалась -- Telegram обрезал её многоточием. Год в списке ближайших
+    игровых дней всё равно не несёт информации.
+    """
+    return f"{_weekday(day)} {day[:5]}"
+
+
+def _weekday(day: str) -> str:
+    return WEEKDAYS[datetime.strptime(day, "%d.%m.%Y").weekday()]
 
 
 def format_day_time(value: str) -> str:
@@ -315,14 +329,19 @@ class ApiClient:
         return resp.json()
 
     # --------------------------------------------- рассылка по одному дню
-    async def admin_day_broadcast(self, tg_id: int, day: str, audience: str) -> dict:
+    async def admin_day_broadcast(
+        self, tg_id: int, day: str, audience: str, game_ids: list[int] | None = None
+    ) -> dict:
         """Игры дня и получатели одной из двух рассылок по дню: audience
-        'absent' -- собрать за стол, 'registered' -- напомнить записавшимся."""
-        resp = await self._request(
-            "GET",
-            "/api/bot/admin/broadcast/day",
-            params={"telegram_id": tg_id, "day": day, "audience": audience},
-        )
+        'absent' -- собрать за стол, 'registered' -- напомнить записавшимся.
+
+        game_ids сужает напоминание до игр, которые сегодня состоятся: их
+        отмечает админ, и получатели считаются по ним же.
+        """
+        params: dict[str, Any] = {"telegram_id": tg_id, "day": day, "audience": audience}
+        if game_ids is not None:
+            params["game_ids"] = ",".join(str(game_id) for game_id in game_ids)
+        resp = await self._request("GET", "/api/bot/admin/broadcast/day", params=params)
         return resp.json()
 
     # ------------------------------------------------------------- sessions (user)

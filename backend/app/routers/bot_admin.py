@@ -51,6 +51,19 @@ def weekly_broadcast(
     )
 
 
+def _parse_game_ids(raw: str | None) -> list[int] | None:
+    """«12,15» -> [12, 15]. None -- фильтра нет, берём весь день."""
+    if not raw:
+        return None
+    try:
+        ids = [int(part) for part in raw.split(",") if part.strip()]
+    except ValueError as exc:
+        raise HTTPException(422, "game_ids -- это id игр через запятую") from exc
+    if not ids:
+        raise HTTPException(422, "game_ids -- это id игр через запятую")
+    return ids
+
+
 @router.get("/broadcast/day", response_model=DayBroadcastOut)
 @limiter.limit("30/minute")
 def day_broadcast(
@@ -58,6 +71,7 @@ def day_broadcast(
     telegram_id: TelegramId,
     day: str,
     audience: str = broadcast_service.AUDIENCE_ABSENT,
+    game_ids: str | None = None,
     db: Session = Depends(get_db),
 ) -> DayBroadcastOut:
     """Рассылка по одному игровому дню: «собрать» и «напомнить».
@@ -65,13 +79,22 @@ def day_broadcast(
     Аудитории ровно две и они взаимно дополняют друг друга: `absent` -- клуб
     без тех, кто на этот день уже записан (их зовут за стол), `registered` --
     только они (им напоминают, что сегодня играем).
+
+    `game_ids` (id через запятую) сужает напоминание до игр, которые сегодня
+    действительно состоятся: их отмечает админ, и получатели считаются по ним
+    же -- писать «сегодня играем» тому, чья игра отменена, было бы враньём.
     """
     if audience not in (broadcast_service.AUDIENCE_ABSENT, broadcast_service.AUDIENCE_REGISTERED):
         raise HTTPException(422, "Неизвестная аудитория рассылки")
+    chosen = _parse_game_ids(game_ids)
     games = broadcast_service.day_sessions(
         db, day=day, only_open=audience == broadcast_service.AUDIENCE_ABSENT
     )
-    recipients = broadcast_service.day_recipients(db, day=day, audience=audience)
+    if chosen is not None:
+        games = [game for game in games if game.id in set(chosen)]
+    recipients = broadcast_service.day_recipients(
+        db, day=day, audience=audience, game_ids=chosen
+    )
     return DayBroadcastOut(
         day=day,
         games=[session_to_out(g) for g in games],

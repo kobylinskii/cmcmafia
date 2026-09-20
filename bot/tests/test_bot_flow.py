@@ -182,9 +182,11 @@ class FakeApi:
         self.promote_on_cancel: int | None = None
         self.broadcast_recipients: list[int] = []
         self.broadcast_audience: list[int] = []
-        # (день, аудитория) каждой рассылки по дню -- «собрать» и «напомнить»
-        # отличаются именно аудиторией.
-        self.day_broadcasts: list[tuple[str, str]] = []
+        # (день, аудитория, отмеченные игры) каждой рассылки по дню: «собрать»
+        # и «напомнить» отличаются аудиторией, а напоминание -- ещё и тем,
+        # какие игры админ отметил.
+        self.day_broadcasts: list[tuple[str, str, tuple[int, ...] | None]] = []
+        self.recipients_by_game: dict[int, list[int]] = {}
         # Решения админа по заявкам и правкам: что вызвали и чем ответить.
         self.moderated: list[tuple[str, int, str | None]] = []
         self.moderation_error: Exception | None = None
@@ -402,14 +404,24 @@ class FakeApi:
             "recipients": [{"telegram_id": tg, "nickname": f"И{tg}"} for tg in self.broadcast_recipients],
         }
 
-    async def admin_day_broadcast(self, tg_id: int, day: str, audience: str) -> dict:
-        self.day_broadcasts.append((day, audience))
+    async def admin_day_broadcast(
+        self, tg_id: int, day: str, audience: str, game_ids: list[int] | None = None
+    ) -> dict:
+        self.day_broadcasts.append((day, audience, tuple(game_ids) if game_ids else None))
+        games = [self.session, *self.extra]
+        recipients = self.broadcast_recipients
+        if game_ids is not None:
+            chosen = set(game_ids)
+            games = [g for g in games if g["id"] in chosen]
+            # Получатели считаются по отмеченным играм -- так же, как на
+            # бэкенде (broadcast_service.day_recipients).
+            recipients = sorted(
+                {tg for g in games for tg in self.recipients_by_game.get(g["id"], [])}
+            )
         return {
             "day": day,
-            "games": [self.session, *self.extra],
-            "recipients": [
-                {"telegram_id": tg, "nickname": f"И{tg}"} for tg in self.broadcast_recipients
-            ],
+            "games": games,
+            "recipients": [{"telegram_id": tg, "nickname": f"И{tg}"} for tg in recipients],
         }
 
     async def admin_broadcast_audience(self, tg_id: int) -> dict:
@@ -579,7 +591,7 @@ async def test_registration_walks_all_six_steps(stack):
     assert api.profile["confirmation_status"] == "pending"
     # Меню инлайновое: нижней клавиатуры после регистрации не остаётся, иначе
     # каждое её нажатие снова засоряло бы чат текстом.
-    assert bot.last_inline() == ["sg:days", "mr:list:active", "pf:menu"]
+    assert bot.last_inline() == ["sg:days", "mr:days", "pf:menu"]
 
 
 @pytest.mark.asyncio
@@ -658,8 +670,12 @@ async def test_signing_up_for_a_game_and_cancelling(stack):
                for markup in [getattr(c, "reply_markup", None)] if isinstance(markup, InlineKeyboardMarkup)
                for row in markup.inline_keyboard for b in row)
 
-    await dp.feed_update(bot, _callback("mr:list:active"))
-    assert "Предстоящие игры" in bot.last_text
+    # Раздел устроен как запись: сначала день, потом игры этого дня.
+    await dp.feed_update(bot, _callback("mr:days"))
+    assert "Мои регистрации" in bot.last_text
+    assert f"mr:day:{day_token}" in bot.last_inline()
+
+    await dp.feed_update(bot, _callback(f"mr:day:{day_token}"))
     assert "mr:view:7" in bot.last_inline()
 
     await dp.feed_update(bot, _callback("mr:view:7"))
@@ -667,6 +683,8 @@ async def test_signing_up_for_a_game_and_cancelling(stack):
     # Разделы те же, что и в составе дня: штаб одним куском, потом стол.
     assert "Ведущие/судьи (1):" in bot.last_text and "Судья:" not in bot.last_text
     assert "mr:cancel:7" in bot.last_inline()
+    # «Назад» ведёт в тот же день, а не в общий список.
+    assert bot.last_inline()[-1] == f"mr:day:{day_token}"
 
     await dp.feed_update(bot, _callback("mr:cancel:7"))
     assert api.registered == []
@@ -1239,7 +1257,9 @@ async def test_single_type_day_goes_straight_to_the_games(stack):
     assert bot.last_inline() == [
         f"sg:game:{day_token}:training:player:7",
         f"sg:game:{day_token}:training:player:8",
-        f"sg:who:{day_token}",
+        # Формат и роль в кнопке состава -- ради «Назад»: вернуть надо на этот
+        # же экран, а не в начало цепочки дня.
+        f"sg:who:{day_token}:training:player",
         "sg:days",
     ]
 
@@ -1388,7 +1408,7 @@ async def test_day_roster_is_one_list_for_the_whole_day(stack):
     api.extra = [_session(8, day.replace(hour=20))]
     token = api._day.replace(".", "")
 
-    await dp.feed_update(bot, _callback(f"sg:who:{token}"))
+    await dp.feed_update(bot, _callback(f"sg:who:{token}:funky:player"))
     text = bot.last_text
     assert "Кто записан" in text
     assert "Игра #" not in text, "разбивки по играм в составе дня больше нет"
@@ -1398,8 +1418,9 @@ async def test_day_roster_is_one_list_for_the_whole_day(stack):
     assert "Ведущие/судьи (1):" in text and "Дон" in text
     assert "Судьи (" not in text
     assert "Резерв (1):" in text and "Запасной" in text
-    # Назад -- на экран этого же дня, а не в список дней.
-    assert bot.last_inline() == [f"sg:day:{token}"]
+    # Назад -- ровно на тот экран игр, с которого пришли: заново спрашивать
+    # формат и роль после просмотра состава незачем.
+    assert bot.last_inline() == [f"sg:role:{token}:funky:player"]
 
 
 @pytest.mark.asyncio
@@ -1472,7 +1493,7 @@ async def test_gathering_broadcast_targets_the_day_and_links_to_it(stack):
         == f"https://t.me/{BOT_USERNAME}?start=day{token}"
         for c in sent
     )
-    assert api.day_broadcasts[-1] == (api._day, "absent")
+    assert api.day_broadcasts[-1] == (api._day, "absent", None)
     assert "Доставлено: 2" in bot.last_text
 
 
@@ -1497,4 +1518,77 @@ async def test_reminder_is_sent_by_hand_to_those_signed_up_for_today(stack):
     # Записанному вести некуда: состав и отмена -- в «Мои регистрации».
     assert sent[0].reply_markup is None
     today = now_local().strftime("%d.%m.%Y")
-    assert api.day_broadcasts[-1] == (today, "registered")
+    assert api.day_broadcasts[-1] == (today, "registered", None)
+
+
+@pytest.mark.asyncio
+async def test_reminder_lets_the_admin_drop_a_game_that_will_not_happen(stack):
+    """Админ отмечает, какие игры сегодня состоятся: снятая галочка убирает
+    игру и из текста, и из списка получателей."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["is_bot_admin"] = True
+    day = datetime.fromisoformat(api.session["starts_at"])
+    api.extra = [_session(8, day.replace(hour=21), game_type="training")]
+    api.broadcast_recipients = [111, 222]
+    api.recipients_by_game = {7: [111], 8: [222]}
+
+    await dp.feed_update(bot, _message("/admin"))
+    await dp.feed_update(bot, _callback("am:remind"))
+    assert "Отмечены игры, которые сегодня состоятся: 2 из 2" in bot.last_text
+    assert "am:rmg:7" in bot.last_inline() and "am:rmg:8" in bot.last_inline()
+
+    # Вторая игра не состоится -- снимаем галочку.
+    await dp.feed_update(bot, _callback("am:rmg:8"))
+    assert "1 из 2" in bot.last_text
+    assert "Получателей: 1" in bot.last_text
+    assert "21:00" not in bot.last_text, "снятая игра исчезает из текста"
+
+    bot.reset()
+    await dp.feed_update(bot, _callback("am:remindgo"))
+    sent = [c for c in bot.calls if isinstance(c, SendMessage)]
+    assert [c.chat_id for c in sent] == [111]
+    assert "21:00" not in sent[0].text
+    assert api.day_broadcasts[-1][2] == (7,)
+
+
+@pytest.mark.asyncio
+async def test_reminder_with_nothing_marked_cannot_be_sent(stack):
+    dp, bot, api = stack
+    await _register(dp, bot)
+    api.profile["is_bot_admin"] = True
+    api.broadcast_recipients = [111]
+    api.recipients_by_game = {7: [111]}
+
+    await dp.feed_update(bot, _message("/admin"))
+    await dp.feed_update(bot, _callback("am:remind"))
+    await dp.feed_update(bot, _callback("am:rmg:7"))
+    assert "Ни одна игра не отмечена" in bot.last_text
+    assert "am:remindgo" not in bot.last_inline()
+
+
+@pytest.mark.asyncio
+async def test_my_registrations_are_days_then_games(stack):
+    """Вкладок «Предстоящие»/«Прошедшие» больше нет: сначала день, потом игры
+    этого дня, а сыгранное в раздел не попадает вовсе."""
+    dp, bot, api = stack
+    await _register(dp, bot)
+    token = api._day.replace(".", "")
+    await dp.feed_update(bot, _callback(f"sg:game:{token}:funky:player:7"))
+
+    await dp.feed_update(bot, _callback("mr:days"))
+    assert "mr:list:active" not in bot.last_inline()
+    assert f"mr:day:{token}" in bot.last_inline()
+
+    # Вкладка из прошлой версии висит у людей в чатах: нажатие должно вести
+    # в новый первый экран, а не крутить часики.
+    await dp.feed_update(bot, _callback("mr:list:completed"))
+    assert f"mr:day:{token}" in bot.last_inline()
+
+    await dp.feed_update(bot, _callback(f"mr:day:{token}"))
+    assert "mr:view:7" in bot.last_inline()
+
+    # Игра прошла -- день уходит из раздела: отменять в нём нечего.
+    api.session["starts_at"] = (now_local() - timedelta(hours=2)).isoformat()
+    await dp.feed_update(bot, _callback("mr:days"))
+    assert "Вы пока никуда не записаны" in bot.last_text

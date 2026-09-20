@@ -42,6 +42,11 @@ from app.utils import (
 router = Router(name="profile")
 
 # Поля, которые вводятся текстом: подсказка + сообщение об ошибке разбора.
+# Опыт -- строка в карточке игрока (и в боте, и на сайте), а не рассказ:
+# бэкенд пропускает до 2000 символов, но такой текст ломает вёрстку карточки.
+# Уже сохранённые длинные значения остаются как есть -- правка их не трогает.
+EXPERIENCE_MAX_LENGTH = 50
+
 TEXT_FIELDS: dict[str, tuple[str, str]] = {
     "full_name": (
         "Введите ФИО полностью — Фамилия Имя Отчество.",
@@ -55,8 +60,9 @@ TEXT_FIELDS: dict[str, tuple[str, str]] = {
     ),
     "age": ("Сколько вам лет?", "Возраст — это число от 5 до 100."),
     "experience": (
-        "Расскажите об игровом опыте — сколько играете, где, какие турниры.",
-        "Слишком длинно: не больше 2000 символов.",
+        f"Коротко об игровом опыте — сколько играете, где. "
+        f"Не больше {EXPERIENCE_MAX_LENGTH} символов: это одна строка в карточке игрока.",
+        f"Слишком длинно: не больше {EXPERIENCE_MAX_LENGTH} символов.",
     ),
     "bio": (
         "Пара слов о себе для страницы на сайте.",
@@ -500,7 +506,7 @@ def _parse(field: str, raw: str) -> str | int | None:
     if field == "age":
         return int(text) if text.isdigit() and 5 <= int(text) <= 100 else None
     if field == "experience":
-        return text if 0 < len(text) <= 2000 else None
+        return text if 0 < len(text) <= EXPERIENCE_MAX_LENGTH else None
     if field == "bio":
         return text if 0 < len(text) <= 4000 else None
     return None

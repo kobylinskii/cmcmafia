@@ -15,7 +15,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app import texts
-from app.api_client import day_label
+from app.api_client import day_button_label, day_label
 
 BACK = "↩️ Назад"
 CANCEL = "✖️ Отмена"
@@ -32,7 +32,7 @@ def main_menu_keyboard(*, is_admin: bool) -> InlineKeyboardMarkup:
     нажатие оставляло в чате текстовое сообщение с названием раздела."""
     kb = InlineKeyboardBuilder()
     kb.button(text="📝 Запись на игры", callback_data="sg:days")
-    kb.button(text="📋 Мои регистрации", callback_data="mr:list:active")
+    kb.button(text="📋 Мои регистрации", callback_data="mr:days")
     kb.button(text="👤 Профиль", callback_data="pf:menu")
     if is_admin:
         kb.button(text="🛠️ Админ-меню", callback_data="am:menu")
@@ -209,7 +209,7 @@ def game_days_keyboard(
     """
     kb = InlineKeyboardBuilder()
     for day in days:
-        kb.button(text=day_label(day), callback_data=f"{prefix}:{day_token(day)}")
+        kb.button(text=day_button_label(day), callback_data=f"{prefix}:{day_token(day)}")
     kb.adjust(2)
     if back_to:
         kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
@@ -259,8 +259,15 @@ def game_slots_keyboard(
         )
     kb.adjust(1)
     # Состав показывается сразу за весь день, а не по игре: человек решает,
-    # идти ли вечером в клуб, а не на какой из трёх столов сесть.
-    kb.row(InlineKeyboardButton(text="👥 Кто записан", callback_data=f"sg:who:{token}"))
+    # идти ли вечером в клуб, а не на какой из трёх столов сесть. Формат и
+    # роль едут в callback_data не для отбора игр (состав дня всегда полный),
+    # а ради «Назад»: вернуть надо на этот же экран, а не в начало цепочки,
+    # где заново спросят формат и роль.
+    kb.row(
+        InlineKeyboardButton(
+            text="👥 Кто записан", callback_data=f"sg:who:{token}:{game_type}:{role_kind}"
+        )
+    )
     kb.row(InlineKeyboardButton(text=BACK, callback_data=back_to))
     return kb.as_markup()
 
@@ -296,37 +303,42 @@ def _slot_label(game: dict, role_kind: str) -> str:
 
 
 # ------------------------------------------------------------ мои регистрации
-def my_registrations_keyboard(items: list[dict], stage: str) -> InlineKeyboardMarkup:
+# Вкладок «Предстоящие»/«Прошедшие» больше нет: раздел устроен так же, как
+# запись, -- сначала день, потом игры этого дня. Прошедшие игры сюда не
+# попадают вовсе: отменять в них нечего, а сыгранное видно в профиле и на
+# сайте.
+def my_days_keyboard(days: list[tuple[str, int]]) -> InlineKeyboardMarkup:
+    """Дни, на которые игрок записан, и сколько у него игр в каждом."""
     kb = InlineKeyboardBuilder()
-    kb.row(
-        InlineKeyboardButton(
-            text=("🟢 Предстоящие" if stage == "active" else "Предстоящие"),
-            callback_data="mr:list:active",
-        ),
-        InlineKeyboardButton(
-            text=("✅ Прошедшие" if stage == "completed" else "Прошедшие"),
-            callback_data="mr:list:completed",
-        ),
-    )
-    for item in items:
-        kb.row(
-            InlineKeyboardButton(
-                text=f"{item['day_time']} · {texts.ROSTER_ROLES.get(item['role'], item['role'])}",
-                callback_data=f"mr:view:{item['game_id']}",
-            )
-        )
+    for day, count in days:
+        kb.button(text=f"{day_button_label(day)} · {count}", callback_data=f"mr:day:{day_token(day)}")
+    kb.adjust(2)
     kb.row(InlineKeyboardButton(text=MENU, callback_data="mn:menu"))
     return kb.as_markup()
 
 
-def my_registration_keyboard(game_id: int, *, is_reserve: bool, can_cancel: bool) -> InlineKeyboardMarkup:
+def my_day_games_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    for item in items:
+        kb.button(
+            text=f"{item['time']} · {texts.ROSTER_ROLES.get(item['role'], item['role'])}",
+            callback_data=f"mr:view:{item['game_id']}",
+        )
+    kb.adjust(1)
+    kb.row(InlineKeyboardButton(text=BACK, callback_data="mr:days"))
+    return kb.as_markup()
+
+
+def my_registration_keyboard(
+    game_id: int, *, is_reserve: bool, can_cancel: bool, back_to: str
+) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     if can_cancel:
         kb.button(
             text="❌ Выйти из резерва" if is_reserve else "❌ Отменить запись",
             callback_data=f"mr:cancel:{game_id}",
         )
-    kb.button(text=BACK, callback_data="mr:list:active")
+    kb.button(text=BACK, callback_data=back_to)
     kb.adjust(1)
     return kb.as_markup()
 
@@ -376,6 +388,25 @@ def admin_text_broadcast_keyboard(*, can_send: bool) -> InlineKeyboardMarkup:
     kb.button(text="✏️ Изменить текст", callback_data="am:say")
     kb.button(text=BACK, callback_data="am:menu")
     kb.adjust(1)
+    return kb.as_markup()
+
+
+def admin_reminder_keyboard(
+    games: list[dict], chosen: set[int], *, can_send: bool
+) -> InlineKeyboardMarkup:
+    """Какие игры сегодня состоятся. Отмечены по умолчанию все: расписание --
+    это уже решение клуба, а отменяют игру реже, чем проводят."""
+    kb = InlineKeyboardBuilder()
+    for game in games:
+        kb.button(
+            text=f"{_mark(game['id'] in chosen)} {game['time']} · "
+            f"{texts.GAME_TYPES.get(game.get('game_type', ''), '')}",
+            callback_data=f"am:rmg:{game['id']}",
+        )
+    kb.adjust(1)
+    if can_send:
+        kb.row(InlineKeyboardButton(text="📢 Разослать", callback_data="am:remindgo"))
+    kb.row(InlineKeyboardButton(text=BACK, callback_data="am:menu"))
     return kb.as_markup()
 
 

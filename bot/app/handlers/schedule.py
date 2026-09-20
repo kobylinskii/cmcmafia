@@ -25,6 +25,7 @@ from app.api_client import (
     ApiClient,
     ApiError,
     day_label,
+    format_day,
     format_day_time,
     format_time,
     from_api_datetime,
@@ -35,12 +36,14 @@ from app.keyboards.inline import (
     DEEP_LINK_PREFIX,
     day_from_token,
     day_roster_keyboard,
+    day_token,
     game_days_keyboard,
     game_slots_keyboard,
     game_types_keyboard,
     menu_only_keyboard,
+    my_day_games_keyboard,
+    my_days_keyboard,
     my_registration_keyboard,
-    my_registrations_keyboard,
     registration_role_keyboard,
 )
 from app.ui import clear_state, consume_input, edit_screen, open_screen
@@ -240,7 +243,13 @@ async def show_day_roster(callback: CallbackQuery, state: FSMContext, api: ApiCl
     есть узнать, кто сегодня придёт, мог лишь тот, кто уже записался. Вопрос
     же ровно обратный: люди смотрят состав, чтобы решить, идти ли вообще.
     """
-    token = callback.data.split(":")[2]
+    # Хвост «:формат:роль» дописан не всегда: такая кнопка могла остаться в
+    # чате с прошлой версии, и тогда «Назад» ведёт в начало цепочки дня.
+    parts = callback.data.split(":")
+    token = parts[2]
+    back_to = (
+        f"sg:role:{token}:{parts[3]}:{parts[4]}" if len(parts) == 5 else f"sg:day:{token}"
+    )
     day = day_from_token(token)
     if day is None:
         await callback.answer("Некорректная дата.", show_alert=True)
@@ -258,7 +267,7 @@ async def show_day_roster(callback: CallbackQuery, state: FSMContext, api: ApiCl
         callback,
         state,
         _day_roster_text(day, rosters),
-        day_roster_keyboard(f"sg:day:{token}"),
+        day_roster_keyboard(back_to),
     )
 
 
@@ -371,6 +380,17 @@ async def register_for_game(callback: CallbackQuery, state: FSMContext, api: Api
 
 
 # --------------------------------------------------------- мои регистрации
+# Раздел устроен так же, как запись: сначала день, потом игры этого дня.
+# Вкладок «Предстоящие»/«Прошедшие» больше нет -- прошедшие записи сюда не
+# попадают вовсе: отменять в них нечего, а сыгранное видно в профиле и на
+# сайте.
+MY_EMPTY = (
+    "📋 Мои регистрации\n\n"
+    "Вы пока никуда не записаны. Откройте «📝 Запись на игры» в меню, чтобы выбрать игру."
+)
+MY_DAYS = "📋 Мои регистрации\n\nВыберите день:"
+
+
 def _is_past(item: dict) -> bool:
     """Игра уже началась. Сравнение обязано идти в клубной зоне: наивный
     datetime.now() в контейнере с UTC уводил границу на три часа, и вечерняя
@@ -378,26 +398,36 @@ def _is_past(item: dict) -> bool:
     return from_api_datetime(item["starts_at"]) <= now_local()
 
 
-async def _my_items(api: ApiClient, tg_id: int, stage: str) -> list[dict]:
-    items = await api.my_registrations(tg_id)
-    visible = [item for item in items if _is_past(item) == (stage == "completed")]
-    for item in visible:
-        item["day_time"] = format_day_time(item["starts_at"])
+async def _my_items(api: ApiClient, tg_id: int, *, day: str | None = None) -> list[dict]:
+    """Мои предстоящие записи, при желании -- только за один день."""
+    items = [item for item in await api.my_registrations(tg_id) if not _is_past(item)]
+    for item in items:
+        item["day"] = format_day(item["starts_at"])
+        item["time"] = format_time(item["starts_at"])
         if item.get("is_reserve"):
             item["role"] = "reserve"
-    return sorted(visible, key=lambda item: item["starts_at"], reverse=(stage == "completed"))
+    if day is not None:
+        items = [item for item in items if item["day"] == day]
+    return sorted(items, key=lambda item: item["starts_at"])
 
 
-def _my_text(stage: str, items: list[dict]) -> str:
-    title = "📋 Предстоящие игры" if stage == "active" else "📋 Прошедшие игры"
-    if not items:
-        empty = (
-            "Вы пока никуда не записаны. Откройте «📝 Запись на игры» в меню, чтобы выбрать игру."
-            if stage == "active"
-            else "Сыгранных игр пока нет."
-        )
-        return f"{title}\n\n{empty}"
-    return f"{title}\n\nНажмите на игру, чтобы увидеть состав и отменить запись."
+def _my_days(items: list[dict]) -> list[tuple[str, int]]:
+    days: dict[str, int] = {}
+    for item in items:
+        days[item["day"]] = days.get(item["day"], 0) + 1
+    return list(days.items())
+
+
+async def _my_days_screen(
+    callback_or_message, state, api: ApiClient, tg_id: int, *, edit: bool, alert: str | None = None
+) -> None:
+    items = await _my_items(api, tg_id)
+    text = MY_DAYS if items else MY_EMPTY
+    keyboard = my_days_keyboard(_my_days(items))
+    if edit:
+        await edit_screen(callback_or_message, state, text, keyboard, alert=alert)
+    else:
+        await open_screen(callback_or_message, state, text, keyboard)
 
 
 @router.message(Command("my"))
@@ -406,18 +436,46 @@ async def my_registrations(message: Message, state: FSMContext, api: ApiClient) 
     if not await require_profile(message, state, api):
         return
     await state.set_state(None)
-    items = await _my_items(api, message.from_user.id, "active")
-    await open_screen(message, state, _my_text("active", items), my_registrations_keyboard(items, "active"))
+    await _my_days_screen(message, state, api, message.from_user.id, edit=False)
 
 
-@router.callback_query(F.data.startswith("mr:list:"))
-async def switch_stage(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
-    stage = callback.data.split(":")[2]
-    if stage not in {"active", "completed"}:
-        await callback.answer()
+# "mr:list:*" -- вкладки прошлой версии раздела. Такие клавиатуры висят в
+# чатах, и нажатие на них должно вести в новый первый экран, а не крутить
+# часики.
+@router.callback_query((F.data == "mr:days") | F.data.startswith("mr:list:"))
+async def show_my_days(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    await state.set_state(None)
+    await _my_days_screen(callback, state, api, callback.from_user.id, edit=True)
+
+
+@router.callback_query(F.data.startswith("mr:day:"))
+async def show_my_day(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
+    day = day_from_token(callback.data.split(":")[2])
+    if day is None:
+        await callback.answer("Некорректная дата.", show_alert=True)
         return
-    items = await _my_items(api, callback.from_user.id, stage)
-    await edit_screen(callback, state, _my_text(stage, items), my_registrations_keyboard(items, stage))
+    await _my_day_screen(callback, state, api, day=day)
+
+
+async def _my_day_screen(
+    callback: CallbackQuery, state: FSMContext, api: ApiClient, *, day: str,
+    alert: str | None = None,
+) -> None:
+    """Мои игры одного дня. Зовётся и кнопкой дня, и отменой записи."""
+    items = await _my_items(api, callback.from_user.id, day=day)
+    if not items:
+        await _my_days_screen(
+            callback, state, api, callback.from_user.id, edit=True,
+            alert="На этот день у вас записей не осталось",
+        )
+        return
+    await edit_screen(
+        callback,
+        state,
+        f"📋 {day_label(day)}\n\nНажмите на игру, чтобы увидеть состав и отменить запись.",
+        my_day_games_keyboard(items),
+        alert=alert,
+    )
 
 
 @router.callback_query(F.data.startswith("mr:view:"))
@@ -436,6 +494,9 @@ async def view_registration(callback: CallbackQuery, state: FSMContext, api: Api
         await callback.answer("Игра не найдена.", show_alert=True)
         return
     roster = await api.session_roster(tg_id, game_id)
+    # День берётся из самой игры: в callback_data он не нужен, а «Назад»
+    # обязан вести в тот же день, а не в общий список.
+    token = day_token(format_day(game["starts_at"]))
     await edit_screen(
         callback,
         state,
@@ -445,6 +506,7 @@ async def view_registration(callback: CallbackQuery, state: FSMContext, api: Api
             is_reserve=bool(own.get("is_reserve")),
             # Прошедшую игру отменять нечего: запись уже стала историей.
             can_cancel=not _is_past(own),
+            back_to=f"mr:day:{token}",
         ),
     )
 
@@ -542,8 +604,10 @@ def _roster_text(game: dict, roster: dict) -> str:
 @router.callback_query(F.data.startswith("mr:cancel:"))
 async def cancel_registration(callback: CallbackQuery, state: FSMContext, api: ApiClient) -> None:
     game_id = int(callback.data.split(":")[2])
+    tg_id = callback.from_user.id
+    game = await api.get_session(tg_id, game_id)
     try:
-        result = await api.cancel_registration(callback.from_user.id, game_id)
+        result = await api.cancel_registration(tg_id, game_id)
     except ApiError as exc:
         await callback.answer(exc.message, show_alert=True)
         return
@@ -553,8 +617,12 @@ async def cancel_registration(callback: CallbackQuery, state: FSMContext, api: A
 
     await _notify_promoted(callback, game_id, result)
 
-    items = await _my_items(api, callback.from_user.id, "active")
-    await edit_screen(
-        callback, state, _my_text("active", items), my_registrations_keyboard(items, "active"),
-        alert="Запись отменена",
-    )
+    # Возвращаемся в тот же день, пока в нём осталась хоть одна запись:
+    # чаще всего человек отменяет одну игру из двух подряд.
+    day = format_day(game["starts_at"]) if game else None
+    if day is not None and await _my_items(api, tg_id, day=day):
+        await _my_day_screen(
+            callback, state, api, day=day, alert="Запись отменена"
+        )
+        return
+    await _my_days_screen(callback, state, api, tg_id, edit=True, alert="Запись отменена")

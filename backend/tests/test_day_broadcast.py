@@ -144,3 +144,36 @@ def test_unknown_audience_is_rejected(club):
         headers=BOT_HEADERS,
     )
     assert resp.status_code == 422, resp.text
+
+
+def test_reminder_narrows_down_to_the_games_that_will_actually_happen(club):
+    """Админ отмечает в напоминании, какие игры сегодня состоятся: писать
+    «сегодня играем» тому, чья игра отменена, было бы враньём."""
+    client, headers = club
+    register_bot_player(client, 7501, "Ранний")
+    register_bot_player(client, 7502, "Поздний")
+    first, day = _game_in(client, headers, 3)
+    second, same_day = _game_in(client, headers, 5)
+    assert same_day == day
+    _sign_up(client, first, 7501)
+    _sign_up(client, second, 7502)
+
+    resp = client.get(
+        f"/api/bot/admin/broadcast/day?telegram_id={ADMIN_TG}&day={day}"
+        f"&audience=registered&game_ids={first}",
+        headers=BOT_HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert [g["id"] for g in payload["games"]] == [first]
+    assert _recipients(payload) == {7501}
+
+
+def test_broken_game_ids_are_rejected(club):
+    client, _ = club
+    resp = client.get(
+        f"/api/bot/admin/broadcast/day?telegram_id={ADMIN_TG}&day=01.06.2030"
+        "&audience=registered&game_ids=почти-id",
+        headers=BOT_HEADERS,
+    )
+    assert resp.status_code == 422, resp.text
