@@ -57,6 +57,22 @@ def _session_out(game: models.Game) -> ScheduleSessionOut:
     )
 
 
+@router.post("/cleanup")
+@limiter.limit("60/minute")
+def cleanup_finished_unrated(request: Request, db: Session = Depends(get_db)) -> dict:
+    """Убрать игры, которые уже нигде не показываются.
+
+    Дёргается админкой при входе (`components/admin/admin-shell.tsx`), а не
+    фоновой задачей: фоновых задач у API нет намеренно (см. app/main.py), а
+    слот с `needs_rating=false` после своего времени не нужен ни расписанию,
+    ни сайту, ни боту -- и не должен ни занимать время в планировщике, ни
+    держать за собой номер игры.
+    """
+    removed = schedule_admin_service.purge_finished_unrated(db)
+    db.commit()
+    return {"deleted": len(removed)}
+
+
 @router.get("/days", response_model=list[ScheduleDayOut])
 @limiter.limit("60/minute")
 def list_days(request: Request, game_type: str | None = None, db: Session = Depends(get_db)) -> list[dict]:

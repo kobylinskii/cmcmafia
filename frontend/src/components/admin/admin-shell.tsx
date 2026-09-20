@@ -7,7 +7,7 @@ import { Gauge, Key, ListChecks, Trophy, UsersThree, SignOut } from "@phosphor-i
 import clsx from "clsx";
 import { LogoMark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { adminLogout, adminMe } from "@/lib/admin-auth";
+import { adminCleanupSchedule, adminLogout, adminMe } from "@/lib/admin-auth";
 import { ApiError } from "@/lib/api";
 
 const NAV = [
@@ -33,6 +33,16 @@ export function AdminShell({ children }: { children: ReactNode }) {
         }
         setNickname(me.nickname);
         setChecked(true);
+        // Уборка игр, которых больше нигде не видно (прошедшие слоты без
+        // оценки). Намеренно без await: она ничего не показывает админу и не
+        // должна ни задерживать панель, ни ронять её, если не удалась.
+        // Если что-то удалили, номера игр сжались (id игры -- её место в
+        // хронологии), и открытая страница обязана перечитать данные.
+        void adminCleanupSchedule()
+          .then((res) => {
+            if (res.deleted) router.refresh();
+          })
+          .catch(() => undefined);
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {

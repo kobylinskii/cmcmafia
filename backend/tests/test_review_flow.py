@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app import models
+from app.database import SessionLocal
 from app.timeutil import CLUB_TZ
 from tests.conftest import (
     BOT_HEADERS,
@@ -425,3 +427,44 @@ def test_day_grouping_uses_moscow_midnight_not_utc(admin):
     assert _games_on(client, headers, "02.12.2026") == [evening_id]
     assert _games_on(client, headers, "03.12.2026") == [late_id]
     assert [d["day"] for d in _day_cards(client, headers)] == ["02.12.2026", "03.12.2026"]
+
+
+def _game_times() -> list[tuple[int, bool]]:
+    """(id, needs_rating) всех игр в базе -- по хронологии."""
+    db = SessionLocal()
+    try:
+        return [
+            (game.id, game.needs_rating)
+            for game in db.query(models.Game).order_by(models.Game.starts_at.asc()).all()
+        ]
+    finally:
+        db.close()
+
+
+def test_admin_entering_the_panel_cleans_out_games_nobody_can_see(admin):
+    """Слот «оцениваться не будет» после своего времени не нужен ни
+    расписанию, ни сайту, ни боту -- и не должен ни занимать время в
+    планировщике, ни держать за собой номер игры. Убирает их ручка, которую
+    админка дёргает при входе."""
+    client, headers = admin
+    gone = _create_session(client, headers, needs_rating=False)
+    set_game_time(gone, starts_at=datetime.now(timezone.utc) - timedelta(hours=2))
+
+    # Остаться должны обе остальные: будущий слот без оценки и прошедший с
+    # оценкой -- он ждёт подтверждения проведения.
+    _create_session(client, headers, needs_rating=False, days_ahead=3)
+    awaiting = _create_session(client, headers, days_ahead=2)
+    set_game_time(awaiting, starts_at=datetime.now(timezone.utc) - timedelta(hours=1))
+
+    resp = client.post("/api/admin/schedule/cleanup", headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"deleted": 1}
+
+    left = _game_times()
+    assert len(left) == 2
+    # Нумерация сжалась: дыры от удалённой игры не осталось.
+    assert [game_id for game_id, _ in left] == [1, 2]
+    assert _awaiting(client, headers), "игра с оценкой осталась ждать подтверждения"
+
+    # Второй заход админки удалять уже нечего.
+    assert client.post("/api/admin/schedule/cleanup", headers=headers).json() == {"deleted": 0}

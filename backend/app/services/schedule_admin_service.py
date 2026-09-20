@@ -13,7 +13,7 @@ from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app import models, serializers
-from app.services.game_service import UNCONFIRMED_STATUSES
+from app.services.game_service import UNCONFIRMED_STATUSES, delete_game, resequence_game_ids
 from app.textmatch import ci_equals
 from app.timeutil import CLUB_TZ
 
@@ -84,6 +84,41 @@ def _active_schedule_filters(now: datetime | None = None) -> tuple:
     return _MANAGED_GAMES + (
         or_(models.Game.needs_rating.is_(True), models.Game.starts_at >= moment),
     )
+
+
+def purge_finished_unrated(db: Session) -> list[int]:
+    """Удалить игры, которые уже нигде не показываются.
+
+    Это ровно обратная сторона `_active_schedule_filters`: слот с
+    `needs_rating=false`, время которого прошло, исчезает из расписания сам, а
+    на сайт (там только `rated`) и в бота (там только будущие) не попадает и
+    подавно. Раньше такая строка оставалась в базе навсегда -- невидимая, но
+    занимающая своё время в планировщике и своё место в нумерации игр.
+
+    Удаляется сервисом, а не одним DELETE: за игрой уходят её записи и резерв
+    (каскадом), а нумерация пересобирается -- id игры это её место в
+    хронологии, и дыр после удаления оставаться не должно.
+
+    Возвращает id удалённых игр -- уже недействительные, только для отчёта.
+    """
+    doomed = (
+        db.query(models.Game)
+        .filter(
+            models.Game.starts_at < datetime.now(timezone.utc),
+            models.Game.status != "rated",
+            models.Game.game_type != "tournament",
+            models.Game.needs_rating.is_(False),
+        )
+        .order_by(models.Game.starts_at.asc())
+        .all()
+    )
+    if not doomed:
+        return []
+    removed = [game.id for game in doomed]
+    for game in doomed:
+        delete_game(db, game=game)
+    resequence_game_ids(db)
+    return removed
 
 
 def check_conflicts(
