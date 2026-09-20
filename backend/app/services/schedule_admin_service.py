@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from app import models, serializers
@@ -159,44 +159,13 @@ def _club_day_bounds(day: str) -> tuple[datetime, datetime]:
     return start, start + timedelta(days=1)
 
 
-def _per_game_counts():
-    """Записи и резерв, посчитанные по играм -- готовыми подзапросами.
-
-    Отдельными подзапросами, а не JOIN'ом к games напрямую: две таблицы,
-    присоединённые к одной игре, перемножились бы между собой, и день с
-    записями и резервом считал бы и то, и другое кратно.
-    """
-    regs = (
-        select(
-            models.Registration.game_id.label("game_id"),
-            func.count()
-            .filter(models.Registration.role == "player")
-            .label("players"),
-            func.count()
-            .filter(models.Registration.role != "player")
-            .label("staff"),
-        )
-        .group_by(models.Registration.game_id)
-        .subquery()
-    )
-    reserves = (
-        select(
-            models.Reserve.game_id.label("game_id"),
-            func.count().label("reserves"),
-        )
-        .group_by(models.Reserve.game_id)
-        .subquery()
-    )
-    return regs, reserves
-
-
 def _people_per_day(db: Session, now: datetime) -> dict[str, int]:
-    """Сколько РАЗНЫХ людей придёт в каждый день -- вместе со штабом и резервом.
+    """Сколько РАЗНЫХ людей записано на каждый день -- в любой роли и с резервом.
 
     Отдельным запросом, а не полем в общей группировке: тот же человек,
-    записанный на три игры подряд, в количестве мест за столами должен
-    считаться трижды, а в «сколько народу придёт» -- один раз, и одним
-    GROUP BY это не выражается.
+    записанный на три игры подряд, -- это по строке на игру, а вопрос у
+    админа один: сколько народу придёт. Одним GROUP BY по играм это не
+    выражается.
     """
     counts: dict[str, set[int]] = {}
     for table in (models.Registration, models.Reserve):
@@ -228,7 +197,6 @@ def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
         ),
         else_=0,
     )
-    regs, reserves = _per_game_counts()
     query = (
         db.query(
             _CLUB_DAY_SQL.label("day"),
@@ -236,13 +204,7 @@ def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
             func.min(models.Game.starts_at).label("min_start"),
             func.count(models.Game.id).label("games"),
             func.sum(awaiting_sql).label("awaiting"),
-            func.sum(models.Game.max_players).label("seats"),
-            func.coalesce(func.sum(regs.c.players), 0).label("players"),
-            func.coalesce(func.sum(regs.c.staff), 0).label("staff"),
-            func.coalesce(func.sum(reserves.c.reserves), 0).label("reserves"),
         )
-        .outerjoin(regs, regs.c.game_id == models.Game.id)
-        .outerjoin(reserves, reserves.c.game_id == models.Game.id)
         # Турнирные слоты этапа сюда не попадают: у планировщика для них нет ни
         # одного осмысленного действия (нет регистрации, нет ростера) -- только
         # фанки/обучающие, которыми он реально управляет.
@@ -256,25 +218,11 @@ def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
     for row in query.all():
         key = row.day.strftime("%d.%m.%Y")
         entry = grouped.setdefault(
-            key,
-            {
-                "types": set(),
-                "min_start": row.min_start,
-                "games": 0,
-                "awaiting": 0,
-                "players": 0,
-                "seats": 0,
-                "staff": 0,
-                "reserves": 0,
-            },
+            key, {"types": set(), "min_start": row.min_start, "games": 0, "awaiting": 0}
         )
         entry["types"].add(row.game_type)
         entry["games"] += int(row.games or 0)
         entry["awaiting"] += int(row.awaiting or 0)
-        entry["players"] += int(row.players or 0)
-        entry["seats"] += int(row.seats or 0)
-        entry["staff"] += int(row.staff or 0)
-        entry["reserves"] += int(row.reserves or 0)
         if row.min_start < entry["min_start"]:
             entry["min_start"] = row.min_start
 
@@ -287,10 +235,6 @@ def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:
             "games_count": v["games"],
             "awaiting_count": v["awaiting"],
             "first_starts_at": v["min_start"],
-            "players": v["players"],
-            "seats": v["seats"],
-            "staff": v["staff"],
-            "reserves": v["reserves"],
             "people": people.get(day, 0),
         }
         for day, v in ordered

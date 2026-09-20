@@ -107,7 +107,7 @@ export function SchedulePanel({
           <ArrowLeft size={16} />
           Все игровые дни
         </button>
-        <h2 className="mt-3 font-display text-xl text-ink-50">Игры {formatDayWithWeekday(day)}</h2>
+        <h2 className="mt-3 font-display text-xl text-ink-50">Игры в {formatDayWithWeekday(day)}</h2>
 
         <div className="mt-4 flex flex-col gap-2">
           {shownDay === null && <p className="text-sm text-ink-500">Загрузка…</p>}

@@ -470,10 +470,10 @@ def test_admin_entering_the_panel_cleans_out_games_nobody_can_see(admin):
     assert client.post("/api/admin/schedule/cleanup", headers=headers).json() == {"deleted": 0}
 
 
-def test_day_card_counts_the_seats_taken_and_the_people_coming(admin):
-    """Карточка дня отвечает на главный вопрос планирования: собираются ли
-    столы. Места за столами считаются по записям (один человек на трёх играх
-    занимает три места), а «сколько народу придёт» -- по людям."""
+def test_day_card_counts_the_people_coming_not_the_registrations(admin):
+    """Карточка дня отвечает на единственный вопрос планирования: наберётся ли
+    народ. Считаются люди, а не записи: тот, кто записан на три игры подряд,
+    придёт один раз, и в счётчике он должен быть один."""
     client, headers = admin
     first = _create_session(client, headers, days_ahead=1)
     # Вторая игра того же дня: часом позже первой.
@@ -506,8 +506,7 @@ def test_day_card_counts_the_seats_taken_and_the_people_coming(admin):
 
     card = _day_cards(client, headers)[0]
     assert card["games_count"] == 2
-    assert card["players"] == 3, "два места на первой игре и одно на второй"
-    assert card["seats"] == 12, "стол на 2 места плюс стол на 10"
-    assert card["staff"] == 1
-    assert card["reserves"] == 1
     assert card["people"] == 4, "501 записан дважды, но придёт один раз"
+    # Резерв тоже считается: человек в очереди приходит в клуб и садится за
+    # стол при первой же отмене.
+    assert "seats" not in card and "staff" not in card
