@@ -9,6 +9,27 @@ export function formatDate(iso: string): string {
   }).format(new Date(iso));
 }
 
+/** «ср» -- короткий день недели по клубному времени.
+ *
+ * Дата сама по себе не говорит, среда это или суббота, а игровые дни в клубе
+ * повторяются именно по дням недели: без этой подписи админ сверяется с
+ * календарём на каждой строке расписания. */
+export function formatWeekday(iso: string): string {
+  return new Intl.DateTimeFormat("ru-RU", { weekday: "short", timeZone: CLUB_TZ }).format(
+    new Date(iso)
+  );
+}
+
+/** «ср, 07.10.2026» из клубной даты «07.10.2026» -- в этом виде день приходит
+ * ключом от ручек расписания. Полдень берётся намеренно: любое время суток
+ * этого дня даёт тот же день недели, а полдень не уедет через границу даже
+ * при чужой зоне. */
+export function formatDayWithWeekday(day: string): string {
+  const [dd, mm, yyyy] = day.split(".");
+  const iso = new Date(`${yyyy}-${mm}-${dd}T12:00:00+03:00`);
+  return `${formatWeekday(iso.toISOString())}, ${day}`;
+}
+
 export function formatDateLong(iso: string): string {
   return new Intl.DateTimeFormat("ru-RU", {
     day: "numeric",

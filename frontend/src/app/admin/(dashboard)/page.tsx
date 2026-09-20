@@ -7,6 +7,7 @@ import { clientFetch } from "@/lib/api";
 import type { GameListItem, SessionOut } from "@/types/api";
 import { formatDateTime } from "@/lib/format";
 import { PassList } from "@/components/admin/pass-list";
+import { UpcomingDays } from "@/components/admin/upcoming-days";
 
 export default function AdminOverviewPage() {
   const [pending, setPending] = useState<GameListItem[] | null>(null);
@@ -60,6 +61,8 @@ export default function AdminOverviewPage() {
           </div>
         </Link>
       </div>
+
+      <UpcomingDays />
 
       {awaiting.length > 0 && (
         <div className="mt-10">

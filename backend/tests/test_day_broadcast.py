@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app.timeutil import club_day
+from app.timeutil import CLUB_TZ, club_day
 from tests.conftest import (
     BOT_HEADERS,
     make_bot_admin,
@@ -72,6 +72,15 @@ def _game_in(client, headers, hours: float) -> tuple[int, str]:
     game = make_session(client, headers, starts_at="2030-06-01T15:00:00Z")
     starts_at = _in(hours)
     set_game_time(game, starts_at=starts_at)
+    return game, club_day(starts_at)
+
+
+def _game_at(client, headers, *, hour: int, days_ahead: int = 1) -> tuple[int, str]:
+    """Игра в заданный час по Москве -- чтобы день не зависел от часа прогона."""
+    starts_at = (datetime.now(CLUB_TZ) + timedelta(days=days_ahead)).replace(
+        hour=hour, minute=0, second=0, microsecond=0
+    )
+    game = make_session(client, headers, starts_at=starts_at.isoformat())
     return game, club_day(starts_at)
 
 
@@ -152,8 +161,11 @@ def test_reminder_narrows_down_to_the_games_that_will_actually_happen(club):
     client, headers = club
     register_bot_player(client, 7501, "Ранний")
     register_bot_player(client, 7502, "Поздний")
-    first, day = _game_in(client, headers, 3)
-    second, same_day = _game_in(client, headers, 5)
+    # Время задаётся клубными часами, а не «через N часов от сейчас»: вечерний
+    # прогон переводил вторую игру через полночь, и две игры одного дня
+    # оказывались в разных -- тест падал от часа запуска, а не от кода.
+    first, day = _game_at(client, headers, hour=18)
+    second, same_day = _game_at(client, headers, hour=20)
     assert same_day == day
     _sign_up(client, first, 7501)
     _sign_up(client, second, 7502)

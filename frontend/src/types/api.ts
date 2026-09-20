@@ -137,6 +137,16 @@ export interface ScheduleDayOut {
   /** Сколько игр дня ждут ответа «состоялась или нет». */
   awaiting_count: number;
   first_starts_at: string;
+  /** Занятые места за столами дня и сколько их всего: записанный на три игры
+   * подряд занимает три места -- вопрос у админа ровно такой, собираются ли
+   * столы. */
+  players: number;
+  seats: number;
+  /** Штаб (ведущий и двое судей на игру) и очередь -- отдельно от стола. */
+  staff: number;
+  reserves: number;
+  /** Сколько РАЗНЫХ людей придёт в этот день, со штабом и резервом. */
+  people: number;
 }
 
 export interface SchedulePlanPreviewOut {

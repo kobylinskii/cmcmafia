@@ -5,11 +5,12 @@ import { ArrowLeft, CalendarPlus, CaretRight, Warning } from "@phosphor-icons/re
 import { clientFetch, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { formatDate, formatDateTime, formatTime, plural, withCount } from "@/lib/format";
+import { formatDate, formatDateTime, formatDayWithWeekday, formatTime, withCount } from "@/lib/format";
 import type { ScheduleDayOut, SessionOut } from "@/types/api";
 import { GAME_TYPE_LABELS } from "@/types/api";
 import { PlanForm } from "@/components/admin/schedule/plan-form";
 import { SessionCard } from "@/components/admin/schedule/session-card";
+import { DayCard } from "@/components/admin/schedule/day-card";
 
 // Ведущий и двое судей сверх стола: те же HOST_LIMIT/JUDGE_LIMIT, которыми
 // registration_service отбивает четвёртого желающего в штаб.
@@ -106,7 +107,7 @@ export function SchedulePanel({
           <ArrowLeft size={16} />
           Все игровые дни
         </button>
-        <h2 className="mt-3 font-display text-xl text-ink-50">Игры {day}</h2>
+        <h2 className="mt-3 font-display text-xl text-ink-50">Игры {formatDayWithWeekday(day)}</h2>
 
         <div className="mt-4 flex flex-col gap-2">
           {shownDay === null && <p className="text-sm text-ink-500">Загрузка…</p>}
@@ -198,27 +199,7 @@ export function SchedulePanel({
           </p>
         )}
         {days?.map((card) => (
-          <button
-            key={card.day}
-            onClick={() => onOpenDay(card.day)}
-            className="flex items-center justify-between gap-3 rounded-card border border-ink-800 bg-ink-900 p-4 text-left hover:border-brand-600/60"
-          >
-            <div className="flex flex-wrap items-center gap-3 text-sm">
-              <span className="text-ink-100">{card.day}</span>
-              <span className="text-ink-500">
-                {card.games_count} {plural(card.games_count, ["игра", "игры", "игр"])}
-              </span>
-              {card.types.map((type) => (
-                <Badge key={type} tone="outline">
-                  {GAME_TYPE_LABELS[type]}
-                </Badge>
-              ))}
-              {card.awaiting_count > 0 && (
-                <Badge tone="brand">Подтвердить: {card.awaiting_count}</Badge>
-              )}
-            </div>
-            <CaretRight size={16} className="shrink-0 text-ink-500" />
-          </button>
+          <DayCard key={card.day} card={card} onOpen={() => onOpenDay(card.day)} />
         ))}
       </div>
     </div>

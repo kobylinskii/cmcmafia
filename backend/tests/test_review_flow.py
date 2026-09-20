@@ -468,3 +468,46 @@ def test_admin_entering_the_panel_cleans_out_games_nobody_can_see(admin):
 
     # Второй заход админки удалять уже нечего.
     assert client.post("/api/admin/schedule/cleanup", headers=headers).json() == {"deleted": 0}
+
+
+def test_day_card_counts_the_seats_taken_and_the_people_coming(admin):
+    """Карточка дня отвечает на главный вопрос планирования: собираются ли
+    столы. Места за столами считаются по записям (один человек на трёх играх
+    занимает три места), а «сколько народу придёт» -- по людям."""
+    client, headers = admin
+    first = _create_session(client, headers, days_ahead=1)
+    # Вторая игра того же дня: часом позже первой.
+    second = make_session(
+        client,
+        headers,
+        starts_at=(datetime.now(timezone.utc) + timedelta(days=1, hours=1)).isoformat(),
+        location="Клуб",
+    )
+
+    for tg_id, nickname in [(501, "Игрок"), (502, "Второй"), (503, "Ведущий"), (504, "Резерв")]:
+        register_bot_player(client, tg_id, nickname)
+
+    def _register(session_id: int, tg_id: int, kind: str) -> None:
+        resp = client.post(
+            f"/api/bot/sessions/{session_id}/register?telegram_id={tg_id}",
+            headers=BOT_HEADERS,
+            json={"telegram_id": tg_id, "role_kind": kind},
+        )
+        assert resp.json()["ok"] is True, resp.text
+
+    # Игрок 501 приходит на обе игры -- два занятых места, но один человек.
+    _register(first, 501, "player")
+    _register(second, 501, "player")
+    _register(first, 502, "player")
+    _register(first, 503, "staff")
+    set_game_max_players(first, 2)
+    # Стол первой игры собран: следующий уходит в резерв.
+    _register(first, 504, "player")
+
+    card = _day_cards(client, headers)[0]
+    assert card["games_count"] == 2
+    assert card["players"] == 3, "два места на первой игре и одно на второй"
+    assert card["seats"] == 12, "стол на 2 места плюс стол на 10"
+    assert card["staff"] == 1
+    assert card["reserves"] == 1
+    assert card["people"] == 4, "501 записан дважды, но придёт один раз"
