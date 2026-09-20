@@ -59,33 +59,6 @@ def bulk_create_sessions(
     return [g.id for g in created]
 
 
-def check_conflicts(
-    db: Session, *, starts_at_list: list[datetime], exclude_session_ids: set[int] | None = None
-) -> list[datetime]:
-    if not starts_at_list:
-        return []
-    excluded = exclude_session_ids or set()
-    rows = (
-        db.query(models.Game.starts_at)
-        .filter(models.Game.starts_at.in_(starts_at_list))
-        .filter(models.Game.id.notin_(excluded) if excluded else True)
-        .order_by(models.Game.starts_at.asc())
-        .all()
-    )
-    return [r[0] for r in rows]
-
-
-def _club_day_bounds(day: str) -> tuple[datetime, datetime]:
-    """'ДД.ММ.ГГГГ' -> границы этих суток [начало, конец) в московском времени.
-
-    Именно в московском: игра в 00:30 МСК приходится на 21:30 UTC предыдущих
-    суток, и наивное сравнение по UTC отправило бы её в соседний день
-    (см. app/timeutil.py).
-    """
-    start = datetime.strptime(day, "%d.%m.%Y").replace(tzinfo=CLUB_TZ)
-    return start, start + timedelta(days=1)
-
-
 # Календарный день игры по московскому времени, посчитанный на стороне СУБД.
 _CLUB_DAY_SQL = func.date(func.timezone(str(CLUB_TZ), models.Game.starts_at))
 
@@ -111,6 +84,44 @@ def _active_schedule_filters(now: datetime | None = None) -> tuple:
     return _MANAGED_GAMES + (
         or_(models.Game.needs_rating.is_(True), models.Game.starts_at >= moment),
     )
+
+
+def check_conflicts(
+    db: Session, *, starts_at_list: list[datetime], exclude_session_ids: set[int] | None = None
+) -> list[datetime]:
+    """Время, на котором у планировщика уже что-то стоит.
+
+    Занятым считается только то, что планировщик на этом времени ПОКАЗЫВАЕТ
+    (_active_schedule_filters -- те же игры, что в day_cards и games_by_day).
+    Раньше проверка смотрела на games.starts_at без единого фильтра, и время
+    навсегда занимала игра, из расписания уже ушедшая: оценённая, турнирная
+    или прошедшая неоцениваемая. Форма отвечала «на это время игры уже
+    созданы», а в самом дне не показывала ни одной -- отменить такую занятость
+    было нечем.
+    """
+    if not starts_at_list:
+        return []
+    excluded = exclude_session_ids or set()
+    rows = (
+        db.query(models.Game.starts_at)
+        .filter(models.Game.starts_at.in_(starts_at_list))
+        .filter(*_active_schedule_filters())
+        .filter(models.Game.id.notin_(excluded) if excluded else True)
+        .order_by(models.Game.starts_at.asc())
+        .all()
+    )
+    return [r[0] for r in rows]
+
+
+def _club_day_bounds(day: str) -> tuple[datetime, datetime]:
+    """'ДД.ММ.ГГГГ' -> границы этих суток [начало, конец) в московском времени.
+
+    Именно в московском: игра в 00:30 МСК приходится на 21:30 UTC предыдущих
+    суток, и наивное сравнение по UTC отправило бы её в соседний день
+    (см. app/timeutil.py).
+    """
+    start = datetime.strptime(day, "%d.%m.%Y").replace(tzinfo=CLUB_TZ)
+    return start, start + timedelta(days=1)
 
 
 def day_cards(db: Session, *, game_type: str | None = None) -> list[dict]:

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from app.timeutil import CLUB_TZ
 from tests.conftest import (
     BOT_HEADERS,
     game_status,
@@ -367,6 +368,42 @@ def test_planner_refuses_to_double_book_a_time(admin):
     assert len(preview.json()["conflicts"]) == 3
 
     assert client.post("/api/admin/schedule/plan", json=body, headers=headers).status_code == 409
+
+
+def test_time_freed_by_a_game_the_planner_no_longer_shows_can_be_planned_again(admin):
+    """Занятым считается только то время, на котором планировщик что-то
+    показывает.
+
+    Из расписания игра уходит тремя способами: её оценили, она турнирная или
+    её время прошло, а оценки она не ждёт (needs_rating=False). Проверка
+    пересечений же смотрела на games.starts_at без единого фильтра -- и
+    такая, уже невидимая, игра навсегда занимала своё время: форма писала
+    «на это время игры уже созданы», а в этом дне не показывала ни одной.
+    """
+    client, headers = admin
+    past = (datetime.now(timezone.utc) - timedelta(days=5)).replace(microsecond=0)
+    body = {
+        "starts_at": past.isoformat(),
+        "count": 1,
+        "step_minutes": 60,
+        "location": "Клуб",
+        "game_type": "funky",
+        "needs_rating": False,
+    }
+    # Слот в прошлом создаём как будущий и сдвигаем: планировщик в прошлое
+    # не пускает, а нам нужна именно уже прошедшая игра.
+    future = dict(body, starts_at=(datetime.now(timezone.utc) + timedelta(days=2)).isoformat())
+    created = client.post("/api/admin/schedule/plan", json=future, headers=headers)
+    assert created.status_code == 200, created.text
+    set_game_time(created.json()[0]["id"], starts_at=past)
+
+    day = past.astimezone(CLUB_TZ).strftime("%d.%m.%Y")
+    assert _games_on(client, headers, day) == [], "планировщик эту игру уже не показывает"
+
+    preview = client.post("/api/admin/schedule/plan/preview", json=body, headers=headers)
+    assert preview.status_code == 200, preview.text
+    assert preview.json()["conflicts"] == []
+    assert client.post("/api/admin/schedule/plan", json=body, headers=headers).status_code == 200
 
 
 def test_day_grouping_uses_moscow_midnight_not_utc(admin):
